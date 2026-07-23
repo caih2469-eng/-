@@ -1,0 +1,18 @@
+{
+  "name": "jinshan-checkin-site",
+  "version": "1.1.0",
+  "private": true,
+  "description": "廿载同心·青春同行双赛道活动打卡网站",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrations/001-user-profiles-and-tracks.js",
+    "check": "node --check server.js && node --check public/app.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

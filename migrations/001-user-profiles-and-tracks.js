@@ -1,0 +1,22 @@
+const fs = require('fs');
+const path = require('path');
+const { migrateData } = require('../lib/model');
+
+const dataDir = process.env.CHECKIN_DATA_DIR || path.join(__dirname, '..', 'data');
+const dbFile = path.join(dataDir, 'db.json');
+
+if (!fs.existsSync(dbFile)) {
+  console.log('数据库尚未创建；首次启动服务时会使用新结构初始化。');
+  process.exit(0);
+}
+
+const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
+const changed = migrateData(data);
+if (changed) {
+  const backup = `${dbFile}.backup-${Date.now()}`;
+  fs.copyFileSync(dbFile, backup);
+  fs.writeFileSync(dbFile, JSON.stringify(data, null, 2), 'utf8');
+  console.log(`迁移完成，备份：${backup}`);
+} else {
+  console.log('数据库已是最新结构，无需迁移。');
+}
