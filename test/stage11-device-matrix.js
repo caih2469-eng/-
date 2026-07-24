@@ -1,9 +1,20 @@
 const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
 
-const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const profile = fs.mkdtempSync(`${os.tmpdir()}\\checkin-device-`);
+const windowsChrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const findLinuxChrome = () => ['google-chrome', 'chromium']
+  .map((name) => spawnSync('which', [name], { encoding: 'utf8' }).stdout?.trim())
+  .find(Boolean) || '';
+const linuxChrome = process.platform === 'win32' ? '' : findLinuxChrome();
+const chrome = process.platform === 'win32' ? windowsChrome : linuxChrome;
+if (!chrome || !fs.existsSync(chrome)) {
+  console.log(JSON.stringify({ skipped: true, reason: 'Chrome executable is unavailable' }));
+  process.exit(0);
+}
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-device-'));
 const port = 9331;
 const browser = spawn(chrome, [`--headless=new`, `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--disable-gpu', '--no-first-run'], { stdio: 'ignore' });
 let commandId = 0;
