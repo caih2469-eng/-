@@ -16,7 +16,9 @@ if (!chrome || !fs.existsSync(chrome)) {
 }
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-device-'));
 const port = 9331;
-const browser = spawn(chrome, [`--headless=new`, `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--disable-gpu', '--no-first-run'], { stdio: 'ignore' });
+const chromeArgs = [`--headless=new`, `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--disable-gpu', '--no-first-run'];
+if (process.platform !== 'win32') chromeArgs.push('--no-sandbox', '--disable-dev-shm-usage');
+const browser = spawn(chrome, chromeArgs, { stdio: 'ignore' });
 let commandId = 0;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
