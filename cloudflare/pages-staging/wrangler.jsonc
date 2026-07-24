@@ -7,8 +7,14 @@
     {
       "binding": "DB",
       "database_name": "jinshan-checkin-staging",
-      "database_id": "52cce165-851c-45fa-a85b-a68c4f095a6f",
-      "preview_database_id": "52cce165-851c-45fa-a85b-a68c4f095a6f"
+      "database_id": "e08b82c1-e5f8-4274-892c-41d4c3aafd5f",
+      "preview_database_id": "e08b82c1-e5f8-4274-892c-41d4c3aafd5f"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "jinshan-checkin-staging"
     }
   ]
 }

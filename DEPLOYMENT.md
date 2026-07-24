@@ -8,7 +8,7 @@ JSON 文件。上线前测试已增加隔离的 Cloudflare Pages Functions、D1 
 
 因此：
 
-- `jinshan-checkin-staging.pages.dev` 仅用于 Cloudflare 真实环境压力测试。
+- `jinshan-checkin-staging-bvu.pages.dev` 仅用于 Cloudflare 真实环境压力测试。
 - 生产 D1 已创建并完成空库结构迁移，活动总开关默认关闭。
 - 在“业务 API 对等检查”完成前，禁止把测试 Worker 当作正式业务后端。
 - GitHub Actions 的生产部署任务故意设置为失败门禁，避免误上线不完整接口。
@@ -17,16 +17,15 @@ JSON 文件。上线前测试已增加隔离的 Cloudflare Pages Functions、D1 
 
 | 环境 | 资源 | 名称 | ID |
 |---|---|---|---|
-| 测试 | Pages | `jinshan-checkin-staging` | Pages 项目名 |
-| 测试 | D1 | `jinshan-checkin-staging` | `52cce165-851c-45fa-a85b-a68c4f095a6f` |
-| 生产 | D1 | `jinshan-checkin-production` | `27e4f2f6-335f-4311-a2d3-88e5a359759e` |
-| 测试 | R2 | 待账户启用后创建 | — |
-| 生产 | R2 | 待账户启用后创建 | — |
+| 测试 | Pages | `jinshan-checkin-staging` | `jinshan-checkin-staging-bvu.pages.dev` |
+| 测试 | D1 | `jinshan-checkin-staging` | `e08b82c1-e5f8-4274-892c-41d4c3aafd5f` |
+| 生产 | D1 | `jinshan-checkin-production` | `5298032e-cbef-479b-a15e-38590f518024` |
+| 测试 | R2 | `jinshan-checkin-staging` | 私有桶 |
+| 生产 | R2 | `jinshan-checkin-production` | 私有桶 |
 
 ## 首次账户配置
 
-1. 在 Cloudflare 控制台启用 R2。
-2. 创建两个私有存储桶：
+1. 当前账号已启用 R2，并已创建两个私有存储桶：
    - `jinshan-checkin-staging`
    - `jinshan-checkin-production`
 3. 不启用公开 `r2.dev` 地址。所有材料读取必须经过鉴权后的 Function。
@@ -35,7 +34,9 @@ JSON 文件。上线前测试已增加隔离的 Cloudflare Pages Functions、D1 
    - `UPLOADS`：对应环境的 R2 存储桶
 5. 在 Pages Secrets 中设置：
    - `SESSION_SECRET`：至少 48 字节随机值
-   - `LOAD_TEST_SECRET`：只存在于测试环境，压测完成后删除
+   - `LOAD_TEST_SECRET`：仅在执行隔离压测时临时创建，压测完成后立即删除
+
+当前测试项目仅保留 `SESSION_SECRET`；压测密钥和 3.5GB 合成对象已清理。
 
 ## 数据库迁移
 
@@ -72,6 +73,8 @@ wrangler d1 execute jinshan-checkin-production --remote `
 
 API Token 只授予本项目所需的 Pages、Workers、D1、R2 编辑权限，不使用
 Global API Key。`main` 分支推送会在测试通过后自动部署测试环境。
+切换 Cloudflare 账号后，必须同步更新上述两个 GitHub Secrets；OAuth 登录凭据
+不能复制为 Actions Token。
 
 生产环境使用 GitHub Environment `cloudflare-production`，应启用人工审批。
 业务 API 对等检查完成后，才可以把生产门禁步骤替换为正式 Pages 部署命令。
