@@ -1,33 +1,78 @@
 # Cloudflare 上线部署说明
 
+## 当前双环境
+
+本项目不购买域名、不配置 DNS，只使用 Cloudflare Pages 默认域名。
+
+| 项目 | Git 分支 | Pages 地址 | D1 | R2 | Cloudflare 环境变量 |
+|---|---|---|---|---|---|
+| 测试 | `develop` | `https://jinshan20-test.pages.dev` | `jinshan20-test` | `jinshan20-test` | `ENVIRONMENT=test`、`PROJECT_NAME=jinshan20-test` |
+| 正式 | `main` | `https://jinshan20.pages.dev` | `jinshan20` | `jinshan20` | `ENVIRONMENT=production`、`PROJECT_NAME=jinshan20` |
+
+两套环境各自使用独立的 `SESSION_SECRET`，D1 ID 和 R2 桶名没有复用。
+`ALLOW_LOAD_TESTS=false`，正式和测试地址均拒绝压力测试专用上传接口。
+生产 D1 当前为空，活动总开关和两个赛道开关均为关闭状态。
+
+对应配置文件：
+
+- `cloudflare/pages-test/wrangler.jsonc`
+- `cloudflare/pages-production/wrangler.jsonc`
+
+## 自动部署流程
+
+1. 开发改动先提交到 `develop`。
+2. GitHub Actions 执行语法检查和 21 项自动测试。
+3. 测试通过后，只把 `develop` 部署到 `jinshan20-test`。
+4. 测试环境人工验收通过后，把同一提交合并到 `main`。
+5. `main` 再次通过全部检查后，只部署到 `jinshan20`。
+
+GitHub 环境也设置了分支限制：
+
+- `cloudflare-test` 只接受 `develop`；
+- `cloudflare-production` 只接受 `main`。
+
+仓库必须设置 `CLOUDFLARE_ACCOUNT_ID` 和最小权限
+`CLOUDFLARE_API_TOKEN`。账号 ID 已配置；API Token 必须由 Cloudflare
+账号持有人在控制台创建，因为 Wrangler OAuth 无权代替用户创建长期 API Token。
+
+## 回滚
+
+Pages 回滚不改数据库：
+
+1. 打开对应 Pages 项目的 **Deployments / 部署**。
+2. 找到最近一个已验证的成功版本。
+3. 选择 **Rollback to this deployment / 回滚到此部署**。
+4. 回滚后检查 `/health` 的 `environment`、`project`、`database` 和 `storage`。
+
+数据故障时不要把测试库切给正式站。应先关闭活动开关，导出当前正式 D1，
+再从正式环境自己的备份恢复到一个新的正式恢复库，验证后更换正式绑定。
+R2 恢复也只允许从正式备份恢复到 `jinshan20`，禁止从 `jinshan20-test` 复制。
+
 ## 当前状态
 
 本仓库的公开前端仍是静态 HTML/CSS/JavaScript，原业务后端仍是 Node.js +
 JSON 文件。上线前测试已增加隔离的 Cloudflare Pages Functions、D1 和 R2
 适配层，但它目前只覆盖登录、用户读取、任务读取、排行榜及压力测试上传。
 
-因此：
-
-- `jinshan-checkin-staging-bvu.pages.dev` 仅用于 Cloudflare 真实环境压力测试。
-- 生产 D1 已创建并完成空库结构迁移，活动总开关默认关闭。
-- 在“业务 API 对等检查”完成前，禁止把测试 Worker 当作正式业务后端。
-- GitHub Actions 的生产部署任务故意设置为失败门禁，避免误上线不完整接口。
+因此，两个 Pages 地址已经创建并部署，但正式环境保持活动关闭。在完整业务
+API 迁移和微信实体设备验收完成前，不向参与者发放正式账号。
 
 ## 已创建的 Cloudflare 资源
 
 | 环境 | 资源 | 名称 | ID |
 |---|---|---|---|
-| 测试 | Pages | `jinshan-checkin-staging` | `jinshan-checkin-staging-bvu.pages.dev` |
-| 测试 | D1 | `jinshan-checkin-staging` | `e08b82c1-e5f8-4274-892c-41d4c3aafd5f` |
-| 生产 | D1 | `jinshan-checkin-production` | `5298032e-cbef-479b-a15e-38590f518024` |
-| 测试 | R2 | `jinshan-checkin-staging` | 私有桶 |
-| 生产 | R2 | `jinshan-checkin-production` | 私有桶 |
+| 测试 | Pages | `jinshan20-test` | `jinshan20-test.pages.dev` |
+| 测试 | D1 | `jinshan20-test` | `6d217199-0c06-45a3-8bdc-e32c36140957` |
+| 正式 | Pages | `jinshan20` | `jinshan20.pages.dev` |
+| 正式 | D1 | `jinshan20` | `1734a812-afc8-4c49-a1f1-f776c4b7ae69` |
+| 测试 | R2 | `jinshan20-test` | 私有桶 |
+| 正式 | R2 | `jinshan20` | 私有桶 |
 
 ## 首次账户配置
 
 1. 当前账号已启用 R2，并已创建两个私有存储桶：
-   - `jinshan-checkin-staging`
-   - `jinshan-checkin-production`
+   - `jinshan20-test`
+   - `jinshan20`
 3. 不启用公开 `r2.dev` 地址。所有材料读取必须经过鉴权后的 Function。
 4. 在 Pages 的生产和预览环境分别绑定：
    - `DB`：对应环境的 D1 数据库
@@ -43,14 +88,14 @@ JSON 文件。上线前测试已增加隔离的 Cloudflare Pages Functions、D1 
 测试库：
 
 ```powershell
-wrangler d1 execute jinshan-checkin-staging --remote `
-  --file migrations/0001_cloudflare_core.sql
+wrangler d1 execute jinshan20-test --remote `
+  --file migrations/production/0001_schema.sql
 ```
 
 生产库：
 
 ```powershell
-wrangler d1 execute jinshan-checkin-production --remote `
+wrangler d1 execute jinshan20 --remote `
   --file migrations/production/0001_schema.sql
 ```
 
@@ -76,8 +121,8 @@ Global API Key。`main` 分支推送会在测试通过后自动部署测试环�
 切换 Cloudflare 账号后，必须同步更新上述两个 GitHub Secrets；OAuth 登录凭据
 不能复制为 Actions Token。
 
-生产环境使用 GitHub Environment `cloudflare-production`，应启用人工审批。
-业务 API 对等检查完成后，才可以把生产门禁步骤替换为正式 Pages 部署命令。
+正式环境使用 GitHub Environment `cloudflare-production` 并限制为 `main`；
+测试环境使用 `cloudflare-test` 并限制为 `develop`。
 
 ## 业务 API 对等检查
 

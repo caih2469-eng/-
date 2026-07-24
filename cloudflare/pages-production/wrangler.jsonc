@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "jinshan20",
+  "pages_build_output_dir": "../../public",
+  "compatibility_date": "2026-07-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "PROJECT_NAME": "jinshan20",
+    "ALLOW_LOAD_TESTS": "false"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jinshan20",
+      "database_id": "1734a812-afc8-4c49-a1f1-f776c4b7ae69",
+      "preview_database_id": "1734a812-afc8-4c49-a1f1-f776c4b7ae69"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "jinshan20"
+    }
+  ]
+}

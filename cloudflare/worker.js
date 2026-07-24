@@ -1,4 +1,8 @@
 const encoder = new TextEncoder();
+const TRACKS = [
+  { id: 'interaction', name: '四校区互动赛道' },
+  { id: 'health', name: '自律健康赛道' }
+];
 
 const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.stringify(body), {
   status,
@@ -14,6 +18,57 @@ const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.string
 const sha256 = async (value) => {
   const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
+const fromBase64Url = (value) => {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+};
+
+const constantTimeEqual = (left, right) => {
+  if (left.length !== right.length) return false;
+  let different = 0;
+  for (let index = 0; index < left.length; index += 1) different |= left[index] ^ right[index];
+  return different === 0;
+};
+
+const passwordMatches = async (password, stored) => {
+  const value = String(stored || '');
+  if (/^[a-f0-9]{64}$/i.test(value)) return value === await sha256(password);
+  if (value.startsWith('sha256:')) return value.slice(7) === await sha256(password);
+  const [algorithm, iterationsText, saltText, hashText] = value.split(':');
+  const iterations = Number(iterationsText);
+  if (algorithm !== 'pbkdf2' || !Number.isInteger(iterations) || iterations < 100000 || !saltText || !hashText) {
+    return false;
+  }
+  const expected = fromBase64Url(hashText);
+  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const actual = new Uint8Array(await crypto.subtle.deriveBits({
+    name: 'PBKDF2',
+    hash: 'SHA-256',
+    salt: fromBase64Url(saltText),
+    iterations
+  }, key, expected.length * 8));
+  return constantTimeEqual(actual, expected);
+};
+
+const readConfig = async (env) => {
+  const { results } = await env.DB.prepare('SELECT key, value_json AS valueJson FROM app_config').all();
+  const config = Object.fromEntries(results.map((item) => {
+    try {
+      return [item.key, JSON.parse(item.valueJson)];
+    } catch {
+      return [item.key, null];
+    }
+  }));
+  return {
+    activityName: '庆福建农林大学金山学院建院20周年-设计学院',
+    activityEnabled: Boolean(config.activityEnabled),
+    trackEnabled: config.trackEnabled || { interaction: false, health: false },
+    maxTeams: Number(config.maxTeams || 50),
+    environment: env.ENVIRONMENT || 'unknown'
+  };
 };
 
 const sign = async (payload, secret) => {
@@ -70,20 +125,26 @@ const handleLogin = async (request, env) => {
   if (!studentId || !password) return json({ error: '请输入学号和密码' }, 400);
 
   const user = await env.DB.prepare(
-    `SELECT id, student_id AS studentId, name, password_sha256 AS passwordHash,
+    `SELECT id, student_id AS studentId, name, password_hash AS passwordHash,
             role, campus, track_id AS trackId, status, created_at AS createdAt
        FROM users WHERE student_id = ?1 LIMIT 1`
   ).bind(studentId).first();
-  if (!user || user.status !== 'active' || user.passwordHash !== await sha256(password)) {
+  if (!user || user.status !== 'active' || !(await passwordMatches(password, user.passwordHash))) {
     return json({ error: '学号或密码错误' }, 401);
   }
   delete user.passwordHash;
-  return json({ token: await createToken(user, env.SESSION_SECRET), user });
+  return json({
+    token: await createToken(user, env.SESSION_SECRET),
+    user,
+    config: await readConfig(env),
+    tracks: TRACKS
+  });
 };
 
 const handleUpload = async (request, env, id) => {
   if (!env.UPLOADS) return json({ error: 'R2 尚未启用' }, 503);
-  if (request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
+  if (env.ALLOW_LOAD_TESTS !== 'true' || !env.LOAD_TEST_SECRET
+      || request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
     return json({ error: '禁止访问' }, 403);
   }
   const length = Number(request.headers.get('content-length') || 0);
@@ -114,7 +175,16 @@ const handleUpload = async (request, env, id) => {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === '/health') return json({ ok: true, storage: Boolean(env.UPLOADS) });
+    if (url.pathname === '/health') {
+      return json({
+        ok: true,
+        environment: env.ENVIRONMENT || 'unknown',
+        project: env.PROJECT_NAME || 'unknown',
+        database: Boolean(env.DB),
+        storage: Boolean(env.UPLOADS),
+        loadTestsEnabled: env.ALLOW_LOAD_TESTS === 'true'
+      });
+    }
     if (url.pathname === '/api/login' && request.method === 'POST') return handleLogin(request, env);
 
     const uploadMatch = url.pathname.match(/^\/__load\/uploads\/([A-Za-z0-9_-]{1,80})$/);
@@ -122,7 +192,8 @@ export default {
 
     const readMatch = url.pathname.match(/^\/__load\/objects\/([A-Za-z0-9_-]{1,80})$/);
     if (readMatch && request.method === 'GET') {
-      if (!env.UPLOADS || request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
+      if (!env.UPLOADS || env.ALLOW_LOAD_TESTS !== 'true' || !env.LOAD_TEST_SECRET
+          || request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
         return json({ error: '禁止访问' }, 403);
       }
       const object = await env.UPLOADS.get(`load-test/${readMatch[1]}.bin`);
@@ -144,7 +215,18 @@ export default {
                 track_id AS trackId, status, created_at AS createdAt
            FROM users WHERE id = ?1 LIMIT 1`
       ).bind(auth.session.sub).first();
-      return user ? json({ user }) : json({ error: '用户不存在' }, 404);
+      return user ? json({
+        user,
+        config: await readConfig(env),
+        tracks: TRACKS,
+        date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date()),
+        time: new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Asia/Shanghai',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(new Date())
+      }) : json({ error: '用户不存在' }, 404);
     }
     if (url.pathname === '/api/tasks' && request.method === 'GET') {
       const auth = await requireUser(request, env);

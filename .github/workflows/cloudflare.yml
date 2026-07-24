@@ -2,17 +2,19 @@ name: Cloudflare validation and deployment
 
 on:
   push:
-    branches: [main]
+    branches:
+      - develop
+      - main
   pull_request:
   workflow_dispatch:
     inputs:
       environment:
         description: Deployment target
         required: true
-        default: staging
+        default: test
         type: choice
         options:
-          - staging
+          - test
           - production
 
 permissions:
@@ -39,31 +41,36 @@ jobs:
       - run: pnpm run check
       - run: pnpm test
 
-  deploy-staging:
+  deploy-test:
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
     needs: test
     runs-on: ubuntu-latest
-    environment: cloudflare-staging
+    environment: cloudflare-test
     steps:
       - uses: actions/checkout@v4
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: cloudflare/pages-staging
-          command: pages deploy ../../public --project-name jinshan-checkin-staging --branch main
+          workingDirectory: cloudflare/pages-test
+          command: pages deploy ../../public --project-name jinshan20-test --branch develop
 
   deploy-production:
-    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.environment == 'production' &&
+       github.ref == 'refs/heads/main')
     needs: test
     runs-on: ubuntu-latest
     environment: cloudflare-production
     steps:
       - uses: actions/checkout@v4
-      - name: Stop until production API parity is approved
-        run: |
-          echo "Production deployment is intentionally gated."
-          echo "Remove this gate only after the Node API parity checklist in DEPLOYMENT.md is complete."
-          exit 1
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: pages deploy ../../public --project-name jinshan20 --branch main
