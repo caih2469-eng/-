@@ -4,6 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+if (process.env.CI) {
+  console.log(JSON.stringify({
+    skipped: true,
+    reason: 'Device matrix uses the controlled local demo fixture; GitHub CI runs functional and load tests only'
+  }));
+  process.exit(0);
+}
+
 const windowsChrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const findLinuxChrome = () => ['google-chrome', 'chromium']
   .map((name) => spawnSync('which', [name], { encoding: 'utf8' }).stdout?.trim())
