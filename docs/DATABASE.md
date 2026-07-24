@@ -10,9 +10,11 @@ db.json
 │  ├─ activityName
 │  ├─ startDate
 │  ├─ endDate
+│  ├─ maxTeams
 │  └─ slots[]
 ├─ users[]
 ├─ tracks[]
+├─ teams[]
 └─ checkins[]
 ```
 
@@ -26,6 +28,7 @@ db.json
 | `startDate` | `YYYY-MM-DD` | 当前仅保存，服务端未执行 |
 | `endDate` | `YYYY-MM-DD` | 当前仅保存，服务端未执行 |
 | `slots` | array | 早餐、午餐、晚餐时段 |
+| `maxTeams` | integer | 互动赛道最大队伍数量，默认 50，运行时规则读取数据库值 |
 
 每个时段包含 `id`、`label`、`start`、`end`。
 
@@ -51,6 +54,19 @@ db.json
 | `health` | 自律健康赛道 |
 
 赛道由服务端固定定义，并在数据库迁移时写入顶层 `tracks`。
+
+### teams
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | UUID | 队伍 ID |
+| `name` | string | 唯一队伍名称 |
+| `memberLimit` | integer | 人数限制，1–20 |
+| `inviteCode` | string | 唯一 8 位邀请码 |
+| `memberIds` | string[] | 队伍成员用户 ID |
+| `createdAt` | ISO datetime | 创建时间 |
+
+成员关系以 `teams[].memberIds` 为唯一来源。服务端遍历所有队伍确保一个学生最多出现一次。
 
 ### checkins
 
@@ -116,3 +132,29 @@ checkins/{checkin-id}/{file-id}.{ext}
 2. 写入两个赛道。
 3. 为旧用户补齐 `campus`、`trackId`、`status` 和 `createdAt`。
 4. 将旧普通用户默认归入自律健康赛道，管理员不属于任何赛道。
+
+阶段 2 迁移脚本为 `migrations/002-team-system.js`。它会：
+
+1. 在迁移前备份现有数据库。
+2. 将 `config.maxTeams` 初始化为 50。
+3. 创建空的顶层 `teams` 集合。
+4. 重复执行时保持数据不变。
+
+阶段 3 迁移新增 `tasks[]`、`config.activityEnabled` 和 `config.trackEnabled`。任务包含名称、描述、赛道、起止时间、补交开关、图片上限、文案要求、状态及审计时间。
+
+阶段 4 迁移新增 `taskSubmissions[]`。业务唯一键为 `(taskId, ownerType, ownerId)`，`ownerType` 为 `team` 或 `user`；记录只保存图片 URL、文案、餐次、公开选择、提交/审核状态和并发控制 `version`，不保存图片二进制。
+
+阶段 5 迁移新增 `plazaPosts[]`。帖子通过 `submissionId` 唯一关联公开队伍提交，保存任务/队伍/成员快照、图片 URL、文案、发布时间、`viewCount`、`likedBy[]` 和 `status`。帖子只能由服务端在符合条件的最终提交事务中生成。
+
+阶段 6 迁移新增：
+
+- `plazaLikes[]`：`postId`、`userId`、`likedAt`，保存时强制 `(postId,userId)` 唯一；每日额度按上海日期统计当前有效记录。
+- `plazaViews[]`：`postId`、`userId`、`windowStartedAt`、`viewedAt`，保存时强制窗口组合键唯一；服务端读取最近记录执行 24 小时去重。
+
+旧 `likedBy[]` 在迁移时转换为独立点赞记录，后续统计只以 `plazaLikes[]` 为准。
+
+阶段 7 迁移新增 `rankingFreezes[]`，并为帖子补齐 `excludedFromRanking`。冻结记录保存月份、完整排行榜快照、冻结管理员和时间；实时统计使用 `plazaLikes[].likedAt`、`plazaViews[].viewedAt` 和 `plazaPosts[].publishedAt` 的上海时区周期。
+
+阶段 9 迁移新增 `materialTasks[]` 和 `materialSubmissions[]`。任务保存截止时间、扩展名白名单、文件上限、总结要求及个人/队伍模式；提交使用 `(taskId, ownerType, ownerId)` 作为业务唯一关系并包含 `version`。数据库仅保存文件元数据和私有存储名，文件二进制位于 `material-files/`。
+
+任务日程迁移为 `tasks[]` 增加 `scheduleType`、活动日期范围、`refreshDays[]`、`weekdays[]`、每日时间范围；`taskSubmissions[]` 增加 `occurrenceDate` 和 `plazaCopy`。周期任务唯一关系扩展为 `(taskId, ownerType, ownerId, occurrenceDate)`。`config.allowSelfJoin` 默认 `false`。

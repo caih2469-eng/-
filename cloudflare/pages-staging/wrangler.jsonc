@@ -1,0 +1,14 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "jinshan-checkin-staging",
+  "pages_build_output_dir": "../../public",
+  "compatibility_date": "2026-07-24",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jinshan-checkin-staging",
+      "database_id": "52cce165-851c-45fa-a85b-a68c4f095a6f",
+      "preview_database_id": "52cce165-851c-45fa-a85b-a68c4f095a6f"
+    }
+  ]
+}

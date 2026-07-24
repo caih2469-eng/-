@@ -1,4 +1,5 @@
 data/
 uploads/
+material-files/
 .env
 node_modules/

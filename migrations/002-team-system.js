@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { migratePhase1 } = require('../lib/model');
+const { migratePhase2 } = require('../lib/model');
 
 const dataDir = process.env.CHECKIN_DATA_DIR || path.join(__dirname, '..', 'data');
 const dbFile = path.join(dataDir, 'db.json');
@@ -11,12 +11,12 @@ if (!fs.existsSync(dbFile)) {
 }
 
 const data = JSON.parse(fs.readFileSync(dbFile, 'utf8'));
-const changed = migratePhase1(data);
+const changed = migratePhase2(data);
 if (changed) {
-  const backup = `${dbFile}.backup-${Date.now()}`;
+  const backup = `${dbFile}.backup-phase2-${Date.now()}`;
   fs.copyFileSync(dbFile, backup);
   fs.writeFileSync(dbFile, JSON.stringify(data, null, 2), 'utf8');
-  console.log(`迁移完成，备份：${backup}`);
+  console.log(`阶段 2 迁移完成，备份：${backup}`);
 } else {
-  console.log('数据库已是最新结构，无需迁移。');
+  console.log('阶段 2 数据结构已是最新版本，无需迁移。');
 }

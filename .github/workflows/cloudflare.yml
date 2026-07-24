@@ -1,0 +1,69 @@
+name: Cloudflare validation and deployment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm test
+
+  deploy-staging:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    needs: test
+    runs-on: ubuntu-latest
+    environment: cloudflare-staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-staging
+          command: pages deploy ../../public --project-name jinshan-checkin-staging --branch main
+
+  deploy-production:
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: cloudflare-production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stop until production API parity is approved
+        run: |
+          echo "Production deployment is intentionally gated."
+          echo "Remove this gate only after the Node API parity checklist in DEPLOYMENT.md is complete."
+          exit 1
