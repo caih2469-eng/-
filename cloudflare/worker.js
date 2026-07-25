@@ -1,137 +1,54 @@
-const encoder = new TextEncoder();
-const TRACKS = [
-  { id: 'interaction', name: '四校区互动赛道' },
-  { id: 'health', name: '自律健康赛道' }
-];
+import {
+  cleanText,
+  createToken,
+  errorResponse,
+  json,
+  passwordMatches,
+  readConfig,
+  readJson,
+  requireUser,
+  sha256,
+  shanghaiDate,
+  shanghaiTime,
+  TRACKS
+} from './lib/runtime.js';
+import { handleStudentRoutes } from './routes/student.js';
+import { handlePlazaRoutes } from './routes/plaza.js';
+import { handleAdminRoutes } from './routes/admin.js';
+import { canAccessMaterialFile, handleMaterialRoutes } from './routes/materials.js';
 
-const json = (body, status = 200, extraHeaders = {}) => new Response(JSON.stringify(body), {
-  status,
-  headers: {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
-    'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
-    ...extraHeaders
-  }
-});
-
-const sha256 = async (value) => {
-  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-};
-
-const fromBase64Url = (value) => {
-  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
-};
-
-const constantTimeEqual = (left, right) => {
-  if (left.length !== right.length) return false;
-  let different = 0;
-  for (let index = 0; index < left.length; index += 1) different |= left[index] ^ right[index];
-  return different === 0;
-};
-
-const passwordMatches = async (password, stored) => {
-  const value = String(stored || '');
-  if (/^[a-f0-9]{64}$/i.test(value)) return value === await sha256(password);
-  if (value.startsWith('sha256:')) return value.slice(7) === await sha256(password);
-  const [algorithm, iterationsText, saltText, hashText] = value.split(':');
-  const iterations = Number(iterationsText);
-  if (algorithm !== 'pbkdf2' || !Number.isInteger(iterations) || iterations < 100000 || !saltText || !hashText) {
-    return false;
-  }
-  const expected = fromBase64Url(hashText);
-  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const actual = new Uint8Array(await crypto.subtle.deriveBits({
-    name: 'PBKDF2',
-    hash: 'SHA-256',
-    salt: fromBase64Url(saltText),
-    iterations
-  }, key, expected.length * 8));
-  return constantTimeEqual(actual, expected);
-};
-
-const readConfig = async (env) => {
-  const { results } = await env.DB.prepare('SELECT key, value_json AS valueJson FROM app_config').all();
-  const config = Object.fromEntries(results.map((item) => {
-    try {
-      return [item.key, JSON.parse(item.valueJson)];
-    } catch {
-      return [item.key, null];
-    }
-  }));
-  return {
-    activityName: '庆福建农林大学金山学院建院20周年-设计学院',
-    activityEnabled: Boolean(config.activityEnabled),
-    trackEnabled: config.trackEnabled || { interaction: false, health: false },
-    maxTeams: Number(config.maxTeams || 50),
-    environment: env.ENVIRONMENT || 'unknown'
-  };
-};
-
-const sign = async (payload, secret) => {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
-  return btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-};
-
-const createToken = async (user, secret) => {
-  const payload = btoa(JSON.stringify({
-    sub: user.id,
-    role: user.role,
-    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60
-  })).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-  return `${payload}.${await sign(payload, secret)}`;
-};
-
-const authenticate = async (request, env) => {
-  const header = request.headers.get('authorization') || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const [payload, signature] = token.split('.');
-  if (!payload || !signature || signature !== await sign(payload, env.SESSION_SECRET)) return null;
-  try {
-    const decoded = JSON.parse(atob(payload.replaceAll('-', '+').replaceAll('_', '/')));
-    if (!decoded.sub || decoded.exp < Math.floor(Date.now() / 1000)) return null;
-    return decoded;
-  } catch {
-    return null;
-  }
-};
-
-const requireUser = async (request, env) => {
-  const session = await authenticate(request, env);
-  if (!session) return { error: json({ error: '未登录或会话已过期' }, 401) };
-  return { session };
-};
-
-const handleLogin = async (request, env) => {
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: '请求格式错误' }, 400);
-  }
-  const studentId = String(body.studentId || '').trim().slice(0, 32);
+const login = async (request, env) => {
+  const body = await readJson(request, 16 * 1024);
+  const studentId = cleanText(body.studentId, 40);
   const password = String(body.password || '').slice(0, 128);
   if (!studentId || !password) return json({ error: '请输入学号和密码' }, 400);
-
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  const identity = await sha256(`${ip}:${studentId}`);
+  const attempt = await env.DB.prepare(
+    'SELECT attempt_count AS attemptCount,window_started_at AS windowStartedAt,blocked_until AS blockedUntil FROM login_attempts WHERE identity_hash=?1'
+  ).bind(identity).first();
+  const now = Date.now();
+  if (attempt?.blockedUntil && Date.parse(attempt.blockedUntil) > now) {
+    return json({ error: '登录尝试过多，请稍后再试' }, 429);
+  }
   const user = await env.DB.prepare(
-    `SELECT id, student_id AS studentId, name, password_hash AS passwordHash,
-            role, campus, track_id AS trackId, status, created_at AS createdAt
-       FROM users WHERE student_id = ?1 LIMIT 1`
+    `SELECT id,student_id AS studentId,name,password_hash AS passwordHash,role,campus,
+            track_id AS trackId,status,created_at AS createdAt
+       FROM users WHERE student_id=?1 LIMIT 1`
   ).bind(studentId).first();
   if (!user || user.status !== 'active' || !(await passwordMatches(password, user.passwordHash))) {
-    return json({ error: '学号或密码错误' }, 401);
+    const inWindow = attempt && now - Date.parse(attempt.windowStartedAt) < 15 * 60 * 1000;
+    const count = inWindow ? Number(attempt.attemptCount) + 1 : 1;
+    const blockedUntil = count >= 10 ? new Date(now + 15 * 60 * 1000).toISOString() : null;
+    await env.DB.prepare(
+      `INSERT INTO login_attempts (identity_hash,attempt_count,window_started_at,blocked_until)
+       VALUES (?1,?2,?3,?4) ON CONFLICT(identity_hash) DO UPDATE SET
+        attempt_count=excluded.attempt_count,window_started_at=excluded.window_started_at,
+        blocked_until=excluded.blocked_until`
+    ).bind(identity, count, inWindow ? attempt.windowStartedAt : new Date().toISOString(), blockedUntil).run();
+    return json({ error: '学号或密码不正确' }, 401);
   }
+  await env.DB.prepare('DELETE FROM login_attempts WHERE identity_hash=?1').bind(identity).run();
   delete user.passwordHash;
   return json({
     token: await createToken(user, env.SESSION_SECRET),
@@ -141,121 +58,127 @@ const handleLogin = async (request, env) => {
   });
 };
 
-const handleUpload = async (request, env, id) => {
-  if (!env.UPLOADS) return json({ error: 'R2 尚未启用' }, 503);
-  if (env.ALLOW_LOAD_TESTS !== 'true' || !env.LOAD_TEST_SECRET
-      || request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
-    return json({ error: '禁止访问' }, 403);
+const fileResponse = async (request, env, id) => {
+  const auth = await requireUser(request, env);
+  if (auth.error) return auth.error;
+  const user = auth.user;
+
+  const checkin = await env.DB.prepare(
+    `SELECT f.object_key AS objectKey,f.content_type AS contentType,c.user_id AS ownerId
+       FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id WHERE f.id=?1`
+  ).bind(id).first();
+  let file = checkin && (user.role === 'admin' || checkin.ownerId === user.id) ? checkin : null;
+
+  if (!file) {
+    const taskImage = await env.DB.prepare(
+      `SELECT i.object_key AS objectKey,i.content_type AS contentType,s.owner_type AS ownerType,
+              s.owner_id AS ownerId,s.is_public AS isPublic,p.status AS postStatus
+         FROM task_submission_images i
+         JOIN task_submissions s ON s.id=i.submission_id
+         LEFT JOIN plaza_posts p ON p.submission_id=s.id
+        WHERE i.id=?1`
+    ).bind(id).first();
+    if (taskImage) {
+      const teamMember = taskImage.ownerType === 'team' ? await env.DB.prepare(
+        'SELECT 1 FROM team_members WHERE team_id=?1 AND user_id=?2'
+      ).bind(taskImage.ownerId, user.id).first() : null;
+      if (user.role === 'admin' || taskImage.ownerId === user.id || teamMember
+          || (taskImage.isPublic && taskImage.postStatus === 'visible')) file = taskImage;
+    }
   }
-  const length = Number(request.headers.get('content-length') || 0);
-  const contentType = request.headers.get('content-type') || '';
-  if (!Number.isFinite(length) || length <= 0 || length > 5 * 1024 * 1024) {
-    return json({ error: '文件必须小于或等于 5MB' }, 413);
+
+  if (!file) {
+    const memberImage = await env.DB.prepare(
+      `SELECT object_key AS objectKey,content_type AS contentType,user_id AS ownerId,team_id AS teamId
+         FROM member_checkins WHERE id=?1`
+    ).bind(id).first();
+    if (memberImage) {
+      const member = await env.DB.prepare(
+        'SELECT 1 FROM team_members WHERE team_id=?1 AND user_id=?2'
+      ).bind(memberImage.teamId, user.id).first();
+      if (user.role === 'admin' || memberImage.ownerId === user.id || member) file = memberImage;
+    }
   }
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
-    return json({ error: '仅支持 JPG、PNG、WebP' }, 415);
-  }
-  const objectKey = `load-test/${id}.bin`;
-  await env.UPLOADS.put(objectKey, request.body, {
-    httpMetadata: { contentType },
-    customMetadata: { loadTest: 'true' }
+
+  if (!file) return json({ error: '文件不存在或无权访问' }, 403);
+  const object = await env.UPLOADS.get(file.objectKey);
+  if (!object) return json({ error: '文件不存在' }, 404);
+  return new Response(object.body, {
+    headers: {
+      'content-type': object.httpMetadata?.contentType || file.contentType || 'application/octet-stream',
+      'content-length': String(object.size),
+      etag: object.httpEtag,
+      'cache-control': 'private, no-store',
+      'content-security-policy': "default-src 'none'",
+      'x-content-type-options': 'nosniff'
+    }
   });
-  await env.DB.prepare(
-    `INSERT INTO load_uploads (id, object_key, content_type, bytes, uploaded_at)
-     VALUES (?1, ?2, ?3, ?4, datetime('now'))
-     ON CONFLICT(id) DO UPDATE SET
-       object_key = excluded.object_key,
-       content_type = excluded.content_type,
-       bytes = excluded.bytes,
-       uploaded_at = excluded.uploaded_at`
-  ).bind(id, objectKey, contentType, length).run();
-  return json({ id, objectKey, bytes: length }, 201);
+};
+
+const materialFileResponse = async (request, env, id) => {
+  const auth = await requireUser(request, env);
+  if (auth.error) return auth.error;
+  const file = await canAccessMaterialFile(env, id, auth.user);
+  if (!file) return json({ error: '文件不存在或无权访问' }, 403);
+  const object = await env.UPLOADS.get(file.objectKey);
+  if (!object) return json({ error: '文件不存在' }, 404);
+  const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(file.originalName)}`;
+  return new Response(object.body, {
+    headers: {
+      'content-type': object.httpMetadata?.contentType || file.contentType,
+      'content-length': String(object.size),
+      'content-disposition': disposition,
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff'
+    }
+  });
 };
 
 export default {
   async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    if (url.pathname === '/health') {
-      return json({
-        ok: true,
-        environment: env.ENVIRONMENT || 'unknown',
-        project: env.PROJECT_NAME || 'unknown',
-        database: Boolean(env.DB),
-        storage: Boolean(env.UPLOADS),
-        loadTestsEnabled: env.ALLOW_LOAD_TESTS === 'true'
-      });
-    }
-    if (url.pathname === '/api/login' && request.method === 'POST') return handleLogin(request, env);
-
-    const uploadMatch = url.pathname.match(/^\/__load\/uploads\/([A-Za-z0-9_-]{1,80})$/);
-    if (uploadMatch && request.method === 'PUT') return handleUpload(request, env, uploadMatch[1]);
-
-    const readMatch = url.pathname.match(/^\/__load\/objects\/([A-Za-z0-9_-]{1,80})$/);
-    if (readMatch && request.method === 'GET') {
-      if (!env.UPLOADS || env.ALLOW_LOAD_TESTS !== 'true' || !env.LOAD_TEST_SECRET
-          || request.headers.get('x-load-key') !== env.LOAD_TEST_SECRET) {
-        return json({ error: '禁止访问' }, 403);
+    try {
+      const url = new URL(request.url);
+      if (url.pathname === '/health') {
+        return json({
+          ok: true,
+          environment: env.ENVIRONMENT || 'unknown',
+          project: env.PROJECT_NAME || 'unknown',
+          database: Boolean(env.DB),
+          storage: Boolean(env.UPLOADS),
+          loadTestsEnabled: false,
+          api: 'business-v1'
+        });
       }
-      const object = await env.UPLOADS.get(`load-test/${readMatch[1]}.bin`);
-      if (!object) return json({ error: '文件不存在' }, 404);
-      return new Response(object.body, {
-        headers: {
-          'content-type': object.httpMetadata?.contentType || 'application/octet-stream',
-          etag: object.httpEtag,
-          'cache-control': 'private, max-age=60'
-        }
-      });
-    }
+      if (url.pathname === '/api/login' && request.method === 'POST') return await login(request, env);
+      if (url.pathname === '/api/me' && request.method === 'GET') {
+        const auth = await requireUser(request, env);
+        if (auth.error) return auth.error;
+        return json({
+          user: auth.user,
+          config: await readConfig(env),
+          tracks: TRACKS,
+          date: shanghaiDate(),
+          time: shanghaiTime()
+        });
+      }
+      const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
+      if (fileMatch && request.method === 'GET') return await fileResponse(request, env, decodeURIComponent(fileMatch[1]));
+      const materialFileMatch = url.pathname.match(/^\/api\/material-files\/([^/]+)$/);
+      if (materialFileMatch && request.method === 'GET') {
+        return await materialFileResponse(request, env, decodeURIComponent(materialFileMatch[1]));
+      }
 
-    if (url.pathname === '/api/me' && request.method === 'GET') {
-      const auth = await requireUser(request, env);
-      if (auth.error) return auth.error;
-      const user = await env.DB.prepare(
-        `SELECT id, student_id AS studentId, name, role, campus,
-                track_id AS trackId, status, created_at AS createdAt
-           FROM users WHERE id = ?1 LIMIT 1`
-      ).bind(auth.session.sub).first();
-      return user ? json({
-        user,
-        config: await readConfig(env),
-        tracks: TRACKS,
-        date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date()),
-        time: new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Asia/Shanghai',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        }).format(new Date())
-      }) : json({ error: '用户不存在' }, 404);
+      const admin = await handleAdminRoutes(request, env, ctx, url);
+      if (admin) return admin;
+      const materials = await handleMaterialRoutes(request, env, ctx, url);
+      if (materials) return materials;
+      const plaza = await handlePlazaRoutes(request, env, ctx, url);
+      if (plaza) return plaza;
+      const student = await handleStudentRoutes(request, env, ctx, url);
+      if (student) return student;
+      return json({ error: '接口不存在' }, 404);
+    } catch (error) {
+      return errorResponse(error);
     }
-    if (url.pathname === '/api/tasks' && request.method === 'GET') {
-      const auth = await requireUser(request, env);
-      if (auth.error) return auth.error;
-      const { results } = await env.DB.prepare(
-        `SELECT id, name, description, track_id AS trackId, status,
-                starts_at AS startsAt, ends_at AS endsAt, image_limit AS imageLimit
-           FROM tasks WHERE status = 'published' ORDER BY starts_at DESC LIMIT 50`
-      ).all();
-      return json({ tasks: results });
-    }
-    if (url.pathname === '/api/rankings' && request.method === 'GET') {
-      const period = (url.searchParams.get('period') || 'load-test').slice(0, 32);
-      const cache = caches.default;
-      const cacheKey = new Request(`${url.origin}/api/rankings?period=${encodeURIComponent(period)}`);
-      const cached = await cache.match(cacheKey);
-      if (cached) return cached;
-      const { results } = await env.DB.prepare(
-        `SELECT rank, team_id AS teamId, team_name AS teamName, likes, views, score,
-                generated_at AS generatedAt
-           FROM ranking_cache WHERE period = ?1 ORDER BY rank LIMIT 100`
-      ).bind(period).all();
-      const response = json({ rankings: results }, 200, {
-        'cache-control': 'public, max-age=60',
-        'cdn-cache-control': 'public, max-age=60'
-      });
-      if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, response.clone()));
-      return response;
-    }
-    return json({ error: '接口不存在' }, 404);
   }
 };

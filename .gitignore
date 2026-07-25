@@ -3,3 +3,4 @@ uploads/
 material-files/
 .env
 node_modules/
+.wrangler/

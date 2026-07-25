@@ -5,6 +5,63 @@ let config;
 let tracks = [];
 let materialAdminPage = 1;
 let materialAdminCampus = '';
+let adminUserPage = Number(sessionStorage.adminUserPage || 1);
+let adminUserFilter = sessionStorage.adminUserFilter || 'all';
+let adminUserQuery = sessionStorage.adminUserQuery || '';
+let scrollSaveTimer;
+window.addEventListener('scroll', () => {
+  if (document.body.dataset.view !== 'admin') return;
+  clearTimeout(scrollSaveTimer);
+  scrollSaveTimer = setTimeout(() => { sessionStorage.adminScrollY = String(window.scrollY); }, 80);
+}, { passive: true });
+
+const labelMobileTables = () => {
+  document.querySelectorAll('table').forEach((table) => {
+    if (table.dataset.mobileReady) return;
+    const labels = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
+    table.querySelectorAll('tbody tr').forEach((row) => {
+      [...row.children].forEach((cell, index) => {
+        if (cell.tagName === 'TD') cell.dataset.label = labels[index] || '';
+      });
+    });
+    table.dataset.mobileReady = 'true';
+  });
+};
+new MutationObserver(() => requestAnimationFrame(labelMobileTables))
+  .observe(app, { childList: true, subtree: true });
+
+const openDialog = ({ title, message = '', input = false, inputLabel = '', value = '', danger = false,
+  cancelText = '取消', confirmText = '确定', notice = false }) => new Promise((resolve) => {
+  const shell = document.createElement('div');
+  shell.className = 'app-dialog-backdrop';
+  shell.innerHTML = `<section class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
+    <h2 id="appDialogTitle">${escapeHtml(title)}</h2>
+    ${message ? `<p>${escapeHtml(message)}</p>` : ''}
+    ${input ? `<label>${escapeHtml(inputLabel)}</label><input id="appDialogInput" value="${escapeHtml(value)}">` : ''}
+    <div class="app-dialog-actions">
+      ${notice ? '' : `<button class="secondary" data-dialog-cancel>${escapeHtml(cancelText)}</button>`}
+      <button class="${danger ? 'danger' : ''}" data-dialog-confirm>${escapeHtml(confirmText)}</button>
+    </div>
+  </section>`;
+  document.body.append(shell);
+  const close = (result) => {
+    shell.classList.add('closing');
+    setTimeout(() => shell.remove(), 180);
+    resolve(result);
+  };
+  shell.querySelector('[data-dialog-cancel]')?.addEventListener('click', () => close(false));
+  shell.querySelector('[data-dialog-confirm]').addEventListener('click', () => {
+    close(input ? shell.querySelector('#appDialogInput').value.trim() : true);
+  });
+  shell.addEventListener('click', (event) => { if (event.target === shell && !notice) close(false); });
+  shell.querySelector('input')?.focus();
+});
+
+const alert = (message) => { void openDialog({ title: '提示', message: String(message), notice: true, confirmText: '知道了' }); };
+const askConfirm = (title, message, options = {}) => openDialog({ title, message, danger: true, ...options });
+const askText = (title, message, inputLabel) => openDialog({
+  title, message, input: true, inputLabel, cancelText: '取消', confirmText: '确定'
+});
 
 const api = async (path, options = {}) => {
   const response = await fetch(path, {
@@ -97,45 +154,39 @@ function logout() {
 }
 
 function login() {
+  delete document.body.dataset.view;
+  document.body.classList.add('poster-mode');
   app.innerHTML = `
-    <section class="landing">
-      <div class="landing-hero">
+    <section class="launch-screen" id="launchScreen" aria-label="活动启动动画">
+      <button class="skip-launch" id="skipLaunch">跳过动画</button>
+      <div class="launch-emblem" aria-hidden="true">
+        <span class="launch-halo halo-a"></span><span class="launch-halo halo-b"></span>
+        <span class="launch-particles">${Array.from({ length: 10 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
+        <span class="launch-orbit"></span>
+        <b class="launch-star">✦</b>
+        <strong>20</strong><i>th</i>
+      </div>
+      <p>JINSHAN · 2006—2026</p>
+    </section>
+    <section class="landing poster-home">
+      <div class="landing-hero poster">
         <div class="hero-glow glow-one"></div><div class="hero-glow glow-two"></div>
-        <div class="anniversary-mark parallax" data-depth="18"><i>JS</i><b>20</b><span>th</span><small>2006—2026</small></div>
-        <div class="hero-tag tag-yellow parallax" data-depth="28"><span class="tag-hole"></span><b>JS 20<sup>th</sup></b><small>FAFU · DESIGN</small></div>
-        <div class="hero-tag tag-pink parallax" data-depth="34"><span class="tag-hole"></span><b>20 YEARS</b><small>青春正当时</small></div>
-        <div class="hero-content parallax" data-depth="8">
+        <div class="anniversary-mark"><i>JS</i><b>20</b><span>th</span><small>2006—2026</small></div>
+        <div class="hero-content">
           <div class="eyebrow">庆福建农林大学金山学院建院20周年-设计学院</div>
           <div class="anniversary-line"><span></span>20TH ANNIVERSARY<span></span></div>
           <h1 class="calligraphy-title"><span>廿载同心</span><em>青春同行</em></h1>
           <p>一院三地四校区，共庆青春正当时。</p>
-          <div class="hero-actions"><button id="join">进入系统</button><a href="#about">探索活动 <b>↓</b></a></div>
         </div>
         <div class="hero-ribbon" aria-hidden="true"></div>
+        <div class="poster-entry"><button id="join">进入系统</button></div>
       </div>
-      <section id="about" class="intro">
-        <div>
-          <span class="eyebrow dark">双赛道活动</span>
-          <h2>选择属于你的青春同行方式</h2>
-          <p>四校区互动赛道连接不同校区伙伴，自律健康赛道记录规律生活。登录后可查看自己的身份资料和所属赛道。</p>
-        </div>
-        <div class="data">
-          <b>2</b><span>活动赛道</span>
-          <b>4</b><span>校区同步参与</span>
-          <b>20</b><span>周年同行</span>
-        </div>
-      </section>
-      <section class="feature-grid">
-        <article><span>01</span><h3>四校区互动赛道</h3><p>跨校区组队、共同创作，记录四校区的校园风貌。</p></article>
-        <article><span>02</span><h3>自律健康赛道</h3><p>按照规定时段记录三餐，培养规律健康的生活习惯。</p></article>
-        <article><span>03</span><h3>专属账号</h3><p>每位参与者使用自己的学号登录，只能查看个人身份与活动资料。</p></article>
-      </section>
-      <footer>庆福建农林大学金山学院建院20周年-设计学院　|　廿载同心 · 青春同行</footer>
     </section>
-    <section class="card login" id="loginCard">
+    <section class="login-overlay" id="loginCard" aria-hidden="true">
+      <div class="card login">
       <div class="row">
         <h2>账号登录</h2>
-        <button class="secondary right" id="closeLogin">返回宣传页</button>
+        <button class="secondary right" id="closeLogin">返回海报</button>
       </div>
       <p class="muted">使用管理员创建的学号和密码登录。</p>
       <form id="login">
@@ -143,30 +194,41 @@ function login() {
         <label>密码</label><input name="password" type="password" required>
         <button>登录</button>
       </form>
+      </div>
     </section>`;
-  document.querySelector('#loginCard').style.display = 'none';
+  const launchScreen = document.querySelector('#launchScreen');
+  const posterHome = document.querySelector('.poster-home');
+  let launchTimer;
+  const finishLaunch = () => {
+    if (launchScreen.classList.contains('finished')) return;
+    launchScreen.classList.add('finished');
+    posterHome.classList.add('revealing');
+    clearTimeout(launchTimer);
+    setTimeout(() => {
+      posterHome.classList.add('ready');
+      launchScreen.remove();
+    }, 720);
+  };
+  const reducedMotion = window.matchMedia && (
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+    window.matchMedia('(update: slow)').matches
+  );
+  launchTimer = setTimeout(finishLaunch, reducedMotion ? 180 : 2600);
+  document.querySelector('#skipLaunch').onclick = finishLaunch;
   document.querySelector('#join').onclick = () => {
-    document.querySelector('#loginCard').style.display = 'block';
-    document.querySelector('#loginCard').scrollIntoView({ behavior: 'smooth' });
+    const loginCard = document.querySelector('#loginCard');
+    loginCard.classList.add('open');
+    loginCard.setAttribute('aria-hidden', 'false');
+    document.querySelector('#login input').focus();
   };
   document.querySelector('#closeLogin').onclick = () => {
-    document.querySelector('#loginCard').style.display = 'none';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const loginCard = document.querySelector('#loginCard');
+    loginCard.classList.remove('open');
+    loginCard.setAttribute('aria-hidden', 'true');
   };
-  const hero = document.querySelector('.landing-hero');
-  const moveHero = (x, y) => {
-    const rect = hero.getBoundingClientRect();
-    const px = (x - rect.left) / rect.width - 0.5;
-    const py = (y - rect.top) / rect.height - 0.5;
-    hero.style.setProperty('--mx', px.toFixed(3));
-    hero.style.setProperty('--my', py.toFixed(3));
-    hero.querySelectorAll('.parallax').forEach((element) => {
-      const depth = Number(element.dataset.depth || 10);
-      element.style.transform = `translate3d(${px * depth}px, ${py * depth}px, 0)`;
-    });
+  document.querySelector('#loginCard').onclick = (event) => {
+    if (event.target.id === 'loginCard') document.querySelector('#closeLogin').click();
   };
-  hero.onpointermove = (event) => moveHero(event.clientX, event.clientY);
-  hero.onpointerleave = () => hero.querySelectorAll('.parallax').forEach((element) => { element.style.transform = ''; });
   document.querySelector('#login').onsubmit = async (event) => {
     event.preventDefault();
     try {
@@ -181,7 +243,8 @@ function login() {
       tracks = result.tracks;
       localStorage.token = token;
       localStorage.user = JSON.stringify(user);
-      home();
+      document.body.classList.remove('poster-mode');
+      user.role === 'admin' ? admin() : student(result);
     } catch (error) {
       alert(error.message);
     }
@@ -189,6 +252,7 @@ function login() {
 }
 
 async function home() {
+  document.body.classList.remove('poster-mode');
   const result = await api('/api/me');
   config = result.config;
   tracks = result.tracks;
@@ -198,6 +262,7 @@ async function home() {
 }
 
 async function student(me) {
+  delete document.body.dataset.view;
   const isInteraction = user.trackId === 'interaction';
   const [teamListResult, myTeamResult, taskResult, historyResult, materialResult] = await Promise.all([
     isInteraction ? api('/api/teams') : Promise.resolve(null),
@@ -213,15 +278,40 @@ async function student(me) {
       <td>${team.memberCount}/${team.memberLimit}</td>
       <td><span class="pill ${team.isFull ? '' : 'done'}">${team.isFull ? '已满员' : '可加入'}</span></td>
     </tr>`).join('');
+  const completedTasks = taskResult.tasks.filter((task) =>
+    ['submitted', 'approved'].includes(task.submission?.status) || task.memberCheckin
+  ).length;
+  const taskProgress = taskResult.tasks.length
+    ? Math.round((completedTasks / taskResult.tasks.length) * 100)
+    : 0;
+  const avatarText = [...String(user.name || '同学')].slice(-2).join('');
   app.innerHTML = `
-    <header class="hero">
-      <div class="row">
-        <div><h1>${escapeHtml(config.activityName)}</h1><div>你好，${escapeHtml(user.name)}</div></div>
-        <button class="secondary right" id="ranking">排行榜</button><button class="secondary" id="plaza">活动广场</button><button class="secondary" id="out">退出</button>
+    <header class="student-hero">
+      <div class="student-hero-copy">
+        <span>20TH ANNIVERSARY</span>
+        <h1>廿载同心，青春同行</h1>
+        <p>${escapeHtml(config.activityName)}</p>
       </div>
+      <button class="student-logout" id="out">退出</button>
     </header>
-    <section class="card">
+    <section class="student-user-card">
+      <div class="student-avatar" aria-hidden="true">${escapeHtml(avatarText)}</div>
+      <div class="student-user-copy"><span>欢迎回来</span><h2>${escapeHtml(user.name)}</h2><p>${escapeHtml(trackName(user.trackId))} · ${escapeHtml(user.campus)}</p></div>
+      <div class="student-progress" style="--progress:${taskProgress}%"><strong>${taskProgress}%</strong><span>任务进度</span></div>
+    </section>
+    <nav class="student-shortcuts" aria-label="常用功能">
+      <button data-jump="activityTasks"><span>✦</span><strong>今日任务</strong><small>${taskResult.tasks.length} 项待查看</small></button>
+      <button data-jump="${isInteraction ? 'activityTasks' : 'historyRecords'}"><span>✓</span><strong>我的打卡</strong><small>${completedTasks} 项已完成</small></button>
+      <button id="plaza"><span>▦</span><strong>活动广场</strong><small>发现青春作品</small></button>
+      <button data-jump="myTeam" ${isInteraction ? '' : 'disabled'}><span>♢</span><strong>我的队伍</strong><small>${isInteraction ? (myTeam ? escapeHtml(myTeam.name) : '等待编队') : '仅互动赛道'}</small></button>
+    </nav>
+    <div class="student-top-actions">
+      <button class="secondary" id="ranking">查看排行榜</button>
+    </div>
+    <section class="card profile-card">
       <h2>我的资料</h2>
+      <details class="profile-details">
+      <summary>查看完整身份资料</summary>
       <div class="profile-grid">
         <div><span>姓名</span><strong>${escapeHtml(user.name)}</strong></div>
         <div><span>学号</span><strong>${escapeHtml(user.studentId)}</strong></div>
@@ -231,9 +321,10 @@ async function student(me) {
         <div><span>创建时间</span><strong>${escapeHtml(formatDate(user.createdAt))}</strong></div>
       </div>
       <p class="muted">关键身份资料仅可由管理员维护，如有错误请联系活动工作人员。</p>
+      </details>
     </section>
     ${isInteraction ? `
-      <section class="card">
+      <section class="card" id="myTeam">
         <div class="row"><h2>我的队伍</h2><span class="right muted">${teamListResult.teamCount}/${teamListResult.maxTeams} 个队伍</span></div>
         ${myTeam ? `
           <div class="team-summary">
@@ -250,10 +341,11 @@ async function student(me) {
   const mealNames = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐' };
   const submissionNames = { draft: '草稿', submitted: '已提交', returned: '退回', approved: '通过' };
   const taskCards = taskResult.tasks.map((task) => `
-    <article class="slot">
+    <article class="slot activity-task-card">
+      <span class="task-kicker">${isInteraction ? '团队活动' : '个人活动'}</span>
       <div class="row"><h2>${escapeHtml(task.name)}</h2><span class="pill ${task.submission?.status === 'approved' ? 'done' : 'pending'}">${submissionNames[task.submission?.status] || '未提交'}</span></div>
       <p>${escapeHtml(task.description)}</p>
-      <p class="muted">${task.scheduleType === 'activityDays' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 活动第 ${task.refreshDays.join('、')} 天自动刷新` : task.scheduleType === 'weekly' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 周${task.weekdays.join('、周')}自动刷新` : `${formatDate(task.startAt)} 至 ${formatDate(task.endAt)}`} · 最多 ${task.imageLimit} 张图 · ${task.allowLate ? '允许补交' : '不允许补交'}</p>
+      <p class="task-requirement">${task.scheduleType === 'activityDays' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 活动第 ${task.refreshDays.join('、')} 天自动刷新` : task.scheduleType === 'weekly' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 周${task.weekdays.join('、周')}自动刷新` : `${formatDate(task.startAt)} 至 ${formatDate(task.endAt)}`} · 最多 ${task.imageLimit} 张图 · ${task.allowLate ? '允许补交' : '不允许补交'}</p>
       ${task.copyRequirement ? `<div class="notice">文案要求：${escapeHtml(task.copyRequirement)}</div>` : ''}
       ${task.submission?.reviewNote ? `<p class="bad">审核意见：${escapeHtml(task.submission.reviewNote)}</p>` : ''}
       ${isInteraction ? `
@@ -270,7 +362,7 @@ async function student(me) {
     <section class="card" id="activityTasks"><div class="row"><h2>今日打卡</h2><span class="right muted">${isInteraction ? '个人打卡后由队长汇总' : '个人提交'}</span></div>
       <div class="grid">${taskCards || '<p class="muted">当前没有已发布任务</p>'}</div>
     </section>
-    ${!isInteraction ? `<section class="card"><h2>我的历史记录</h2><div class="history-list">${historyResult.submissions.map((item) => `<div><strong>${escapeHtml(item.task.name || '已归档任务')}</strong><span>${mealNames[item.mealType] || '未分类'} · ${submissionNames[item.status] || item.status} · ${formatDate(item.updatedAt)}</span></div>`).join('') || '<p class="muted">暂无历史记录</p>'}</div></section>` : ''}`);
+    ${!isInteraction ? `<section class="card" id="historyRecords"><h2>我的历史记录</h2><div class="history-list">${historyResult.submissions.map((item) => `<div><strong>${escapeHtml(item.task.name || '已归档任务')}</strong><span>${mealNames[item.mealType] || '未分类'} · ${submissionNames[item.status] || item.status} · ${formatDate(item.updatedAt)}</span></div>`).join('') || '<p class="muted">暂无历史记录</p>'}</div></section>` : ''}`);
   const materialStatus = { submitted: '已提交', returned: '退回修改' };
   app.insertAdjacentHTML('beforeend', `<section class="card"><div class="row"><h2>最终截图证明</h2><span class="right muted">最多 8 张 · 压缩后单张不超过 5MB</span></div>
     <div class="grid">${materialResult.tasks.map((task) => `<article class="slot">
@@ -283,6 +375,9 @@ async function student(me) {
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
+  document.querySelectorAll('[data-jump]').forEach((button) => {
+    button.onclick = () => document.querySelector(`#${button.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
   document.querySelectorAll('[data-task]').forEach((button) => {
     button.onclick = () => taskSubmissionForm(taskResult.tasks.find((task) => task.id === button.dataset.task));
   });
@@ -486,7 +581,7 @@ async function rankings(period = 'day', key = '') {
   document.querySelector('#rankingKey').onchange = (event) => rankings(period, event.target.value);
   const freeze = document.querySelector('#freezeRanking');
   if (freeze) freeze.onclick = async () => {
-    if (!confirm(`冻结 ${currentKey} 最终排名后将不会随数据变化，确认继续？`)) return;
+    if (!await askConfirm('是否冻结最终排名？', `冻结 ${currentKey} 最终排名后将不会随数据变化。`)) return;
     await api('/api/admin/rankings/freeze', { method: 'POST', body: JSON.stringify({ month: currentKey }) });
     rankings('month', currentKey);
   };
@@ -546,12 +641,13 @@ function checkinForm(slotId) {
 }
 
 async function admin(selectedDate) {
+  document.body.dataset.view = 'admin';
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
     timeZone: 'Asia/Shanghai'
   });
   const [dashboard, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin] = await Promise.all([
     api(`/api/admin/dashboard?date=${date}`),
-    api('/api/admin/users'),
+    api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}`),
     api('/api/admin/teams'),
     api('/api/admin/tasks'),
     api('/api/admin/plaza'),
@@ -572,19 +668,12 @@ async function admin(selectedDate) {
             ? `<span class="pill ${checkin.status === 'approved' ? 'done' : 'pending'}">${checkin.status === 'approved' ? '通过' : checkin.status === 'rejected' ? '驳回' : '已交'}</span><br><button class="secondary review" data-id="${checkin.id}">查看</button>`
             : '<span class="muted">未交</span>'}</td>`).join('')}
       </tr>`).join('');
-  const userRows = users.map((studentUser) => `
-    <tr>
-      <td>${escapeHtml(studentUser.name)}</td>
-      <td>${escapeHtml(studentUser.studentId)}</td>
-      <td>${escapeHtml(studentUser.campus)}</td>
-      <td>${escapeHtml(trackName(studentUser.trackId))}</td>
-      <td><span class="pill ${studentUser.status === 'active' ? 'done' : ''}">${statusLabel(studentUser.status)}</span></td>
-      <td>${escapeHtml(formatDate(studentUser.createdAt))}</td>
-      <td class="actions">
-        <button class="secondary edit-user" data-id="${studentUser.id}">编辑</button>
-        <button class="${studentUser.status === 'active' ? 'danger' : 'secondary'} toggle-user" data-id="${studentUser.id}" data-status="${studentUser.status === 'active' ? 'disabled' : 'active'}">${studentUser.status === 'active' ? '禁用' : '启用'}</button>
-      </td>
-    </tr>`).join('');
+  const userTiles = users.map((studentUser, index) => `
+    <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">
+      <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
+      <strong>${escapeHtml(studentUser.name)}</strong>
+      <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
+    </button>`).join('');
   const teamRows = teamResult.teams.map((team) => `
     <tr>
       <td>${escapeHtml(team.name)}<br><small>邀请码：<strong>${escapeHtml(team.inviteCode)}</strong></small></td>
@@ -601,7 +690,7 @@ async function admin(selectedDate) {
         <button class="secondary add-team-member" data-id="${team.id}" ${team.isFull ? 'disabled' : ''}>加入成员</button>
         <button class="secondary set-captain" data-id="${team.id}">${team.captain ? '更换队长' : '指定队长'}</button>
         ${team.captain ? `<button class="secondary clear-captain" data-id="${team.id}">取消队长</button>` : ''}
-        <button class="danger dissolve-team" data-id="${team.id}" ${team.memberCount ? 'disabled title="请先移除全部成员"' : ''}>解散</button>
+        <button class="danger dissolve-team" data-id="${team.id}">解散</button>
       </td>
     </tr>`).join('');
   const taskStatusNames = { draft: '草稿', published: '发布', closed: '关闭', archived: '归档' };
@@ -640,9 +729,22 @@ async function admin(selectedDate) {
       <div class="row"><h2>每日提交总览</h2><label class="right">日期 <input id="date" type="date" value="${date}"></label><button class="secondary" id="reload">查询</button></div>
       <div class="table-wrap"><table><thead><tr><th>学生</th><th>赛道</th>${slotHeaders}</tr></thead><tbody>${dashboardRows || '<tr><td colspan="6">尚无学生</td></tr>'}</tbody></table></div>
     </section>
-    <section class="card">
-      <div class="row"><h2>用户列表</h2><span class="right muted">共 ${users.length} 个普通用户</span></div>
-      <div class="table-wrap"><table><thead><tr><th>姓名</th><th>学号</th><th>校区</th><th>所属赛道</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${userRows || '<tr><td colspan="7">尚无用户</td></tr>'}</tbody></table></div>
+    <section class="card admin-user-section">
+      <div class="row"><div><h2>用户完成情况</h2><p class="muted">点击姓名查看提交详情</p></div><span class="right muted">共 ${userResult.total} 人</span></div>
+      <form id="adminUserSearch" class="user-list-toolbar">
+        <input name="query" value="${escapeHtml(adminUserQuery)}" placeholder="搜索姓名或学号" aria-label="搜索姓名或学号">
+        <button>搜索</button>
+      </form>
+      <div class="user-filter-tabs" role="group" aria-label="完成状态筛选">
+        ${[['all','全部用户'],['completed','已完成'],['missing','未完成']].map(([value,label]) =>
+          `<button class="secondary user-filter ${adminUserFilter === value ? 'active' : ''}" data-filter="${value}">${label}</button>`).join('')}
+      </div>
+      <div class="admin-user-grid">${userTiles || '<p class="muted">没有符合条件的用户</p>'}</div>
+      <div class="user-pagination">
+        <button class="secondary" id="adminUserPrev" ${userResult.page <= 1 ? 'disabled' : ''}>上一页</button>
+        <span>第 ${userResult.page} / ${Math.max(1, Math.ceil(userResult.total / userResult.limit))} 页</span>
+        <button class="secondary" id="adminUserNext" ${userResult.page * userResult.limit >= userResult.total ? 'disabled' : ''}>下一页</button>
+      </div>
     </section>
     <section class="card">
       <div class="row"><h2>活动任务管理</h2><span class="right muted">所有时间由服务端校验</span></div>
@@ -704,7 +806,11 @@ async function admin(selectedDate) {
       </div>
       <div class="card">
         <h2>创建活动任务</h2>
-        ${taskFormFields()}
+        <p class="muted">先选择任务类型，两种设置流程完全分开。</p>
+        <div class="task-type-choices">
+          <button id="createSingleTask" class="task-type-card" type="button"><span>单次任务</span><small>指定一次开始和截止时间</small></button>
+          <button id="createPeriodicTask" class="task-type-card secondary" type="button"><span>周期任务</span><small>按星期和每日时段自动生成</small></button>
+        </div>
       </div>
       <div class="card">
         <h2>创建最终截图证明任务</h2>
@@ -750,11 +856,47 @@ async function admin(selectedDate) {
     </section>
     <div id="modalRoot"></div>`;
 
+  enhanceAdminSections();
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
   document.querySelector('#reload').onclick = () =>
     admin(document.querySelector('#date').value);
+  document.querySelector('#adminUserSearch').onsubmit = (event) => {
+    event.preventDefault();
+    adminUserQuery = new FormData(event.target).get('query').trim();
+    adminUserPage = 1;
+    sessionStorage.adminUserQuery = adminUserQuery;
+    sessionStorage.adminUserPage = '1';
+    admin(date);
+  };
+  document.querySelectorAll('.user-filter').forEach((button) => {
+    button.onclick = () => {
+      adminUserFilter = button.dataset.filter;
+      adminUserPage = 1;
+      sessionStorage.adminUserFilter = adminUserFilter;
+      sessionStorage.adminUserPage = '1';
+      admin(date);
+    };
+  });
+  document.querySelector('#adminUserPrev').onclick = () => {
+    adminUserPage = Math.max(1, adminUserPage - 1);
+    sessionStorage.adminUserPage = String(adminUserPage);
+    admin(date);
+  };
+  document.querySelector('#adminUserNext').onclick = () => {
+    adminUserPage += 1;
+    sessionStorage.adminUserPage = String(adminUserPage);
+    admin(date);
+  };
+  document.querySelectorAll('.admin-user-tile').forEach((button) => {
+    button.onclick = () => openAdminUserDrawer(
+      users.find((item) => item.id === button.dataset.id),
+      dashboard.students.find((item) => item.id === button.dataset.id),
+      teamResult.teams,
+      date
+    );
+  });
   document.querySelector('#materialCampus').onchange = (event) => {
     materialAdminCampus = event.target.value;
     materialAdminPage = 1;
@@ -861,7 +1003,11 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.remove-member').forEach((button) => {
     button.onclick = async () => {
-      if (!confirm('确认将该成员移出队伍？')) return;
+      if (!await askConfirm(
+        '是否将该成员踢出队伍？',
+        '踢出后，该成员将退出当前队伍。',
+        { cancelText: '取消踢出队伍', confirmText: '确定踢出队伍' }
+      )) return;
       try {
         await api(`/api/admin/teams/${button.dataset.team}/members/${button.dataset.user}`, {
           method: 'DELETE'
@@ -874,7 +1020,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.add-team-member').forEach((button) => {
     button.onclick = async () => {
-      const studentId = prompt('请输入要加入该队伍的学生学号');
+      const studentId = await askText('加入队伍成员', '请输入要加入该队伍的学生学号。', '学生学号');
       if (!studentId) return;
       try {
         await api(`/api/admin/teams/${button.dataset.id}/members`, { method: 'POST', body: JSON.stringify({ studentId }) });
@@ -884,7 +1030,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.set-captain').forEach((button) => {
     button.onclick = async () => {
-      const studentId = prompt('请输入该队队长的学号（必须已经在队伍中）');
+      const studentId = await askText('指定队长', '该学生必须已经在当前队伍中。', '队长学号');
       if (!studentId) return;
       try {
         await api(`/api/admin/teams/${button.dataset.id}/captain`, { method: 'PATCH', body: JSON.stringify({ studentId }) });
@@ -894,7 +1040,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.clear-captain').forEach((button) => {
     button.onclick = async () => {
-      if (!confirm('确认取消该队伍的队长权限？')) return;
+      if (!await askConfirm('是否取消队长？', '取消后，该队伍将暂时没有队长。')) return;
       try {
         await api(`/api/admin/teams/${button.dataset.id}/captain`, { method: 'PATCH', body: '{}' });
         admin(date);
@@ -903,19 +1049,24 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.dissolve-team').forEach((button) => {
     button.onclick = async () => {
-      if (!confirm('确认解散这个空队伍？此操作不可恢复。')) return;
+      if (!await askConfirm(
+        '是否解散该队伍？',
+        '确认后将解除全部成员关系并解散队伍，此操作不可恢复。',
+        { cancelText: '取消解散', confirmText: '确定解散' }
+      )) return;
       try {
         await api(`/api/admin/teams/${button.dataset.id}`, { method: 'DELETE' });
-        admin(date);
+        await admin(date);
+        alert('队伍已解散');
       } catch (error) {
-        alert(error.message);
+        alert(`解散失败：${error.message}`);
       }
     };
   });
   document.querySelectorAll('.toggle-user').forEach((button) => {
     button.onclick = async () => {
       const action = button.dataset.status === 'disabled' ? '禁用' : '启用';
-      if (!confirm(`确认${action}该用户？`)) return;
+      if (!await askConfirm(`是否${action}该用户？`, `${action}后将立即影响该账号的登录状态。`)) return;
       try {
         await api(`/api/admin/users/${button.dataset.id}/status`, {
           method: 'PATCH',
@@ -936,14 +1087,8 @@ async function admin(selectedDate) {
     await api('/api/admin/activity-switches', { method: 'PATCH', body: JSON.stringify({ activityEnabled: form.activityEnabled.checked, trackEnabled: { interaction: form.interaction.checked, health: form.health.checked } }) });
     home();
   };
-  document.querySelector('#createTask').onsubmit = async (event) => {
-    event.preventDefault();
-    try {
-      await api('/api/admin/tasks', { method: 'POST', body: JSON.stringify(taskPayload(event.target)) });
-      alert('任务创建成功');
-      admin(date);
-    } catch (error) { alert(error.message); }
-  };
+  document.querySelector('#createSingleTask').onclick = () => openTaskCreator('single', date);
+  document.querySelector('#createPeriodicTask').onclick = () => openTaskCreator('periodic', date);
   document.querySelector('#createMaterialTask').onsubmit = async (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.target));
@@ -959,7 +1104,7 @@ async function admin(selectedDate) {
   document.querySelectorAll('.approve-submission,.return-submission').forEach((button) => {
     button.onclick = async () => {
       const returning = button.classList.contains('return-submission');
-      const reviewNote = returning ? prompt('请输入退回原因') : '';
+      const reviewNote = returning ? await askText('退回任务提交', '请填写退回原因。', '退回原因') : '';
       if (returning && !reviewNote) return;
       try {
         await api(`/api/admin/submissions/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: returning ? 'returned' : 'approved', reviewNote }) });
@@ -969,7 +1114,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.delete-submission').forEach((button) => {
     button.onclick = async () => {
-      if (!confirm('确认删除该提交及其关联广场帖子？此操作不可恢复。')) return;
+      if (!await askConfirm('是否删除该提交？', '关联的广场帖子也会删除，此操作不可恢复。')) return;
       await api(`/api/admin/submissions/${button.dataset.id}`, { method: 'DELETE' });
       admin(date);
     };
@@ -982,7 +1127,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.delete-post').forEach((button) => {
     button.onclick = async () => {
-      if (!confirm('确认永久删除该广场帖子？任务提交记录不会删除。')) return;
+      if (!await askConfirm('是否永久删除该广场帖子？', '任务提交记录不会删除，此操作不可恢复。')) return;
       await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'DELETE' });
       admin(date);
     };
@@ -1007,7 +1152,7 @@ async function admin(selectedDate) {
   });
   document.querySelectorAll('.return-material').forEach((button) => {
     button.onclick = async () => {
-      const reviewNote = prompt('请输入退回修改原因');
+      const reviewNote = await askText('退回最终截图证明', '请填写需要修改的原因。', '退回原因');
       if (!reviewNote) return;
       await api(`/api/admin/material-submissions/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ reviewNote }) });
       admin(date);
@@ -1016,34 +1161,155 @@ async function admin(selectedDate) {
   document.querySelectorAll('.missing-material').forEach((button) => {
     button.onclick = () => downloadApiFile(`/api/admin/material-tasks/${button.dataset.id}/missing-export`).catch((error) => alert(error.message));
   });
+  requestAnimationFrame(() => window.scrollTo(0, Number(sessionStorage.adminScrollY || 0)));
 }
 
-function taskFormFields(task = {}) {
+function enhanceAdminSections() {
+  const sections = [...document.querySelectorAll('#app > section.card, .admin-tools > .card')];
+  sections.forEach((section, index) => {
+    if (section.classList.contains('admin-user-section')) return;
+    const title = section.querySelector('h2');
+    if (!title) return;
+    const key = `adminSection:${title.textContent.trim()}`;
+    const primary = title.textContent.includes('每日提交');
+    const expanded = sessionStorage.getItem(key) === null
+      ? primary
+      : sessionStorage.getItem(key) === 'open';
+    const first = section.firstElementChild;
+    const body = document.createElement('div');
+    body.className = 'admin-collapsible-body';
+    [...section.children].filter((child) => child !== first).forEach((child) => body.append(child));
+    section.append(body);
+    section.classList.add('admin-collapsible');
+    section.classList.toggle('is-open', expanded);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'admin-section-toggle secondary';
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.innerHTML = `<span>${expanded ? '收起' : '展开'}</span><b aria-hidden="true">⌄</b>`;
+    first.classList.add('admin-collapsible-heading');
+    first.append(toggle);
+    toggle.onclick = () => {
+      const open = section.classList.toggle('is-open');
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.querySelector('span').textContent = open ? '收起' : '展开';
+      sessionStorage.setItem(key, open ? 'open' : 'closed');
+    };
+  });
+}
+
+function openAdminUserDrawer(studentUser, dashboardUser, teams, date) {
+  const root = document.querySelector('#modalRoot');
+  const team = teams.find((item) => item.members.some((member) => member.id === studentUser.id));
+  const submitted = (dashboardUser?.slots || []).filter(Boolean);
+  const latest = submitted.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))[0];
+  root.innerHTML = `<div class="drawer-backdrop" id="userDrawerBackdrop">
+    <section class="bottom-drawer" role="dialog" aria-modal="true" aria-labelledby="userDrawerTitle">
+      <div class="drawer-handle"></div>
+      <div class="row"><div><small class="muted">用户详情</small><h2 id="userDrawerTitle">${escapeHtml(studentUser.name)}</h2></div><button class="secondary right" id="closeUserDrawer">关闭</button></div>
+      <dl class="user-detail-list">
+        <div><dt>姓名</dt><dd>${escapeHtml(studentUser.name)}</dd></div>
+        <div><dt>学号</dt><dd>${escapeHtml(studentUser.studentId)}</dd></div>
+        <div><dt>校区</dt><dd>${escapeHtml(studentUser.campus || '未设置')}</dd></div>
+        <div><dt>所属队伍</dt><dd>${escapeHtml(team?.name || '未加入队伍')}</dd></div>
+        <div><dt>打卡状态</dt><dd><span class="pill ${latest ? 'done' : ''}">${latest ? '已完成' : '未完成'}</span></dd></div>
+        <div><dt>提交时间</dt><dd>${latest ? escapeHtml(formatDate(latest.submittedAt)) : '—'}</dd></div>
+      </dl>
+      <div class="drawer-content-block"><h3>图片</h3><div class="drawer-photo-grid">${latest?.photos?.length
+        ? latest.photos.map((url, index) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="${escapeHtml(studentUser.name)}打卡图片${index + 1}"></a>`).join('')
+        : '<p class="muted">暂无图片</p>'}</div></div>
+      <div class="drawer-content-block"><h3>文案</h3><p>${escapeHtml(latest?.note || '暂无文案')}</p></div>
+      <div class="drawer-actions">
+        <button class="secondary" id="editDrawerUser">编辑用户</button>
+        <button class="${studentUser.status === 'active' ? 'danger' : 'secondary'}" id="toggleDrawerUser">${studentUser.status === 'active' ? '禁用用户' : '启用用户'}</button>
+      </div>
+    </section>
+  </div>`;
+  const close = () => { root.innerHTML = ''; };
+  document.querySelector('#closeUserDrawer').onclick = close;
+  document.querySelector('#userDrawerBackdrop').onclick = (event) => { if (event.target.id === 'userDrawerBackdrop') close(); };
+  document.querySelector('#editDrawerUser').onclick = () => editUser(studentUser, date);
+  document.querySelector('#toggleDrawerUser').onclick = async () => {
+    const next = studentUser.status === 'active' ? 'disabled' : 'active';
+    const action = next === 'disabled' ? '禁用' : '启用';
+    if (!await askConfirm(`是否${action}该用户？`, `${action}后将立即影响该账号的登录状态。`)) return;
+    try {
+      await api(`/api/admin/users/${studentUser.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: next })
+      });
+      root.innerHTML = '';
+      admin(date);
+    } catch (error) { alert(error.message); }
+  };
+}
+
+function taskFormFields(task = {}, requestedType = '') {
   const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
   const nextWeek = new Date(Date.now() + 7 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-  return `<form id="${task.id ? 'editTask' : 'createTask'}">
-    <label>任务名称</label><input name="name" value="${escapeHtml(task.name || '')}" required>
+  const type = requestedType || (task.scheduleType === 'oneTime' ? 'single' : 'periodic');
+  const formId = task.id ? 'editTask' : 'createTask';
+  const commonStart = `<form id="${formId}" data-task-type="${type}">
+    <input type="hidden" name="scheduleType" value="${type === 'single' ? 'oneTime' : 'weekly'}">
+    <label>${type === 'single' ? '任务名称' : '任务模板名称'}</label><input name="name" value="${escapeHtml(task.name || '')}" required>
     <label>描述</label><textarea name="description">${escapeHtml(task.description || '')}</textarea>
-    <label>所属赛道</label><select name="trackId">${tracks.map((track) => `<option value="${track.id}" ${track.id === task.trackId ? 'selected' : ''}>${escapeHtml(track.name)}</option>`).join('')}</select>
-    <label>任务刷新方式</label><select name="scheduleType"><option value="activityDays" ${!task.scheduleType || task.scheduleType === 'activityDays' ? 'selected' : ''}>按活动第几天刷新</option><option value="weekly" ${task.scheduleType === 'weekly' ? 'selected' : ''}>按指定星期刷新</option><option value="oneTime" ${task.scheduleType === 'oneTime' ? 'selected' : ''}>单次任务</option></select>
-    <label>活动开始日期</label><input name="activeStartDate" type="date" value="${escapeHtml(task.activeStartDate || todayKey)}">
-    <label>活动结束日期</label><input name="activeEndDate" type="date" value="${escapeHtml(task.activeEndDate || nextWeek)}">
-    <label>活动刷新日</label><input name="refreshDays" value="${escapeHtml((task.refreshDays || [1,3,5]).join(','))}" placeholder="1,3,5 表示活动第 1、3、5 天">
-    <label>自动刷新星期（星期模式）</label><input name="weekdays" value="${escapeHtml((task.weekdays || [1,3,5]).join(','))}" placeholder="1,3,5 表示周一、周三、周五">
-    <label>当天提交时间</label><div class="row"><input name="dailyStart" type="time" value="${task.dailyStart || '00:00'}"><span>至</span><input name="dailyEnd" type="time" value="${task.dailyEnd || '23:59'}"></div>
-    <label>单次任务开始时间</label><input name="startAt" type="datetime-local" value="${escapeHtml((task.startAt || '').slice(0, 16))}">
-    <label>单次任务截止时间</label><input name="endAt" type="datetime-local" value="${escapeHtml((task.endAt || '').slice(0, 16))}">
+    <label>所属赛道</label><select name="trackId">${tracks.map((track) => `<option value="${track.id}" ${track.id === task.trackId ? 'selected' : ''}>${escapeHtml(track.name)}</option>`).join('')}</select>`;
+  const scheduleFields = type === 'single'
+    ? `<label>开始日期和时间</label><input name="startAt" type="datetime-local" value="${escapeHtml((task.startAt || '').slice(0, 16))}" required>
+       <label>截止日期和时间</label><input name="endAt" type="datetime-local" value="${escapeHtml((task.endAt || '').slice(0, 16))}" required>`
+    : `<label>周期开始日期</label><input name="activeStartDate" type="date" value="${escapeHtml(task.activeStartDate || todayKey)}" required>
+       <label>周期结束日期</label><input name="activeEndDate" type="date" value="${escapeHtml(task.activeEndDate || nextWeek)}" required>
+       <fieldset class="weekday-picker"><legend>周一至周日多选</legend>${['一','二','三','四','五','六','日'].map((label, index) =>
+         `<label><input type="checkbox" name="weekdays" value="${index + 1}" ${(task.weekdays || [1,3,5]).includes(index + 1) ? 'checked' : ''}><span>周${label}</span></label>`).join('')}</fieldset>
+       <label>每日开放时间</label><input name="dailyStart" type="time" value="${task.dailyStart || '00:00'}" required>
+       <label>每日截止时间</label><input name="dailyEnd" type="time" value="${task.dailyEnd || '23:59'}" required>`;
+  return `${commonStart}${scheduleFields}
     <label>图片数量限制</label><input name="imageLimit" type="number" min="1" max="3" value="${Math.min(task.imageLimit || 3, 3)}" required>
     <label>文案要求</label><textarea name="copyRequirement">${escapeHtml(task.copyRequirement || '')}</textarea>
-    <p class="muted">每天只可提交当天生成的任务，系统不允许补交。</p>
-    <label>任务状态</label><select name="status">${[['draft','草稿'],['published','发布'],['closed','关闭'],['archived','归档']].map(([value,label]) => `<option value="${value}" ${task.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select>
-    <button>${task.id ? '保存修改' : '创建任务'}</button>
+    ${task.id ? `<label>任务状态</label><select name="status">${[['draft','草稿'],['published','发布'],['closed','关闭'],['archived','归档']].map(([value,label]) => `<option value="${value}" ${task.status === value ? 'selected' : ''}>${label}</option>`).join('')}</select>` : '<input type="hidden" name="status" value="published">'}
+    <button>${task.id ? '保存修改' : type === 'single' ? '发布任务' : '保存周期任务'}</button>
   </form>`;
 }
 
 function taskPayload(form) {
   const values = Object.fromEntries(new FormData(form));
-  return { ...values, allowLate: false, imageLimit: Number(values.imageLimit), weekdays: values.weekdays.split(/[,，\s]+/).map(Number), refreshDays: values.refreshDays.split(/[,，\s]+/).map(Number) };
+  const weekdays = [...form.querySelectorAll('input[name="weekdays"]:checked')].map((input) => Number(input.value));
+  if (form.dataset.taskType === 'periodic' && !weekdays.length) throw new Error('周期任务至少选择一个星期');
+  if (form.dataset.taskType === 'periodic' && values.dailyStart >= values.dailyEnd) {
+    throw new Error('每日截止时间必须晚于每日开放时间');
+  }
+  return {
+    ...values,
+    allowLate: false,
+    imageLimit: Number(values.imageLimit),
+    weekdays,
+    refreshDays: [],
+    activeStartDate: values.activeStartDate || '',
+    activeEndDate: values.activeEndDate || '',
+    dailyStart: values.dailyStart || '',
+    dailyEnd: values.dailyEnd || '',
+    startAt: values.startAt || '',
+    endAt: values.endAt || ''
+  };
+}
+
+function openTaskCreator(type, date) {
+  const root = document.querySelector('#modalRoot');
+  const title = type === 'single' ? '创建单次任务' : '创建周期任务';
+  root.innerHTML = `<div class="modal-backdrop task-page-backdrop"><section class="card modal task-editor">
+    <div class="row"><div><small class="muted">活动任务</small><h2>${title}</h2></div><button id="closeTask" class="secondary right">关闭</button></div>
+    ${taskFormFields({}, type)}
+  </section></div>`;
+  document.querySelector('#closeTask').onclick = () => { root.innerHTML = ''; };
+  document.querySelector('#createTask').onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/admin/tasks', { method: 'POST', body: JSON.stringify(taskPayload(event.target)) });
+      root.innerHTML = '';
+      await admin(date);
+      alert(type === 'single' ? '单次任务已发布' : '周期任务已保存');
+    } catch (error) { alert(error.message); }
+  };
 }
 
 function editTask(task, date) {
@@ -1137,7 +1403,7 @@ function reviewCheckin(students, checkinId, date) {
     <div class="modal-backdrop">
       <section class="card modal">
         <div class="row"><h2>审核材料</h2><button class="secondary right" id="closeReview">关闭</button></div>
-        <div class="photos">${checkin.photos.map((photo) => `<a href="${photo}" target="_blank"><img src="${photo}" alt="打卡截图"></a>`).join('')}${checkin.summary ? `<a href="${checkin.summary}" target="_blank"><img src="${checkin.summary}" alt="汇总截图"></a>` : ''}</div>
+        <div class="photos">${checkin.photos.map((photo) => `<a href="${photo}" target="_blank"><img loading="lazy" src="${photo}" alt="打卡截图"></a>`).join('')}${checkin.summary ? `<a href="${checkin.summary}" target="_blank"><img loading="lazy" src="${checkin.summary}" alt="汇总截图"></a>` : ''}</div>
         <p>${escapeHtml(checkin.note || '无备注')}</p>
         <button id="approve">通过</button> <button class="danger" id="reject">驳回</button>
       </section>
