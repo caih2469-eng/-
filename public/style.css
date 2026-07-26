@@ -691,6 +691,33 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
 .user-completion { color: #9b3a45; font-size: 13px; }
 .completed .user-completion { color: #13835a; }
 .user-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.completion-heading { align-items: end; }
+.completion-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+.completion-summary {
+  display: grid;
+  gap: 8px;
+  min-height: 96px;
+  padding: 16px;
+  text-align: left;
+  color: var(--ink);
+  border: 1px solid #f1dad5;
+  background: linear-gradient(145deg, #fffdf9, #fff2ea);
+  box-shadow: none;
+}
+.completion-summary strong { font-size: 24px; }
+.completion-summary.active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, #f13d6c, #ff7656);
+  box-shadow: 0 12px 28px #e9436740;
+}
+.completion-list-heading { margin-top: 8px; padding-top: 16px; border-top: 1px solid #f1e2de; }
+.admin-user-tile small { color: #8b7580; font-size: 11px; }
 
 .drawer-backdrop { align-items: end; padding: 0; }
 .bottom-drawer {
@@ -711,6 +738,22 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
 .drawer-content-block { margin-top: 14px; padding: 16px; border-radius: 18px; background: #fff; }
 .drawer-photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .drawer-photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; }
+.drawer-photo-grid.compact { margin-top: 10px; }
+.meal-status-grid { display: grid; gap: 10px; }
+.meal-status-card { padding: 14px; border: 1px solid #eadfdb; border-radius: 14px; background: #fffaf7; }
+.meal-status-card.completed { border-color: #9ad9bd; background: #f5fff9; }
+.meal-status-card.missing { border-color: #f3c7c1; background: #fff8f6; }
+.meal-status-card small { color: #85727a; }
+.makeup-permission-card { border: 1px solid #f2d6aa; background: #fff9e8; }
+.admin-makeup-details summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: #9f3152;
+  font-weight: 800;
+  cursor: pointer;
+}
+.admin-makeup-details form { margin-top: 14px; }
 .drawer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
 
 .admin-collapsible-heading { display: flex; align-items: center; gap: 12px; }
@@ -813,6 +856,10 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
   .card { padding: 18px; border-radius: 22px; }
   .admin-user-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .admin-user-tile { min-height: 106px; padding: 10px; }
+  .completion-heading { align-items: stretch; }
+  .completion-heading label, .completion-heading button { width: 100%; }
+  .completion-summary-grid { grid-template-columns: 1fr; gap: 8px; }
+  .completion-summary { grid-template-columns: 1fr auto; align-items: center; min-height: 68px; }
   .user-detail-list { grid-template-columns: 1fr 1fr; }
   .task-type-choices { grid-template-columns: 1fr; }
   .weekday-picker { grid-template-columns: repeat(4, 1fr); }

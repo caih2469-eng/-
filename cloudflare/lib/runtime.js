@@ -31,6 +31,31 @@ export const shanghaiTime = (date = new Date()) =>
     hour12: false
   }).format(date);
 
+const makeupPermissionReady = new WeakMap();
+export const ensureMakeupPermissions = (env) => {
+  if (!makeupPermissionReady.has(env)) {
+    makeupPermissionReady.set(env, env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS makeup_permissions (
+        user_id TEXT NOT NULL,
+        checkin_date TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, checkin_date)
+      )`
+    ).run());
+  }
+  return makeupPermissionReady.get(env);
+};
+
+export const hasMakeupPermission = async (env, userId, date) => {
+  await ensureMakeupPermissions(env);
+  const permission = await env.DB.prepare(
+    'SELECT enabled FROM makeup_permissions WHERE user_id=?1 AND checkin_date=?2'
+  ).bind(userId, date).first();
+  return Boolean(permission?.enabled);
+};
+
 export const parseJson = (value, fallback = null) => {
   try {
     return JSON.parse(value);

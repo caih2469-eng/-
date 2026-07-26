@@ -1,6 +1,7 @@
 import {
   audit,
   cleanText,
+  ensureMakeupPermissions,
   hashPassword,
   json,
   nowIso,
@@ -9,7 +10,8 @@ import {
   readJson,
   requireUser,
   shanghaiDate,
-  TRACKS
+  TRACKS,
+  uploadImages
 } from '../lib/runtime.js';
 import { calculateRankings } from './plaza.js';
 import { excelResponse, readWorkbookRows } from '../lib/excel.js';
@@ -18,6 +20,15 @@ const adminUser = async (request, env) => requireUser(request, env, true);
 const safeUserColumns = `id,student_id AS studentId,name,role,campus,track_id AS trackId,
   status,created_at AS createdAt`;
 const validTrack = (value) => TRACKS.some((track) => track.id === value);
+const completionExpression = `((
+  u.track_id='health' AND
+  (SELECT COUNT(DISTINCT c.slot_id) FROM checkins c
+    WHERE c.user_id=u.id AND c.checkin_date=?2) >= 3
+) OR (
+  u.track_id='interaction' AND EXISTS (
+    SELECT 1 FROM member_checkins mc WHERE mc.user_id=u.id AND mc.occurrence_date=?2
+  )
+))`;
 const normalizeTaskInput = (body) => {
   const scheduleType = ['activityDays', 'weekly'].includes(body.scheduleType) ? body.scheduleType : 'oneTime';
   if (scheduleType === 'oneTime') {
@@ -72,6 +83,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
   const route = url.pathname;
 
   if ((route === '/api/admin/overview' || route === '/api/admin/dashboard') && request.method === 'GET') {
+    await ensureMakeupPermissions(env);
     const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
       ? url.searchParams.get('date') : shanghaiDate();
     const metrics = await env.DB.prepare(
@@ -93,7 +105,20 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
       likeCount: Number(metrics.likes),
       viewCount: Number(metrics.views)
     });
-    const users = await env.DB.prepare(`SELECT ${safeUserColumns} FROM users WHERE role='student' ORDER BY student_id`).all();
+    const users = await env.DB.prepare(
+      `SELECT ${safeUserColumns},
+        CASE WHEN track_id='health' THEN (
+          SELECT COUNT(*) FROM (
+            SELECT c.checkin_date FROM checkins c WHERE c.user_id=users.id
+            GROUP BY c.checkin_date HAVING COUNT(DISTINCT c.slot_id)>=3
+          )
+        ) ELSE (
+          SELECT COUNT(DISTINCT mc.occurrence_date) FROM member_checkins mc WHERE mc.user_id=users.id
+        ) END AS totalCompletedDays,
+        EXISTS(SELECT 1 FROM makeup_permissions mp
+          WHERE mp.user_id=users.id AND mp.checkin_date=?1 AND mp.enabled=1) AS makeupAllowed
+       FROM users WHERE role='student' ORDER BY student_id`
+    ).bind(date).all();
     const checkins = await env.DB.prepare(
       `SELECT c.id,c.user_id AS userId,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
               c.submitted_at AS submittedAt,c.review_note AS reviewNote,
@@ -101,18 +126,36 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
                 WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
          FROM checkins c WHERE c.checkin_date=?1 ORDER BY c.submitted_at`
     ).bind(date).all();
+    const memberCheckins = await env.DB.prepare(
+      `SELECT mc.id,mc.user_id AS userId,mc.task_id AS taskId,mc.occurrence_date AS date,
+              mc.status,mc.submitted_at AS submittedAt,t.name AS taskName
+         FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+        WHERE mc.occurrence_date=?1 ORDER BY mc.submitted_at`
+    ).bind(date).all();
     const config = await readConfig(env);
     return json({
       date,
       config,
-      students: users.results.map((student) => ({
-        ...student,
-        slots: config.slots.map((slot) =>
+      students: users.results.map((student) => {
+        const slots = config.slots.map((slot) =>
           (() => {
             const checkin = checkins.results.find((item) => item.userId === student.id && item.slotId === slot.id);
             return checkin ? { ...checkin, photos: checkin.photoUrls ? checkin.photoUrls.split('|') : [] } : null;
-          })())
-      }))
+          })());
+        const interactionCheckins = memberCheckins.results
+          .filter((item) => item.userId === student.id)
+          .map((item) => ({ ...item, photos: [`/api/files/${item.id}`], note: item.taskName }));
+        return {
+          ...student,
+          totalCompletedDays: Number(student.totalCompletedDays),
+          makeupAllowed: Boolean(student.makeupAllowed),
+          slots,
+          interactionCheckins,
+          completed: student.trackId === 'health'
+            ? slots.filter(Boolean).length === config.slots.length
+            : interactionCheckins.length > 0
+        };
+      })
     });
   }
 
@@ -122,20 +165,34 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const query = cleanText(url.searchParams.get('q'), 60);
     const completion = ['completed', 'missing'].includes(url.searchParams.get('completion'))
       ? url.searchParams.get('completion') : 'all';
+    const track = ['health', 'interaction'].includes(url.searchParams.get('track'))
+      ? url.searchParams.get('track') : '';
     const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
       ? url.searchParams.get('date') : new Date().toISOString().slice(0, 10);
     const search = `%${query}%`;
     const completionSql = completion === 'completed'
-      ? 'AND EXISTS (SELECT 1 FROM checkins c WHERE c.user_id=u.id AND c.checkin_date=?2)'
+      ? `AND ${completionExpression}`
       : completion === 'missing'
-        ? 'AND NOT EXISTS (SELECT 1 FROM checkins c WHERE c.user_id=u.id AND c.checkin_date=?2)'
+        ? `AND NOT ${completionExpression}`
         : '';
-    const where = `u.role='student' AND (?1='' OR u.name LIKE ?3 OR u.student_id LIKE ?3) ${completionSql}`;
+    const trackSql = track ? `AND u.track_id='${track}'` : '';
+    const where = `u.role='student' AND (?1='' OR u.name LIKE ?3 OR u.student_id LIKE ?3) ${trackSql} ${completionSql}`;
     const { results } = await env.DB.prepare(
       `SELECT u.id,u.student_id AS studentId,u.name,u.role,u.campus,u.track_id AS trackId,
         u.status,u.created_at AS createdAt,
-        EXISTS(SELECT 1 FROM checkins c WHERE c.user_id=u.id AND c.checkin_date=?2) AS completed,
-        (SELECT MAX(c.submitted_at) FROM checkins c WHERE c.user_id=u.id AND c.checkin_date=?2) AS submittedAt,
+        ${completionExpression} AS completed,
+        CASE WHEN u.track_id='health'
+          THEN (SELECT MAX(c.submitted_at) FROM checkins c WHERE c.user_id=u.id AND c.checkin_date=?2)
+          ELSE (SELECT MAX(mc.submitted_at) FROM member_checkins mc WHERE mc.user_id=u.id AND mc.occurrence_date=?2)
+        END AS submittedAt,
+        CASE WHEN u.track_id='health' THEN (
+          SELECT COUNT(*) FROM (
+            SELECT c.checkin_date FROM checkins c WHERE c.user_id=u.id
+            GROUP BY c.checkin_date HAVING COUNT(DISTINCT c.slot_id)>=3
+          )
+        ) ELSE (
+          SELECT COUNT(DISTINCT mc.occurrence_date) FROM member_checkins mc WHERE mc.user_id=u.id
+        ) END AS totalCompletedDays,
         t.name AS teamName
        FROM users u
        LEFT JOIN team_members tm ON tm.user_id=u.id
@@ -220,6 +277,110 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
       audit(env, admin, 'import', 'users', null, { count: prepared.length })
     ]);
     return json({ ok: true, imported: prepared.length }, 201);
+  }
+
+  const makeupPermissionMatch = route.match(/^\/api\/admin\/users\/([^/]+)\/makeup-permission$/);
+  if (makeupPermissionMatch && ['GET', 'PUT'].includes(request.method)) {
+    await ensureMakeupPermissions(env);
+    const userId = decodeURIComponent(makeupPermissionMatch[1]);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
+      ? url.searchParams.get('date') : shanghaiDate();
+    const target = await env.DB.prepare(
+      "SELECT id FROM users WHERE id=?1 AND role='student'"
+    ).bind(userId).first();
+    if (!target) return json({ error: '用户不存在' }, 404);
+    if (request.method === 'GET') {
+      const permission = await env.DB.prepare(
+        'SELECT enabled FROM makeup_permissions WHERE user_id=?1 AND checkin_date=?2'
+      ).bind(userId, date).first();
+      return json({ userId, date, enabled: Boolean(permission?.enabled) });
+    }
+    const body = await readJson(request);
+    const enabled = Boolean(body.enabled);
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO makeup_permissions (user_id,checkin_date,enabled,created_by,updated_at)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(user_id,checkin_date) DO UPDATE SET
+          enabled=excluded.enabled,created_by=excluded.created_by,updated_at=excluded.updated_at`
+      ).bind(userId, date, enabled ? 1 : 0, admin.id, nowIso()),
+      audit(env, admin, enabled ? 'enable_makeup' : 'disable_makeup', 'user', userId, { date })
+    ]);
+    return json({ ok: true, userId, date, enabled });
+  }
+
+  const adminMakeupMatch = route.match(/^\/api\/admin\/users\/([^/]+)\/makeup$/);
+  if (adminMakeupMatch && request.method === 'POST') {
+    const userId = decodeURIComponent(adminMakeupMatch[1]);
+    const target = await env.DB.prepare(
+      "SELECT id,track_id AS trackId FROM users WHERE id=?1 AND role='student'"
+    ).bind(userId).first();
+    if (!target) return json({ error: '用户不存在' }, 404);
+    const body = await readJson(request);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(body.date || '') ? body.date : shanghaiDate();
+    if (target.trackId === 'health') {
+      const config = await readConfig(env);
+      const slot = config.slots.find((item) => item.id === body.slotId);
+      if (!slot) return json({ error: '请选择早餐、午餐或晚餐' }, 400);
+      const uploaded = await uploadImages(env, body.photos || body.images, `admin-makeup/checkins/${userId}/${date}/${slot.id}`, 3);
+      const existing = await env.DB.prepare(
+        'SELECT id FROM checkins WHERE user_id=?1 AND checkin_date=?2 AND slot_id=?3'
+      ).bind(userId, date, slot.id).first();
+      const id = existing?.id || crypto.randomUUID();
+      const oldFiles = existing ? await env.DB.prepare(
+        'SELECT object_key AS objectKey FROM checkin_files WHERE checkin_id=?1'
+      ).bind(id).all() : { results: [] };
+      const statements = [
+        env.DB.prepare(
+          `INSERT INTO checkins
+            (id,user_id,checkin_date,slot_id,note,status,submitted_at,review_note,version,reviewed_by,reviewed_at)
+           VALUES (?1,?2,?3,?4,?5,'approved',?6,'管理员补卡',1,?7,?6)
+           ON CONFLICT(user_id,checkin_date,slot_id) DO UPDATE SET
+            note=excluded.note,status='approved',submitted_at=excluded.submitted_at,
+            review_note='管理员补卡',reviewed_by=excluded.reviewed_by,
+            reviewed_at=excluded.reviewed_at,version=checkins.version+1`
+        ).bind(id, userId, date, slot.id, cleanText(body.note, 300), nowIso(), admin.id),
+        env.DB.prepare('DELETE FROM checkin_files WHERE checkin_id=?1').bind(id)
+      ];
+      uploaded.forEach((file) => statements.push(env.DB.prepare(
+        `INSERT INTO checkin_files
+          (id,checkin_id,object_key,content_type,bytes,kind,sort_order,created_at)
+         VALUES (?1,?2,?3,?4,?5,'photo',?6,?7)`
+      ).bind(file.id, id, file.key, file.contentType, file.bytes, file.sortOrder, nowIso())));
+      statements.push(audit(env, admin, 'makeup', 'checkin', id, { userId, date, slotId: slot.id }));
+      await env.DB.batch(statements);
+      ctx.waitUntil(Promise.all(oldFiles.results.map((file) => env.UPLOADS.delete(file.objectKey))));
+      return json({ ok: true, id, trackId: target.trackId });
+    }
+    const taskId = cleanText(body.taskId, 80);
+    const [task, team] = await Promise.all([
+      env.DB.prepare("SELECT id FROM tasks WHERE id=?1 AND track_id='interaction'").bind(taskId).first(),
+      env.DB.prepare(
+        'SELECT t.id FROM teams t JOIN team_members tm ON tm.team_id=t.id WHERE tm.user_id=?1'
+      ).bind(userId).first()
+    ]);
+    if (!task) return json({ error: '请选择廿载同心赛道任务' }, 400);
+    if (!team) return json({ error: '该用户尚未分配队伍' }, 409);
+    const uploaded = await uploadImages(env, body.photos || body.images, `admin-makeup/member-checkins/${taskId}/${userId}`, 1);
+    const existing = await env.DB.prepare(
+      'SELECT id,object_key AS objectKey FROM member_checkins WHERE task_id=?1 AND occurrence_date=?2 AND user_id=?3'
+    ).bind(taskId, date, userId).first();
+    const id = existing?.id || crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO member_checkins
+          (id,task_id,occurrence_date,user_id,team_id,object_key,content_type,bytes,status,submitted_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'approved',?9)
+         ON CONFLICT(task_id,occurrence_date,user_id) DO UPDATE SET
+          team_id=excluded.team_id,object_key=excluded.object_key,
+          content_type=excluded.content_type,bytes=excluded.bytes,status='approved',
+          submitted_at=excluded.submitted_at`
+      ).bind(id, taskId, date, userId, team.id, uploaded[0].key,
+        uploaded[0].contentType, uploaded[0].bytes, nowIso()),
+      audit(env, admin, 'makeup', 'member_checkin', id, { userId, date, taskId })
+    ]);
+    if (existing?.objectKey) ctx.waitUntil(env.UPLOADS.delete(existing.objectKey));
+    return json({ ok: true, id, trackId: target.trackId });
   }
 
   const userMatch = route.match(/^\/api\/admin\/users\/([^/]+)$/);

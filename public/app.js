@@ -8,6 +8,7 @@ let materialAdminCampus = '';
 let adminUserPage = Number(sessionStorage.adminUserPage || 1);
 let adminUserFilter = sessionStorage.adminUserFilter || 'all';
 let adminUserQuery = sessionStorage.adminUserQuery || '';
+let adminCompletionTrack = sessionStorage.adminCompletionTrack || 'all';
 let scrollSaveTimer;
 window.addEventListener('scroll', () => {
   if (document.body.dataset.view !== 'admin') return;
@@ -628,9 +629,10 @@ function checkinForm(slotId) {
     try {
       const photos = await readFiles(form.photos.files);
       const summary = form.summary.files[0] ? (await readFiles(form.summary.files))[0] : null;
+      const date = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
       await api('/api/checkins', {
         method: 'POST',
-        body: JSON.stringify({ slotId, photos, summary, note: form.note.value })
+        body: JSON.stringify({ date, slotId, photos, summary, note: form.note.value })
       });
       alert('提交成功');
       home();
@@ -647,7 +649,7 @@ async function admin(selectedDate) {
   });
   const [dashboard, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin] = await Promise.all([
     api(`/api/admin/dashboard?date=${date}`),
-    api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}`),
+    api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`),
     api('/api/admin/teams'),
     api('/api/admin/tasks'),
     api('/api/admin/plaza'),
@@ -673,7 +675,16 @@ async function admin(selectedDate) {
       <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
       <strong>${escapeHtml(studentUser.name)}</strong>
       <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
+      <small>累计完成 ${Number(studentUser.totalCompletedDays || 0)} 天</small>
     </button>`).join('');
+  const trackStudents = (trackId) => dashboard.students.filter((item) => !trackId || item.trackId === trackId);
+  const completionSummary = (trackId) => {
+    const list = trackStudents(trackId);
+    return { completed: list.filter((item) => item.completed).length, total: list.length };
+  };
+  const overallSummary = completionSummary('');
+  const interactionSummary = completionSummary('interaction');
+  const healthSummary = completionSummary('health');
   const teamRows = teamResult.teams.map((team) => `
     <tr>
       <td>${escapeHtml(team.name)}<br><small>邀请码：<strong>${escapeHtml(team.inviteCode)}</strong></small></td>
@@ -725,12 +736,17 @@ async function admin(selectedDate) {
     <section class="metric-grid">
       ${[['用户数量',overview.userCount],['队伍数量',overview.teamCount],['今日提交',overview.todaySubmissions],['公开帖子',overview.publicPostCount],['点赞数量',overview.likeCount],['浏览数量',overview.viewCount]].map(([label,value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`).join('')}
     </section>
-    <section class="card">
-      <div class="row"><h2>每日提交总览</h2><label class="right">日期 <input id="date" type="date" value="${date}"></label><button class="secondary" id="reload">查询</button></div>
-      <div class="table-wrap"><table><thead><tr><th>学生</th><th>赛道</th>${slotHeaders}</tr></thead><tbody>${dashboardRows || '<tr><td colspan="6">尚无学生</td></tr>'}</tbody></table></div>
-    </section>
     <section class="card admin-user-section">
-      <div class="row"><div><h2>用户完成情况</h2><p class="muted">点击姓名查看提交详情</p></div><span class="right muted">共 ${userResult.total} 人</span></div>
+      <div class="row completion-heading">
+        <div><h2>每日完成情况</h2><p class="muted">三餐全部提交才计为“食光有约”当日完成；点击姓名查看详情或补卡</p></div>
+        <label class="right">日期 <input id="date" type="date" value="${date}"></label><button class="secondary" id="reload">查询</button>
+      </div>
+      <div class="completion-summary-grid">
+        <button class="completion-summary ${adminCompletionTrack === 'all' ? 'active' : ''}" data-track="all"><span>总完成情况</span><strong>${overallSummary.completed}/${overallSummary.total}</strong></button>
+        <button class="completion-summary ${adminCompletionTrack === 'interaction' ? 'active' : ''}" data-track="interaction"><span>廿载同心</span><strong>${interactionSummary.completed}/${interactionSummary.total}</strong></button>
+        <button class="completion-summary ${adminCompletionTrack === 'health' ? 'active' : ''}" data-track="health"><span>食光有约</span><strong>${healthSummary.completed}/${healthSummary.total}</strong></button>
+      </div>
+      <div class="row completion-list-heading"><strong>${adminCompletionTrack === 'interaction' ? '廿载同心' : adminCompletionTrack === 'health' ? '食光有约' : '全部赛道'}用户</strong><span class="right muted">共 ${userResult.total} 人</span></div>
       <form id="adminUserSearch" class="user-list-toolbar">
         <input name="query" value="${escapeHtml(adminUserQuery)}" placeholder="搜索姓名或学号" aria-label="搜索姓名或学号">
         <button>搜索</button>
@@ -862,6 +878,15 @@ async function admin(selectedDate) {
   document.querySelector('#plaza').onclick = () => plaza();
   document.querySelector('#reload').onclick = () =>
     admin(document.querySelector('#date').value);
+  document.querySelectorAll('.completion-summary').forEach((button) => {
+    button.onclick = () => {
+      adminCompletionTrack = button.dataset.track;
+      adminUserPage = 1;
+      sessionStorage.adminCompletionTrack = adminCompletionTrack;
+      sessionStorage.adminUserPage = '1';
+      admin(date);
+    };
+  });
   document.querySelector('#adminUserSearch').onsubmit = (event) => {
     event.preventDefault();
     adminUserQuery = new FormData(event.target).get('query').trim();
@@ -894,7 +919,8 @@ async function admin(selectedDate) {
       users.find((item) => item.id === button.dataset.id),
       dashboard.students.find((item) => item.id === button.dataset.id),
       teamResult.teams,
-      date
+      date,
+      taskAdminResult.tasks
     );
   });
   document.querySelector('#materialCampus').onchange = (event) => {
@@ -1198,11 +1224,28 @@ function enhanceAdminSections() {
   });
 }
 
-function openAdminUserDrawer(studentUser, dashboardUser, teams, date) {
+function openAdminUserDrawer(studentUser, dashboardUser, teams, date, tasks = []) {
   const root = document.querySelector('#modalRoot');
   const team = teams.find((item) => item.members.some((member) => member.id === studentUser.id));
-  const submitted = (dashboardUser?.slots || []).filter(Boolean);
+  const isHealth = studentUser.trackId === 'health';
+  const submitted = isHealth
+    ? (dashboardUser?.slots || []).filter(Boolean)
+    : (dashboardUser?.interactionCheckins || []);
   const latest = submitted.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))[0];
+  const interactionTasks = tasks.filter((task) => task.trackId === 'interaction');
+  const mealDetails = isHealth ? config.slots.map((slot, index) => {
+    const checkin = dashboardUser?.slots?.[index];
+    return `<article class="meal-status-card ${checkin ? 'completed' : 'missing'}">
+      <div class="row"><strong>${escapeHtml(slot.label)}</strong><span class="pill ${checkin ? 'done' : ''}">${checkin ? '已提交' : '未提交'}</span></div>
+      <small>${escapeHtml(slot.start)}–${escapeHtml(slot.end)}${checkin ? ` · ${escapeHtml(formatDate(checkin.submittedAt))}` : ''}</small>
+      ${checkin?.photos?.length ? `<div class="drawer-photo-grid compact">${checkin.photos.map((url) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="${escapeHtml(slot.label)}图片"></a>`).join('')}</div>` : ''}
+      ${checkin?.note ? `<p>${escapeHtml(checkin.note)}</p>` : ''}
+    </article>`;
+  }).join('') : (dashboardUser?.interactionCheckins || []).map((checkin) => `
+    <article class="meal-status-card completed"><div class="row"><strong>${escapeHtml(checkin.taskName)}</strong><span class="pill done">已提交</span></div>
+      <small>${escapeHtml(formatDate(checkin.submittedAt))}</small>
+      <div class="drawer-photo-grid compact">${checkin.photos.map((url) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="活动打卡图片"></a>`).join('')}</div>
+    </article>`).join('') || '<p class="muted">当日暂无提交</p>';
   root.innerHTML = `<div class="drawer-backdrop" id="userDrawerBackdrop">
     <section class="bottom-drawer" role="dialog" aria-modal="true" aria-labelledby="userDrawerTitle">
       <div class="drawer-handle"></div>
@@ -1212,13 +1255,28 @@ function openAdminUserDrawer(studentUser, dashboardUser, teams, date) {
         <div><dt>学号</dt><dd>${escapeHtml(studentUser.studentId)}</dd></div>
         <div><dt>校区</dt><dd>${escapeHtml(studentUser.campus || '未设置')}</dd></div>
         <div><dt>所属队伍</dt><dd>${escapeHtml(team?.name || '未加入队伍')}</dd></div>
-        <div><dt>打卡状态</dt><dd><span class="pill ${latest ? 'done' : ''}">${latest ? '已完成' : '未完成'}</span></dd></div>
+        <div><dt>当日状态</dt><dd><span class="pill ${dashboardUser?.completed ? 'done' : ''}">${dashboardUser?.completed ? '已完成' : '未完成'}</span></dd></div>
         <div><dt>提交时间</dt><dd>${latest ? escapeHtml(formatDate(latest.submittedAt)) : '—'}</dd></div>
+        <div><dt>累计完成</dt><dd><strong>${Number(studentUser.totalCompletedDays || dashboardUser?.totalCompletedDays || 0)} 天</strong></dd></div>
       </dl>
-      <div class="drawer-content-block"><h3>图片</h3><div class="drawer-photo-grid">${latest?.photos?.length
-        ? latest.photos.map((url, index) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="${escapeHtml(studentUser.name)}打卡图片${index + 1}"></a>`).join('')
-        : '<p class="muted">暂无图片</p>'}</div></div>
-      <div class="drawer-content-block"><h3>文案</h3><p>${escapeHtml(latest?.note || '暂无文案')}</p></div>
+      <div class="drawer-content-block"><h3>${isHealth ? '三餐完成情况' : '活动提交情况'}</h3><div class="meal-status-grid">${mealDetails}</div></div>
+      <div class="drawer-content-block makeup-permission-card">
+        <div class="row"><div><h3>用户补卡权限</h3><p class="muted">仅对 ${escapeHtml(date)} 生效；默认关闭。</p></div>
+          <button class="${dashboardUser?.makeupAllowed ? 'danger' : 'secondary'} right" id="toggleMakeupPermission">${dashboardUser?.makeupAllowed ? '关闭用户补卡' : '允许用户补卡'}</button>
+        </div>
+      </div>
+      <div class="drawer-content-block">
+        <details class="admin-makeup-details"><summary>管理员代为补卡</summary>
+          <form id="adminMakeupForm">
+            ${isHealth
+              ? `<label>餐次</label><select name="slotId">${config.slots.map((slot) => `<option value="${slot.id}">${escapeHtml(slot.label)}</option>`).join('')}</select>`
+              : `<label>活动任务</label><select name="taskId" required>${interactionTasks.map((task) => `<option value="${task.id}">${escapeHtml(task.name)}</option>`).join('')}</select>`}
+            <label>补卡图片</label><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" required>
+            ${isHealth ? '<label>备注（可选）</label><textarea name="note"></textarea>' : ''}
+            <button>确认管理员补卡</button>
+          </form>
+        </details>
+      </div>
       <div class="drawer-actions">
         <button class="secondary" id="editDrawerUser">编辑用户</button>
         <button class="${studentUser.status === 'active' ? 'danger' : 'secondary'}" id="toggleDrawerUser">${studentUser.status === 'active' ? '禁用用户' : '启用用户'}</button>
@@ -1229,6 +1287,31 @@ function openAdminUserDrawer(studentUser, dashboardUser, teams, date) {
   document.querySelector('#closeUserDrawer').onclick = close;
   document.querySelector('#userDrawerBackdrop').onclick = (event) => { if (event.target.id === 'userDrawerBackdrop') close(); };
   document.querySelector('#editDrawerUser').onclick = () => editUser(studentUser, date);
+  document.querySelector('#toggleMakeupPermission').onclick = async () => {
+    try {
+      await api(`/api/admin/users/${studentUser.id}/makeup-permission?date=${date}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !dashboardUser?.makeupAllowed })
+      });
+      root.innerHTML = '';
+      admin(date);
+    } catch (error) { alert(error.message); }
+  };
+  document.querySelector('#adminMakeupForm').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+      const photos = await readFiles(form.photos.files);
+      await api(`/api/admin/users/${studentUser.id}/makeup`, {
+        method: 'POST',
+        body: JSON.stringify(isHealth
+          ? { date, slotId: form.slotId.value, photos, note: form.note.value }
+          : { date, taskId: form.taskId.value, photos })
+      });
+      root.innerHTML = '';
+      admin(date);
+    } catch (error) { alert(error.message); }
+  };
   document.querySelector('#toggleDrawerUser').onclick = async () => {
     const next = studentUser.status === 'active' ? 'disabled' : 'active';
     const action = next === 'disabled' ? '禁用' : '启用';

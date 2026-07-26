@@ -1,6 +1,7 @@
 import {
   cleanText,
   errorResponse,
+  hasMakeupPermission,
   json,
   nowIso,
   readConfig,
@@ -48,8 +49,9 @@ const isTaskOccurrence = (task, occurrenceDate = '') => {
   return true;
 };
 
-const taskWindowOpen = (task, occurrenceDate = '') => {
+const taskWindowOpen = (task, occurrenceDate = '', makeupAllowed = false) => {
   if (!isTaskOccurrence(task, occurrenceDate)) return false;
+  if (makeupAllowed) return true;
   const schedule = task.scheduleJson ? JSON.parse(task.scheduleJson) : null;
   if (!schedule) return true;
   if (schedule.dailyStart && shanghaiTime() < schedule.dailyStart) return false;
@@ -148,6 +150,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         ORDER BY starts_at DESC LIMIT 100`
     ).bind(user.role, user.trackId || '').all();
     const tasks = [];
+    const makeupAllowed = user.role === 'student'
+      ? await hasMakeupPermission(env, user.id, shanghaiDate()) : false;
     for (const task of results) {
       if (task.scheduleJson && !isTaskOccurrence(task, shanghaiDate())) continue;
       const owner = user.role === 'admin' ? null : await submissionOwner(env, user, task).catch(() => null);
@@ -193,8 +197,9 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         dailyStart: schedule.dailyStart || '',
         dailyEnd: schedule.dailyEnd || '',
         occurrenceDate,
-        canSubmit: user.role === 'student' && taskWindowOpen(task, occurrenceDate),
-        availabilityError: user.role === 'student' && !taskWindowOpen(task, occurrenceDate) ? '当前不在任务提交时间范围内' : '',
+        canSubmit: user.role === 'student' && taskWindowOpen(task, occurrenceDate, makeupAllowed),
+        availabilityError: user.role === 'student' && !taskWindowOpen(task, occurrenceDate, makeupAllowed) ? '当前不在任务提交时间范围内' : '',
+        makeupAllowed,
         submission,
         teamProgress,
         memberCheckin,
@@ -231,7 +236,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     if (!task || task.status !== 'published' || task.trackId !== 'interaction') return json({ error: '任务不存在' }, 404);
     const body = await readJson(request);
     const occurrenceDate = cleanText(body.occurrenceDate || shanghaiDate(), 10);
-    if (!taskWindowOpen(task, occurrenceDate)) return json({ error: '当前不在打卡时间范围内' }, 403);
+    const makeupAllowed = await hasMakeupPermission(env, user.id, occurrenceDate);
+    if (!taskWindowOpen(task, occurrenceDate, makeupAllowed)) return json({ error: '当前不在打卡时间范围内' }, 403);
     const team = await teamForUser(env, user.id);
     if (!team) return json({ error: '尚未分配队伍' }, 403);
     const uploaded = await uploadImages(env, body.images || body.photos, `member-checkins/${task.id}/${user.id}`, 1);
@@ -372,9 +378,12 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     if (!config.activityEnabled || !config.trackEnabled[user.trackId]) return json({ error: '活动当前未开放' }, 403);
     const body = await readJson(request);
     const date = cleanText(body.date, 10);
-    if (date !== shanghaiDate()) return json({ error: '只能提交当天材料' }, 403);
+    const makeupAllowed = await hasMakeupPermission(env, user.id, date);
+    if (date !== shanghaiDate() && !makeupAllowed) return json({ error: '只能提交当天材料' }, 403);
     const slot = config.slots.find((item) => item.id === body.slotId);
-    if (!slot || shanghaiTime() < slot.start || shanghaiTime() > slot.end) return json({ error: '当前不在该时段' }, 403);
+    if (!slot || (!makeupAllowed && (shanghaiTime() < slot.start || shanghaiTime() > slot.end))) {
+      return json({ error: '当前不在该时段' }, 403);
+    }
     const photos = await uploadImages(env, body.photos, `checkins/${user.id}/${date}/${slot.id}`, 3);
     const summary = body.summary ? (await uploadImages(env, [body.summary], `checkins/${user.id}/${date}/${slot.id}/summary`, 1))[0] : null;
     const existing = await env.DB.prepare(
