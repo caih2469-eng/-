@@ -1,0 +1,54 @@
+name: Production D1 bootstrap once
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: cloudflare-production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove obsolete empty prelaunch schema
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: >-
+            d1 execute jinshan20 --remote --command
+            "DROP TABLE IF EXISTS load_uploads;
+            DROP TABLE IF EXISTS ranking_cache;
+            DROP TABLE IF EXISTS tasks;
+            DROP TABLE IF EXISTS users;"
+      - name: Apply complete base schema
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0001_schema.sql
+      - name: Apply business API schema
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0002_business_api.sql
+      - name: Apply concurrency metadata
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0003_concurrency_and_file_metadata.sql
+      - name: Apply makeup permissions
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0004_makeup_permissions.sql
