@@ -20,6 +20,23 @@ const adminUser = async (request, env) => requireUser(request, env, true);
 const safeUserColumns = `id,student_id AS studentId,name,role,campus,track_id AS trackId,
   status,created_at AS createdAt`;
 const validTrack = (value) => TRACKS.some((track) => track.id === value);
+const primaryAdminId = async (env) => {
+  const row = await env.DB.prepare("SELECT value_json AS valueJson FROM app_config WHERE key='primaryAdminId'").first();
+  try { return JSON.parse(row?.valueJson || 'null'); } catch { return null; }
+};
+const requirePrimaryAdmin = async (env, admin) => {
+  const id = await primaryAdminId(env);
+  return id && id === admin.id;
+};
+const ensureAdminGovernance = (env) => env.DB.prepare(
+  `CREATE TABLE IF NOT EXISTS admin_action_reviews (
+    audit_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'visible',
+    reviewed_by TEXT,
+    reviewed_at TEXT,
+    review_note TEXT NOT NULL DEFAULT ''
+  )`
+).run();
 const completionExpression = `((
   u.track_id='health' AND
   (SELECT COUNT(DISTINCT c.slot_id) FROM checkins c
@@ -81,6 +98,105 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
   if (auth.error) return auth.error;
   const admin = auth.user;
   const route = url.pathname;
+
+  if (route === '/api/admin/governance' && request.method === 'GET') {
+    await ensureAdminGovernance(env);
+    const isPrimary = await requirePrimaryAdmin(env, admin);
+    if (!isPrimary) return json({ isPrimary: false });
+    const admins = await env.DB.prepare(
+      `SELECT id,student_id AS studentId,name,campus,status,created_at AS createdAt
+         FROM users WHERE role='admin' ORDER BY created_at`
+    ).all();
+    const logs = await env.DB.prepare(
+      `SELECT a.id,a.actor_id AS actorId,u.name AS actorName,u.student_id AS actorStudentId,
+              a.action,a.entity_type AS entityType,a.entity_id AS entityId,
+              a.metadata_json AS metadataJson,a.created_at AS createdAt,
+              COALESCE(r.status,'visible') AS reviewStatus,r.review_note AS reviewNote
+         FROM audit_logs a JOIN users u ON u.id=a.actor_id
+         LEFT JOIN admin_action_reviews r ON r.audit_id=a.id
+        WHERE u.role='admin' AND a.actor_id<>?1
+        ORDER BY a.created_at DESC LIMIT 200`
+    ).bind(admin.id).all();
+    return json({
+      isPrimary: true,
+      admins: admins.results,
+      logs: logs.results.map((item) => {
+        try { item.metadata = JSON.parse(item.metadataJson || '{}'); } catch { item.metadata = {}; }
+        delete item.metadataJson;
+        return item;
+      })
+    });
+  }
+
+  if (route === '/api/admin/admins' && request.method === 'POST') {
+    if (!await requirePrimaryAdmin(env, admin)) return json({ error: '仅最高管理员可以创建管理员账号' }, 403);
+    const body = await readJson(request);
+    const studentId = cleanText(body.studentId, 40);
+    const name = cleanText(body.name, 50);
+    const campus = cleanText(body.campus || '金山学院', 50);
+    const password = String(body.password || '');
+    if (!studentId || !name || password.length < 8) return json({ error: '账号、姓名和至少8位密码均为必填' }, 400);
+    const id = crypto.randomUUID();
+    try {
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO users(id,student_id,name,password_hash,role,campus,track_id,status,created_at)
+           VALUES(?1,?2,?3,?4,'admin',?5,'health','active',?6)`
+        ).bind(id, studentId, name, await hashPassword(password), campus, nowIso()),
+        audit(env, admin, 'create_admin', 'admin', id, { studentId, name })
+      ]);
+    } catch {
+      return json({ error: '管理员账号已存在' }, 409);
+    }
+    return json({ ok: true, admin: { id, studentId, name, campus, status: 'active' } }, 201);
+  }
+
+  const rejectAuditMatch = route.match(/^\/api\/admin\/governance\/([^/]+)\/reject$/);
+  if (rejectAuditMatch && request.method === 'POST') {
+    if (!await requirePrimaryAdmin(env, admin)) return json({ error: '仅最高管理员可以驳回管理员操作' }, 403);
+    await ensureAdminGovernance(env);
+    const auditId = decodeURIComponent(rejectAuditMatch[1]);
+    const body = await readJson(request);
+    const record = await env.DB.prepare(
+      `SELECT a.id,a.actor_id AS actorId,a.action,a.entity_type AS entityType,a.entity_id AS entityId
+         FROM audit_logs a JOIN users u ON u.id=a.actor_id
+        WHERE a.id=?1 AND u.role='admin' AND a.actor_id<>?2`
+    ).bind(auditId, admin.id).first();
+    if (!record) return json({ error: '操作记录不存在或不能驳回' }, 404);
+    const statements = [];
+    const objectKeys = [];
+    if (record.action === 'makeup' && record.entityType === 'checkin') {
+      const files = await env.DB.prepare('SELECT object_key AS objectKey FROM checkin_files WHERE checkin_id=?1')
+        .bind(record.entityId).all();
+      objectKeys.push(...files.results.map((item) => item.objectKey));
+      statements.push(env.DB.prepare('DELETE FROM checkins WHERE id=?1').bind(record.entityId));
+    } else if (record.action === 'makeup' && record.entityType === 'member_checkin') {
+      const item = await env.DB.prepare('SELECT object_key AS objectKey FROM member_checkins WHERE id=?1')
+        .bind(record.entityId).first();
+      if (item?.objectKey) objectKeys.push(item.objectKey);
+      statements.push(env.DB.prepare('DELETE FROM member_checkins WHERE id=?1').bind(record.entityId));
+    } else if (['approved', 'returned'].includes(record.action) && record.entityType === 'submission') {
+      statements.push(env.DB.prepare(
+        "UPDATE task_submissions SET status='submitted',review_note='',reviewed_at=NULL,updated_at=?1 WHERE id=?2"
+      ).bind(nowIso(), record.entityId));
+    } else if (['approved', 'returned'].includes(record.action) && record.entityType === 'material_submission') {
+      statements.push(env.DB.prepare(
+        "UPDATE material_submissions SET status='submitted',review_note='',updated_at=?1 WHERE id=?2"
+      ).bind(nowIso(), record.entityId));
+    } else {
+      return json({ error: '该操作只能查看，不能自动驳回' }, 409);
+    }
+    statements.push(env.DB.prepare(
+      `INSERT INTO admin_action_reviews(audit_id,status,reviewed_by,reviewed_at,review_note)
+       VALUES(?1,'rejected',?2,?3,?4)
+       ON CONFLICT(audit_id) DO UPDATE SET status='rejected',reviewed_by=excluded.reviewed_by,
+       reviewed_at=excluded.reviewed_at,review_note=excluded.review_note`
+    ).bind(auditId, admin.id, nowIso(), cleanText(body.note || '最高管理员驳回', 300)));
+    statements.push(audit(env, admin, 'reject_admin_action', 'audit', auditId, { actorId: record.actorId }));
+    await env.DB.batch(statements);
+    if (objectKeys.length) ctx.waitUntil(Promise.all(objectKeys.map((key) => env.UPLOADS.delete(key))));
+    return json({ ok: true });
+  }
 
   if ((route === '/api/admin/overview' || route === '/api/admin/dashboard') && request.method === 'GET') {
     await ensureMakeupPermissions(env);

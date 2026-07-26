@@ -376,6 +376,30 @@ async function student(me) {
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
+  if (document.querySelector('#createAdmin')) {
+    document.querySelector('#createAdmin').onsubmit = async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.target));
+      try {
+        await api('/api/admin/admins', { method: 'POST', body: JSON.stringify(values) });
+        alert('管理员账号已创建');
+        admin(date);
+      } catch (error) { alert(error.message); }
+    };
+  }
+  document.querySelectorAll('.reject-admin-action').forEach((button) => {
+    button.onclick = async () => {
+      if (!await askConfirm('是否驳回该管理员操作？', '补卡记录将被撤销；审核结果将恢复为待审核状态。')) return;
+      try {
+        await api(`/api/admin/governance/${button.dataset.id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ note: '最高管理员驳回' })
+        });
+        alert('该管理员操作已驳回');
+        admin(date);
+      } catch (error) { alert(error.message); }
+    };
+  });
   document.querySelectorAll('[data-jump]').forEach((button) => {
     button.onclick = () => document.querySelector(`#${button.dataset.jump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
@@ -647,14 +671,15 @@ async function admin(selectedDate) {
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
     timeZone: 'Asia/Shanghai'
   });
-  const [dashboard, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin] = await Promise.all([
+  const [dashboard, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin, governance] = await Promise.all([
     api(`/api/admin/dashboard?date=${date}`),
     api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`),
     api('/api/admin/teams'),
     api('/api/admin/tasks'),
     api('/api/admin/plaza'),
     api('/api/admin/overview'),
-    api(`/api/admin/material-tasks?page=${materialAdminPage}&limit=50&campus=${encodeURIComponent(materialAdminCampus)}`)
+    api(`/api/admin/material-tasks?page=${materialAdminPage}&limit=50&campus=${encodeURIComponent(materialAdminCampus)}`),
+    api('/api/admin/governance')
   ]);
   const users = userResult.users;
   const slotHeaders = config.slots
@@ -736,6 +761,25 @@ async function admin(selectedDate) {
     <section class="metric-grid">
       ${[['用户数量',overview.userCount],['队伍数量',overview.teamCount],['今日提交',overview.todaySubmissions],['公开帖子',overview.publicPostCount],['点赞数量',overview.likeCount],['浏览数量',overview.viewCount]].map(([label,value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`).join('')}
     </section>
+    ${governance.isPrimary ? `<section class="card">
+      <div class="row"><div><h2>管理员账号与操作监督</h2><p class="muted">只有最高管理员可以创建管理员，并查看、驳回其他管理员的补卡和审核操作。</p></div><span class="pill done">最高管理员</span></div>
+      <details>
+        <summary>创建管理员账号</summary>
+        <form id="createAdmin" class="inline-form">
+          <input name="studentId" placeholder="管理员账号" required>
+          <input name="name" placeholder="管理员姓名" required>
+          <input name="campus" placeholder="校区" value="金山学院" required>
+          <input name="password" type="password" minlength="8" placeholder="初始密码（至少8位）" required>
+          <button>创建管理员</button>
+        </form>
+      </details>
+      <h3>管理员列表</h3>
+      <div class="member-list">${governance.admins.map((item) => `<span>${escapeHtml(item.name)} · ${escapeHtml(item.studentId)} · ${item.id === user.id ? '最高管理员' : '管理员'}</span>`).join('')}</div>
+      <h3>其他管理员操作记录</h3>
+      <div class="table-wrap"><table><thead><tr><th>管理员</th><th>操作</th><th>对象</th><th>时间</th><th>状态</th><th>处理</th></tr></thead><tbody>
+        ${governance.logs.map((item) => `<tr><td>${escapeHtml(item.actorName)}<br><small>${escapeHtml(item.actorStudentId)}</small></td><td>${escapeHtml(item.action)}</td><td>${escapeHtml(item.entityType)}</td><td>${formatDate(item.createdAt)}</td><td>${item.reviewStatus === 'rejected' ? '<span class="pill pending">已驳回</span>' : '<span class="pill done">有效</span>'}</td><td>${item.reviewStatus !== 'rejected' && ['makeup','approved','returned'].includes(item.action) ? `<button class="danger reject-admin-action" data-id="${item.id}">驳回操作</button>` : '仅查看'}</td></tr>`).join('') || '<tr><td colspan="6">暂无其他管理员操作</td></tr>'}
+      </tbody></table></div>
+    </section>` : ''}
     <section class="card admin-user-section">
       <div class="row completion-heading">
         <div><h2>每日完成情况</h2><p class="muted">三餐全部提交才计为“食光有约”当日完成；点击姓名查看详情或补卡</p></div>
