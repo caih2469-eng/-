@@ -118,7 +118,7 @@ const fileResponse = async (request, env, id) => {
   });
 };
 
-const publicImageResponse = async (request, env, id) => {
+const publicImageResponse = async (request, env, ctx, id) => {
   const cache = caches.default;
   const cacheKey = new Request(new URL(request.url).origin + `/api/public-images/${encodeURIComponent(id)}`);
   const cached = await cache.match(cacheKey);
@@ -147,7 +147,7 @@ const publicImageResponse = async (request, env, id) => {
       'x-content-type-options': 'nosniff'
     }
   });
-  await cache.put(cacheKey, response.clone());
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
 };
 
@@ -213,8 +213,8 @@ export default {
         const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
         if (fileMatch && request.method === 'GET') return await fileResponse(request, env, decodeURIComponent(fileMatch[1]));
         const publicImageMatch = url.pathname.match(/^\/api\/public-images\/([^/]+)$/);
-        if (publicImageMatch && request.method === 'GET') {
-          return await publicImageResponse(request, env, decodeURIComponent(publicImageMatch[1]));
+        if (publicImageMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+          return await publicImageResponse(request, env, ctx, decodeURIComponent(publicImageMatch[1]));
         }
       const materialFileMatch = url.pathname.match(/^\/api\/material-files\/([^/]+)$/);
       if (materialFileMatch && request.method === 'GET') {
