@@ -52,3 +52,17 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-production
           command: d1 execute jinshan20 --remote --file ../../migrations/production/0004_makeup_permissions.sql
+      - name: Initialize production administrator
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: >-
+            d1 execute jinshan20 --remote --command
+            "INSERT INTO users
+            (id,student_id,name,password_hash,role,campus,track_id,status,created_at)
+            VALUES
+            ('admin-production','admin','正式管理员',
+            'pbkdf2:100000:IXsBLmvDYJzMc1N8W58O4Q:EhGedhpncz4tweAtGihA5_TkufOzlcjS_yR9wRdtEYQ',
+            'admin','金山学院','health','active',datetime('now'));"
