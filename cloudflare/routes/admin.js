@@ -350,7 +350,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
       ? url.searchParams.get('date') : shanghaiDate();
     const student = await env.DB.prepare(
-      `SELECT ${safeUserColumns},
+      `SELECT users.id,users.student_id AS studentId,users.name,users.role,users.campus,
+        users.track_id AS trackId,users.status,users.created_at AS createdAt,
         CASE WHEN track_id='health' THEN (
           SELECT COUNT(*) FROM (
             SELECT c.checkin_date FROM checkins c WHERE c.user_id=users.id
