@@ -148,6 +148,7 @@ const formatDate = (value) =>
   value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '—';
 
 function logout() {
+  void fetch('/api/logout', { method: 'POST', keepalive: true });
   localStorage.clear();
   token = null;
   user = null;
@@ -1607,5 +1608,5 @@ function reviewCheckin(students, checkinId, date) {
   document.querySelector('#reject').onclick = () => update('rejected');
 }
 
-if (token) home().catch(logout);
+if (token) api('/api/session', { method: 'POST' }).catch(() => null).then(home).catch(logout);
 else login();
