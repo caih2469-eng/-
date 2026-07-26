@@ -13,6 +13,153 @@
   gap: 12px;
   margin: 12px 0 18px;
 }
+
+/* Original entrance supplied by the organizer. */
+body.poster-mode { margin: 0; overflow: hidden; background-color: #f75c6c; }
+body.poster-mode main { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }
+.original-entry {
+  position: fixed; inset: 0; overflow: hidden;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f75c6c;
+}
+.original-entry .fluid-bg {
+  position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+  filter: blur(90px); z-index: 1; overflow: hidden;
+}
+.original-entry .blob { position: absolute; border-radius: 50%; opacity: 0.9; }
+.original-entry .blob-orange {
+  width: 80vw; height: 80vw; background: #ffaa00;
+  top: -20vh; right: -10vw;
+  animation: flow1 15s infinite alternate ease-in-out;
+}
+.original-entry .blob-highlight {
+  width: 60vw; height: 40vw; background: linear-gradient(45deg, #ffffff, #a8f0ff);
+  bottom: -10vh; left: 10vw;
+  border-radius: 40% 60% 60% 40% / 50% 50% 60% 40%;
+  animation: flow2 18s infinite alternate ease-in-out;
+  transform-origin: center;
+}
+.original-entry .blob-pink {
+  width: 70vw; height: 70vw; background: #ff1e62;
+  top: 20vh; left: -20vw;
+  animation: flow3 20s infinite alternate ease-in-out;
+}
+.original-entry .cursor-blob {
+  width: 450px; height: 450px; background: #ffea00;
+  border-radius: 50%; position: absolute; top: 0; left: 0; pointer-events: none;
+  transform: translate(-500px, -500px); transition: transform 0.15s ease-out;
+}
+@keyframes flow1 { 0% { transform: translate(0, 0) scale(1); } 100% { transform: translate(-20vw, 20vh) scale(1.2); } }
+@keyframes flow2 { 0% { transform: translate(0, 0) rotate(0deg) scale(1); } 100% { transform: translate(20vw, -15vh) rotate(45deg) scale(1.3); } }
+@keyframes flow3 { 0% { transform: translate(0, 0) scale(1); } 100% { transform: translate(15vw, -10vh) scale(0.8); } }
+
+#meteor-container {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  z-index: 2; pointer-events: none; overflow: hidden;
+}
+.original-entry .meteor {
+  position: absolute;
+  background: linear-gradient(to left, rgba(255,255,255,1) 0%, currentColor 20%, transparent 100%);
+  border-radius: 50px;
+  opacity: 0;
+  animation: meteorShower linear forwards;
+  filter: drop-shadow(0 0 10px currentColor) drop-shadow(0 0 20px currentColor) drop-shadow(0 0 35px #fff);
+}
+.original-entry .meteor::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 50%;
+  transform: translateY(-50%);
+  width: var(--head-size);
+  height: var(--head-size);
+  border-radius: 50%;
+  background-color: #ffffff;
+  box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.8);
+}
+@keyframes meteorShower {
+  0% { opacity: 0; transform: rotate(45deg) translateX(0) scaleX(0); }
+  10% { opacity: 1; transform: rotate(45deg) translateX(10vw) scaleX(1); }
+  90% { opacity: 1; transform: rotate(45deg) translateX(120vw) scaleX(1); }
+  100% { opacity: 0; transform: rotate(45deg) translateX(150vw) scaleX(0); }
+}
+.original-entry .bg-text-container {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 5; text-align: center; width: 100%; pointer-events: none;
+}
+.original-entry .bg-main-title {
+  font-family: 'Zhi Mang Xing', cursive, serif; font-size: 10vw;
+  color: rgba(255, 235, 161, 0.9); margin: 0 0 10px 0; font-weight: normal;
+  letter-spacing: 12px; text-shadow: 5px 10px 30px rgba(0, 0, 0, 0.3); white-space: nowrap;
+}
+.original-entry .bg-subtitle {
+  font-family: 'Segoe UI', sans-serif; font-size: 2.5vw; color: rgba(255, 255, 255, 0.9);
+  margin: 0; letter-spacing: 25px; font-weight: 300; text-shadow: 2px 4px 15px rgba(0, 0, 0, 0.2);
+}
+.original-entry .intro-hint {
+  position: absolute; bottom: 15%; left: 50%; transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.95); font-size: 1.2rem; letter-spacing: 6px;
+  z-index: 10; transition: opacity 0.4s ease; animation: pulse 2s infinite;
+  cursor: pointer; padding: 10px 30px; border-radius: 30px;
+  background: rgba(0,0,0,0.1); backdrop-filter: blur(5px);
+  white-space: nowrap;
+}
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; transform: translateX(-50%) scale(1.05); } }
+.original-entry .dark-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0); z-index: 15; pointer-events: none;
+  transition: background 0.8s cubic-bezier(0.25, 1, 0.3, 1);
+}
+.original-entry .dark-overlay.show {
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+}
+.original-entry .glass-login {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -30%) scale(0.95);
+  z-index: 20; width: 400px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.05));
+  backdrop-filter: blur(35px) saturate(180%); -webkit-backdrop-filter: blur(35px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-top: 1.5px solid rgba(255, 255, 255, 0.8); border-left: 1.5px solid rgba(255, 255, 255, 0.6);
+  border-radius: 24px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35), inset 0 0 20px rgba(255,255,255,0.1);
+  padding: 50px 40px; text-align: center; opacity: 0; pointer-events: none;
+  transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.original-entry .glass-login.show { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
+.original-entry .login-title {
+  color: #fff; font-size: 1.8rem; margin-top: 0; margin-bottom: 35px;
+  font-weight: 500; letter-spacing: 2px; text-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+.original-entry .input-group { margin-bottom: 25px; position: relative; }
+.original-entry .glass-input {
+  width: 100%; box-sizing: border-box; padding: 16px 20px;
+  border-radius: 12px; background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3); color: #fff;
+  font-size: 1rem; outline: none; transition: all 0.3s ease;
+  box-shadow: inset 0 2px 5px rgba(0,0,0,0.05);
+  margin: 0;
+}
+.original-entry .glass-input::placeholder { color: rgba(255, 255, 255, 0.7); }
+.original-entry .glass-input:focus {
+  background: rgba(255, 255, 255, 0.25); border-color: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 0 15px rgba(255,255,255,0.2), inset 0 2px 5px rgba(0,0,0,0.05);
+}
+.original-entry .login-btn {
+  width: 100%; padding: 16px; border-radius: 12px; background: #fff;
+  color: #ff1e62; border: none; font-size: 1.1rem; font-weight: bold;
+  letter-spacing: 4px; cursor: pointer; transition: all 0.3s ease;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.1); margin-top: 10px;
+}
+.original-entry .login-btn:hover {
+  transform: translateY(-2px); box-shadow: 0 15px 25px rgba(0,0,0,0.2);
+  background: #ffeba1;
+}
+@media (max-width: 650px) {
+  body.poster-mode #app { padding: 0; }
+  .original-entry .bg-main-title { font-size: 13vw; line-height: 1.15; letter-spacing: 4px; white-space: normal; padding: 0 16px; }
+  .original-entry .bg-subtitle { font-size: 5vw; letter-spacing: 14px; }
+  .original-entry .intro-hint { bottom: calc(10% + env(safe-area-inset-bottom)); font-size: .95rem; letter-spacing: 3px; padding: 10px 22px; }
+  .original-entry .glass-login { width: calc(100% - 32px); padding: 36px 24px; }
+}
 .image-preview figure { margin: 0; }
 .image-preview img {
   width: 100%;
@@ -931,296 +1078,4 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
     font-size: 12px;
     font-weight: 700;
   }
-}
-
-/* Meteor reveal entrance and fluid anniversary landing */
-.meteor-intro {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 70% 52%, #182541 0, #090d18 28%, #020306 62%),
-    #020306;
-  transition: opacity .55s ease, visibility .55s;
-}
-.meteor-intro.finished { opacity: 0; visibility: hidden; pointer-events: none; }
-body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }
-.meteor-stage { position: absolute; inset: 0; }
-.hero-meteor {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: min(48vw, 620px);
-  height: 5px;
-  border-radius: 999px;
-  color: #ffda67;
-  background: linear-gradient(90deg, transparent, #f7a53122 22%, #ffc94d99 67%, #fff 96%);
-  filter: drop-shadow(0 0 7px #ffd054) drop-shadow(0 0 18px #ff8c34);
-  transform: translate(-58vw, -28vh) rotate(38deg);
-  transform-origin: right center;
-  animation: hero-meteor-flight 1.9s .12s cubic-bezier(.32,.02,.24,1) forwards;
-}
-.hero-meteor:before {
-  content: "";
-  position: absolute;
-  right: -7px;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 12px 5px #fff3bc, 0 0 30px 12px #ffbd43, 0 0 70px 22px #ff672e88;
-  transform: translateY(-50%);
-}
-.hero-meteor i,
-.hero-meteor i:before,
-.hero-meteor i:after {
-  position: absolute;
-  content: "";
-  right: 4%;
-  top: 50%;
-  width: 45%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #8bdcff, #fff);
-  transform: translateY(-12px);
-}
-.hero-meteor i:before { right: 20%; width: 72%; transform: translateY(22px); }
-.hero-meteor i:after { right: 38%; width: 58%; transform: translateY(38px); }
-.meteor-impact {
-  position: absolute;
-  left: 86%;
-  top: 78%;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #fff;
-  opacity: 0;
-  box-shadow: 0 0 18px 8px #fff8cf, 0 0 60px 24px #ffbe43, 0 0 140px 55px #ff573a99;
-  animation: meteor-impact 1.25s 1.68s ease-out forwards;
-}
-.meteor-burst, .meteor-dust { position: absolute; left: 86%; top: 78%; }
-.meteor-burst i, .meteor-dust i {
-  --angle: calc(var(--i) * 15deg);
-  position: absolute;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #fff4b0;
-  box-shadow: 0 0 9px #ffb63e;
-  opacity: 0;
-  animation: meteor-particle 1.25s calc(1.7s + var(--i) * 8ms) cubic-bezier(.1,.7,.2,1) forwards;
-}
-.meteor-dust i {
-  --angle: calc(var(--i) * 20deg + 8deg);
-  width: 2px;
-  height: 2px;
-  background: #93e9ff;
-  animation-name: meteor-dust;
-  animation-duration: 1.8s;
-}
-.meteor-site {
-  position: relative;
-  width: 100%;
-  min-height: 100dvh;
-  margin: 0;
-  overflow: hidden;
-  isolation: isolate;
-  color: #fff;
-  background: #f75c6c;
-  clip-path: circle(0 at 86% 78%);
-  opacity: 0;
-}
-.meteor-site.revealing {
-  opacity: 1;
-  clip-path: circle(150vmax at 86% 78%);
-  transition: clip-path .9s cubic-bezier(.18,.74,.22,1), opacity .12s linear;
-}
-.fluid-bg { position: absolute; inset: -12%; z-index: -2; filter: blur(68px); transform: translateZ(0); }
-.fluid-blob { position: absolute; border-radius: 50%; opacity: .92; }
-.fluid-orange {
-  width: 82vmax; height: 82vmax; right: -30vmax; top: -34vmax; background: #ffa800;
-  animation: fluid-orange 16s ease-in-out infinite alternate;
-}
-.fluid-pink {
-  width: 76vmax; height: 76vmax; left: -34vmax; top: 12vh; background: #ff145a;
-  animation: fluid-pink 18s ease-in-out infinite alternate;
-}
-.fluid-light {
-  width: 62vmax; height: 46vmax; left: 18vw; bottom: -24vmax;
-  border-radius: 43% 57% 68% 32%;
-  background: linear-gradient(45deg, #fff, #a7efff 62%, #eeb7ff);
-  animation: fluid-light 20s ease-in-out infinite alternate;
-}
-.meteor-site:after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(110deg, #61122d2e, transparent 42%, #ffcf5440);
-}
-.meteor-site-copy {
-  position: absolute;
-  z-index: 4;
-  left: 50%;
-  top: 47%;
-  width: min(92vw, 1060px);
-  text-align: center;
-  transform: translate(-50%, -44%);
-}
-.meteor-site-copy > * { opacity: 0; transform: translateY(24px); }
-.meteor-site.ready .meteor-site-copy > * {
-  opacity: 1;
-  transform: none;
-  transition: opacity .75s ease, transform .75s cubic-bezier(.2,.8,.2,1);
-}
-.meteor-site.ready .meteor-site-copy h1 { transition-delay: .08s; }
-.meteor-site.ready .meteor-site-copy p { transition-delay: .18s; }
-.meteor-site.ready .meteor-site-copy small { transition-delay: .28s; }
-.meteor-eyebrow {
-  display: inline-block;
-  padding: 8px 16px;
-  color: #7f1535;
-  border-radius: 999px;
-  background: #fffdf2e8;
-  font-weight: 800;
-  letter-spacing: .08em;
-  box-shadow: 0 12px 30px #7b153532;
-}
-.meteor-site-copy h1 {
-  margin: 28px 0 6px;
-  color: #fff3b0;
-  font-family: STKaiti, KaiTi, "Microsoft YaHei", sans-serif;
-  font-size: clamp(58px, 10vw, 138px);
-  font-weight: 900;
-  line-height: .98;
-  letter-spacing: .04em;
-  text-shadow: 4px 8px 26px #62132c66;
-}
-.meteor-site-copy p { margin: 0; font-size: clamp(22px, 3vw, 40px); letter-spacing: .7em; text-indent: .7em; }
-.meteor-site-copy small { display: block; margin-top: 26px; letter-spacing: .22em; opacity: .84; }
-.meteor-site-entry {
-  position: absolute;
-  z-index: 6;
-  left: 50%;
-  bottom: calc(28px + env(safe-area-inset-bottom));
-  width: min(360px, calc(100% - 48px));
-  opacity: 0;
-  transform: translate(-50%, 18px);
-}
-.meteor-site.ready .meteor-site-entry { opacity: 1; transform: translate(-50%, 0); transition: .55s .34s ease; }
-.meteor-site-entry button {
-  width: 100%;
-  min-height: 54px;
-  color: #d9255a;
-  border: 1px solid #fff9;
-  border-radius: 999px;
-  background: #fffffff0;
-  font-weight: 900;
-  letter-spacing: .14em;
-  box-shadow: 0 16px 40px #69122d52;
-}
-.anniversary-seal {
-  position: absolute;
-  right: max(22px, 5vw);
-  top: max(24px, env(safe-area-inset-top));
-  width: 106px;
-  height: 106px;
-  color: #d9285b;
-  border-radius: 50%;
-  background: linear-gradient(145deg, #fff7b3, #fff 52%, #b9efff);
-  box-shadow: 0 15px 34px #7d15384a, inset 0 0 16px #fff;
-}
-.anniversary-seal span { position: absolute; left: 18px; top: 14px; font-weight: 900; }
-.anniversary-seal strong { position: absolute; left: 14px; top: 37px; font: 900 52px/.8 Arial Black, sans-serif; letter-spacing: -6px; }
-.anniversary-seal i { position: absolute; right: 13px; top: 51px; font-weight: 900; }
-.ambient-meteors { position: absolute; inset: 0; overflow: hidden; opacity: .68; }
-.ambient-meteors i {
-  --delay: calc(var(--i) * -1.2s);
-  position: absolute;
-  left: calc((var(--i) * 17%) - 55%);
-  top: calc((var(--i) * 23%) - 120%);
-  width: clamp(80px, 18vw, 220px);
-  height: 2px;
-  border-radius: 99px;
-  color: #fff7c5;
-  background: linear-gradient(90deg, transparent, currentColor, #fff);
-  filter: drop-shadow(0 0 7px currentColor);
-  transform: rotate(42deg);
-  animation: ambient-meteor 13s var(--delay) linear infinite;
-}
-.meteor-login-overlay { background: #24101b88; }
-.meteor-glass-login {
-  width: min(430px, calc(100% - 32px));
-  padding: 34px;
-  color: #fff;
-  border: 1px solid #ffffff5c;
-  border-top-color: #ffffffcc;
-  border-radius: 26px;
-  background: linear-gradient(140deg, #ffffff40, #ffffff15);
-  -webkit-backdrop-filter: blur(25px) saturate(150%);
-  backdrop-filter: blur(25px) saturate(150%);
-  box-shadow: 0 28px 70px #48112966, inset 0 0 22px #ffffff14;
-}
-.meteor-glass-login h2 { margin: 2px 0 0; font-size: 28px; }
-.meteor-glass-login > p, .meteor-glass-login small { color: #fffdddcc; }
-.meteor-glass-login label { display: block; margin-top: 12px; }
-.meteor-glass-login input {
-  min-height: 48px;
-  color: #fff;
-  border-color: #ffffff52;
-  background: #ffffff21;
-}
-.meteor-glass-login input:focus { outline: 2px solid #fff0a5; border-color: transparent; }
-.meteor-glass-login form button { width: 100%; min-height: 50px; margin-top: 12px; color: #dc275d; background: #fff; font-weight: 900; }
-.glass-close { width: 44px; height: 44px; padding: 0; border-radius: 50%; color: #fff; background: #ffffff26; font-size: 24px; }
-
-@keyframes hero-meteor-flight {
-  0% { opacity: 0; transform: translate(-58vw, -28vh) rotate(38deg) scaleX(.25); }
-  12% { opacity: 1; }
-  78% { opacity: 1; transform: translate(54vw, 50vh) rotate(38deg) scaleX(1); }
-  100% { opacity: 0; transform: translate(70vw, 64vh) rotate(38deg) scaleX(.45); }
-}
-@keyframes meteor-impact {
-  0%, 12% { opacity: 0; transform: scale(.2); }
-  28% { opacity: 1; transform: scale(1.4); }
-  100% { opacity: 0; transform: scale(18); }
-}
-@keyframes meteor-particle {
-  0% { opacity: 0; transform: rotate(var(--angle)) translateX(4px) scale(.3); }
-  18% { opacity: 1; }
-  100% { opacity: 0; transform: rotate(var(--angle)) translateX(min(35vw, 280px)) scale(1.2); }
-}
-@keyframes meteor-dust {
-  0% { opacity: 0; transform: rotate(var(--angle)) translateX(8px); }
-  18% { opacity: .9; }
-  100% { opacity: 0; transform: rotate(var(--angle)) translateX(min(22vw, 180px)) translateY(25px); }
-}
-@keyframes fluid-orange { to { transform: translate(-12vw, 18vh) scale(1.12); } }
-@keyframes fluid-pink { to { transform: translate(16vw, -12vh) scale(.88); } }
-@keyframes fluid-light { to { transform: translate(14vw, -14vh) rotate(22deg) scale(1.15); } }
-@keyframes ambient-meteor { from { translate: -25vw -25vh; } to { translate: 145vw 145vh; } }
-
-@media (max-width: 650px) {
-  .hero-meteor { width: 50vw; }
-  .meteor-impact, .meteor-burst, .meteor-dust { left: 86%; top: 78%; }
-  .meteor-site { clip-path: circle(0 at 86% 78%); }
-  .meteor-site.revealing { clip-path: circle(150vmax at 86% 78%); }
-  .meteor-site-copy { top: 45%; width: calc(100% - 34px); }
-  .meteor-eyebrow { max-width: calc(100% - 58px); border-radius: 14px; font-size: 12px; }
-  .meteor-site-copy h1 { margin-top: 22px; font-size: clamp(50px, 17vw, 76px); line-height: 1.05; letter-spacing: -.04em; }
-  .meteor-site-copy p { margin-top: 14px; font-size: 21px; letter-spacing: .48em; text-indent: .48em; }
-  .meteor-site-copy small { font-size: 10px; letter-spacing: .15em; }
-  .anniversary-seal { width: 72px; height: 72px; right: 16px; top: max(16px, env(safe-area-inset-top)); }
-  .anniversary-seal span { left: 11px; top: 8px; font-size: 10px; }
-  .anniversary-seal strong { left: 8px; top: 25px; font-size: 35px; letter-spacing: -4px; }
-  .anniversary-seal i { right: 8px; top: 34px; font-size: 10px; }
-  .meteor-glass-login { padding: 26px 22px; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
-  .ambient-meteors i:nth-child(n+8) { display: none; }
-}
-@media (prefers-reduced-motion: reduce), (update: slow) {
-  .hero-meteor { animation-duration: .55s; }
-  .meteor-impact, .meteor-burst i, .meteor-dust i { animation-duration: .5s; }
-  .fluid-blob, .ambient-meteors i { animation: none; }
-  .ambient-meteors i:nth-child(n+4), .meteor-burst i:nth-child(n+10), .meteor-dust i:nth-child(n+7) { display: none; }
 }

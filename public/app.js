@@ -158,84 +158,76 @@ function login() {
   delete document.body.dataset.view;
   document.body.classList.add('poster-mode');
   app.innerHTML = `
-    <section class="meteor-intro" id="launchScreen" aria-label="流星粒子启动动画">
-      <button class="skip-launch" id="skipLaunch">跳过动画</button>
-      <div class="meteor-stage" aria-hidden="true">
-        <span class="hero-meteor"><i></i></span>
-        <span class="meteor-impact"></span>
-        <span class="meteor-burst">${Array.from({ length: 24 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
-        <span class="meteor-dust">${Array.from({ length: 18 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
+    <section class="original-entry" id="originalEntry">
+      <div class="fluid-bg">
+        <div class="blob blob-orange"></div>
+        <div class="blob blob-highlight"></div>
+        <div class="blob blob-pink"></div>
+        <div class="blob cursor-blob" id="cursorBlob"></div>
       </div>
-    </section>
-    <section class="meteor-site poster-home">
-      <div class="fluid-bg" aria-hidden="true">
-        <span class="fluid-blob fluid-orange"></span>
-        <span class="fluid-blob fluid-light"></span>
-        <span class="fluid-blob fluid-pink"></span>
+      <div id="meteor-container"></div>
+      <div class="bg-text-container">
+        <h1 class="bg-main-title">廿载同心·青春同行</h1>
+        <p class="bg-subtitle">设计学院</p>
       </div>
-      <div class="ambient-meteors" aria-hidden="true">
-        ${Array.from({ length: 12 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}
-      </div>
-      <div class="meteor-site-copy">
-        <span class="meteor-eyebrow">庆福建农林大学金山学院建院20周年</span>
-        <h1>廿载同心·青春同行</h1>
-        <p>设计学院</p>
-        <small>JINSHAN COLLEGE · 2006—2026</small>
-      </div>
-      <div class="meteor-site-entry">
-        <button id="join">点击屏幕进入系统</button>
-      </div>
-      <div class="anniversary-seal" aria-hidden="true">
-        <span>JS</span><strong>20</strong><i>th</i>
-      </div>
-    </section>
-    <section class="login-overlay meteor-login-overlay" id="loginCard" aria-hidden="true">
-      <div class="meteor-glass-login">
-        <div class="row">
-          <div><small>20TH ANNIVERSARY</small><h2>系统登录</h2></div>
-          <button class="glass-close right" id="closeLogin" type="button" aria-label="返回活动首页">×</button>
-        </div>
-        <p>使用管理员发放的学号和密码登录</p>
+      <div class="dark-overlay" id="darkOverlay"></div>
+      <div class="intro-hint" id="hint">点击屏幕进入系统</div>
+      <div class="glass-login" id="loginCard">
+        <h2 class="login-title">系统登录</h2>
         <form id="login">
-          <label>学号／账号</label><input name="studentId" autocomplete="username" required>
-          <label>密码</label><input name="password" type="password" autocomplete="current-password" required>
-          <button>进入活动</button>
+          <div class="input-group">
+            <input name="studentId" type="text" class="glass-input" placeholder="学号/账号 (如: 246731056 李智霖)" autocomplete="username" required>
+          </div>
+          <div class="input-group">
+            <input name="password" type="password" class="glass-input" placeholder="密码" autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="login-btn">登 入</button>
         </form>
       </div>
     </section>`;
-  const launchScreen = document.querySelector('#launchScreen');
-  const posterHome = document.querySelector('.poster-home');
-  let launchTimer;
-  const finishLaunch = () => {
-    if (launchScreen.classList.contains('finished')) return;
-    launchScreen.classList.add('finished');
-    posterHome.classList.add('revealing');
-    clearTimeout(launchTimer);
+  const cursorBlob = document.querySelector('#cursorBlob');
+  const loginCard = document.querySelector('#loginCard');
+  const hint = document.querySelector('#hint');
+  const darkOverlay = document.querySelector('#darkOverlay');
+  let isLoginVisible = false;
+  document.addEventListener('mousemove', (event) => {
+    cursorBlob.style.transform = `translate(${event.clientX - 225}px, ${event.clientY - 225}px)`;
+  }, { once: false });
+  document.querySelector('#originalEntry').onclick = () => {
+    if (isLoginVisible) return;
+    hint.style.opacity = '0';
+    setTimeout(() => { hint.style.display = 'none'; }, 400);
+    darkOverlay.classList.add('show');
+    loginCard.classList.add('show');
+    isLoginVisible = true;
+  };
+  const meteorContainer = document.querySelector('#meteor-container');
+  const meteorColors = ['#ffea00', '#00f0ff', '#ff1e62', '#ffffff', '#ff9900', '#d884ff'];
+  function createMeteor() {
+    if (!document.body.contains(meteorContainer)) return;
+    const meteor = document.createElement('div');
+    meteor.classList.add('meteor');
+    const thickness = Math.random() * 2 + 1.5;
+    const length = Math.random() * 160 + 60;
+    meteor.style.height = `${thickness}px`;
+    meteor.style.width = `${length}px`;
+    meteor.style.setProperty('--head-size', `${thickness * 2}px`);
+    meteor.style.color = meteorColors[Math.floor(Math.random() * meteorColors.length)];
+    meteor.style.left = `${(Math.random() - 0.5) * window.innerWidth * 1.5}px`;
+    meteor.style.top = `${(Math.random() - 0.5) * window.innerHeight * 1.5}px`;
+    const duration = Math.random() * 2.5 + 1.5;
+    const delay = Math.random() * 3;
+    meteor.style.animationDuration = `${duration}s`;
+    meteor.style.animationDelay = `${delay}s`;
+    meteorContainer.appendChild(meteor);
     setTimeout(() => {
-      posterHome.classList.add('ready');
-      launchScreen.remove();
-    }, 900);
-  };
-  const reducedMotion = window.matchMedia && (
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
-    window.matchMedia('(update: slow)').matches
-  );
-  launchTimer = setTimeout(finishLaunch, reducedMotion ? 180 : 3100);
-  document.querySelector('#skipLaunch').onclick = finishLaunch;
-  document.querySelector('#join').onclick = () => {
-    const loginCard = document.querySelector('#loginCard');
-    loginCard.classList.add('open');
-    loginCard.setAttribute('aria-hidden', 'false');
-    document.querySelector('#login input').focus();
-  };
-  document.querySelector('#closeLogin').onclick = () => {
-    const loginCard = document.querySelector('#loginCard');
-    loginCard.classList.remove('open');
-    loginCard.setAttribute('aria-hidden', 'true');
-  };
-  document.querySelector('#loginCard').onclick = (event) => {
-    if (event.target.id === 'loginCard') document.querySelector('#closeLogin').click();
-  };
+      meteor.remove();
+      createMeteor();
+    }, (duration + delay) * 1000);
+  }
+  for (let index = 0; index < 30; index += 1) {
+    setTimeout(createMeteor, Math.random() * 3000);
+  }
   document.querySelector('#login').onsubmit = async (event) => {
     event.preventDefault();
     try {
