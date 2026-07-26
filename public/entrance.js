@@ -1,4 +1,12 @@
 ﻿document.addEventListener('DOMContentLoaded', () => {
+            // iOS WeChat can ignore the viewport scale lock while a gesture is active.
+            document.addEventListener('gesturestart', (event) => event.preventDefault(), { passive: false });
+            document.addEventListener('gesturechange', (event) => event.preventDefault(), { passive: false });
+            document.addEventListener('gestureend', (event) => event.preventDefault(), { passive: false });
+            document.addEventListener('touchmove', (event) => {
+                if (event.touches.length > 1) event.preventDefault();
+            }, { passive: false });
+
             const intro = document.getElementById('cinematic-intro');
             const ambient = document.getElementById('ambient');
             const vignette = document.getElementById('vignette');
