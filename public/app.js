@@ -158,43 +158,49 @@ function login() {
   delete document.body.dataset.view;
   document.body.classList.add('poster-mode');
   app.innerHTML = `
-    <section class="launch-screen" id="launchScreen" aria-label="活动启动动画">
+    <section class="meteor-intro" id="launchScreen" aria-label="流星粒子启动动画">
       <button class="skip-launch" id="skipLaunch">跳过动画</button>
-      <div class="launch-emblem" aria-hidden="true">
-        <span class="launch-halo halo-a"></span><span class="launch-halo halo-b"></span>
-        <span class="launch-particles">${Array.from({ length: 10 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
-        <span class="launch-orbit"></span>
-        <b class="launch-star">✦</b>
-        <strong>20</strong><i>th</i>
+      <div class="meteor-stage" aria-hidden="true">
+        <span class="hero-meteor"><i></i></span>
+        <span class="meteor-impact"></span>
+        <span class="meteor-burst">${Array.from({ length: 24 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
+        <span class="meteor-dust">${Array.from({ length: 18 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}</span>
       </div>
-      <p>JINSHAN · 2006—2026</p>
     </section>
-    <section class="landing poster-home">
-      <div class="landing-hero poster">
-        <div class="hero-glow glow-one"></div><div class="hero-glow glow-two"></div>
-        <div class="anniversary-mark"><i>JS</i><b>20</b><span>th</span><small>2006—2026</small></div>
-        <div class="hero-content">
-          <div class="eyebrow">庆福建农林大学金山学院建院20周年-设计学院</div>
-          <div class="anniversary-line"><span></span>20TH ANNIVERSARY<span></span></div>
-          <h1 class="calligraphy-title"><span>廿载同心</span><em>青春同行</em></h1>
-          <p>一院三地四校区，共庆青春正当时。</p>
+    <section class="meteor-site poster-home">
+      <div class="fluid-bg" aria-hidden="true">
+        <span class="fluid-blob fluid-orange"></span>
+        <span class="fluid-blob fluid-light"></span>
+        <span class="fluid-blob fluid-pink"></span>
+      </div>
+      <div class="ambient-meteors" aria-hidden="true">
+        ${Array.from({ length: 12 }, (_, index) => `<i style="--i:${index}"></i>`).join('')}
+      </div>
+      <div class="meteor-site-copy">
+        <span class="meteor-eyebrow">庆福建农林大学金山学院建院20周年</span>
+        <h1>廿载同心·青春同行</h1>
+        <p>设计学院</p>
+        <small>JINSHAN COLLEGE · 2006—2026</small>
+      </div>
+      <div class="meteor-site-entry">
+        <button id="join">点击屏幕进入系统</button>
+      </div>
+      <div class="anniversary-seal" aria-hidden="true">
+        <span>JS</span><strong>20</strong><i>th</i>
+      </div>
+    </section>
+    <section class="login-overlay meteor-login-overlay" id="loginCard" aria-hidden="true">
+      <div class="meteor-glass-login">
+        <div class="row">
+          <div><small>20TH ANNIVERSARY</small><h2>系统登录</h2></div>
+          <button class="glass-close right" id="closeLogin" type="button" aria-label="返回活动首页">×</button>
         </div>
-        <div class="hero-ribbon" aria-hidden="true"></div>
-        <div class="poster-entry"><button id="join">进入系统</button></div>
-      </div>
-    </section>
-    <section class="login-overlay" id="loginCard" aria-hidden="true">
-      <div class="card login">
-      <div class="row">
-        <h2>账号登录</h2>
-        <button class="secondary right" id="closeLogin">返回海报</button>
-      </div>
-      <p class="muted">使用管理员创建的学号和密码登录。</p>
-      <form id="login">
-        <label>学号</label><input name="studentId" required>
-        <label>密码</label><input name="password" type="password" required>
-        <button>登录</button>
-      </form>
+        <p>使用管理员发放的学号和密码登录</p>
+        <form id="login">
+          <label>学号／账号</label><input name="studentId" autocomplete="username" required>
+          <label>密码</label><input name="password" type="password" autocomplete="current-password" required>
+          <button>进入活动</button>
+        </form>
       </div>
     </section>`;
   const launchScreen = document.querySelector('#launchScreen');
@@ -208,13 +214,13 @@ function login() {
     setTimeout(() => {
       posterHome.classList.add('ready');
       launchScreen.remove();
-    }, 720);
+    }, 900);
   };
   const reducedMotion = window.matchMedia && (
     window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
     window.matchMedia('(update: slow)').matches
   );
-  launchTimer = setTimeout(finishLaunch, reducedMotion ? 180 : 2600);
+  launchTimer = setTimeout(finishLaunch, reducedMotion ? 180 : 3100);
   document.querySelector('#skipLaunch').onclick = finishLaunch;
   document.querySelector('#join').onclick = () => {
     const loginCard = document.querySelector('#loginCard');
