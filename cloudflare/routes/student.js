@@ -296,6 +296,11 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const uploaded = body.images?.length
       ? await uploadImages(env, body.images, `task-submissions/${task.id}/${owner.id}`, Number(task.imageLimit))
       : [];
+    const displayUploaded = uploaded.length && Array.isArray(body.displayImages)
+      && body.displayImages.length === uploaded.length
+      ? await uploadImages(env, body.displayImages,
+        `task-submissions/${task.id}/${owner.id}/display`, Number(task.imageLimit))
+      : [];
     if (!uploaded.length && !current) return json({ error: '请至少上传一张图片' }, 400);
     const id = current?.id || crypto.randomUUID();
     const nextVersion = Number(current?.version || 0) + 1;
@@ -322,6 +327,10 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         intent === 'submitted' ? nowIso() : null, nowIso()));
     }
     if (uploaded.length) {
+      await env.DB.prepare(`CREATE TABLE IF NOT EXISTS image_variants (
+        source_type TEXT NOT NULL, source_id TEXT NOT NULL, variant TEXT NOT NULL,
+        object_key TEXT NOT NULL, content_type TEXT NOT NULL, bytes INTEGER NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY (source_type,source_id,variant))`).run();
       statements.push(env.DB.prepare('DELETE FROM task_submission_images WHERE submission_id=?1').bind(id));
       for (const image of uploaded) {
         statements.push(env.DB.prepare(
@@ -329,6 +338,14 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
             (id,submission_id,object_key,content_type,bytes,sort_order,created_at)
            VALUES (?1,?2,?3,?4,?5,?6,?7)`
         ).bind(image.id, id, image.key, image.contentType, image.bytes, image.sortOrder, nowIso()));
+        const display = displayUploaded[image.sortOrder];
+        if (display) {
+          statements.push(env.DB.prepare(
+            `INSERT OR REPLACE INTO image_variants
+              (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+             VALUES ('task_submission_image',?1,'display',?2,?3,?4,?5)`
+          ).bind(image.id, display.key, display.contentType, display.bytes, nowIso()));
+        }
       }
     }
     if (intent === 'submitted' && isPublic && owner.team) {
@@ -349,7 +366,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       if (uploaded.length) ctx.waitUntil(Promise.all(oldImages.results.map((item) => env.UPLOADS.delete(item.objectKey))));
       return json({ ok: true, submission: { id, status: intent, version: nextVersion } });
     } catch (error) {
-      await Promise.all(uploaded.map((item) => env.UPLOADS.delete(item.key)));
+      await Promise.all([...uploaded, ...displayUploaded].map((item) => env.UPLOADS.delete(item.key)));
       throw error;
     }
   }
