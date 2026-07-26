@@ -155,6 +155,8 @@ function logout() {
 }
 
 function login() {
+  window.location.replace('/entrance.html');
+  return;
   delete document.body.dataset.view;
   document.body.classList.add('poster-mode');
   app.innerHTML = `
