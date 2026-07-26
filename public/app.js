@@ -27,7 +27,9 @@ let materialAdminCampus = '';
 let adminUserPage = Number(sessionStorage.adminUserPage || 1);
 let adminUserFilter = sessionStorage.adminUserFilter || 'all';
 let adminUserQuery = sessionStorage.adminUserQuery || '';
-let adminCompletionTrack = sessionStorage.adminCompletionTrack || 'all';
+let adminCompletionTrack = ['interaction', 'health'].includes(sessionStorage.adminCompletionTrack)
+  ? sessionStorage.adminCompletionTrack
+  : 'interaction';
 let scrollSaveTimer;
 window.addEventListener('scroll', () => {
   if (document.body.dataset.view !== 'admin') return;
@@ -420,7 +422,7 @@ async function student(me) {
           <div class="member-list compact">${(task.teamProgress?.members || []).map((member) => `<span class="${member.checked ? 'checked-member' : ''}">${escapeHtml(member.name)} · ${escapeHtml(member.studentId)} ${member.checked ? '✓ 已打卡' : '未打卡'}</span>`).join('')}</div>
         </div>
         <button data-member-task="${task.id}" ${task.availabilityError ? 'disabled' : ''}>${task.memberCheckin ? '更新个人打卡' : '个人打卡'}</button>
-        ${task.isCaptain ? `<button class="secondary" data-task="${task.id}" ${task.availabilityError || ['submitted','approved'].includes(task.submission?.status) ? 'disabled' : ''}>${task.submission ? '继续编辑队伍作品' : '队长汇总提交'}</button>` : '<p class="muted">队伍作品由管理员指定的队长汇总提交。</p>'}
+        ${task.isCaptain ? `<button class="secondary" data-task="${task.id}" ${task.availabilityError ? 'disabled' : ''}>${['submitted','approved'].includes(task.submission?.status) ? '修改广场作品' : task.submission ? '继续编辑队伍作品' : '队长汇总提交'}</button>` : '<p class="muted">队伍作品由管理员指定的队长汇总提交。</p>'}
       ` : `<button data-task="${task.id}" ${task.availabilityError || ['submitted','approved'].includes(task.submission?.status) ? 'disabled' : ''}>${task.submission ? '继续编辑' : '个人打卡'}</button>`}
       ${task.availabilityError ? `<p class="bad">${escapeHtml(task.availabilityError)}</p>` : ''}
     </article>`).join('');
@@ -551,6 +553,10 @@ function materialSubmissionForm(task) {
 
 function taskSubmissionForm(task) {
   const current = task.submission;
+  const isFinalInteraction = user.trackId === 'interaction'
+    && ['submitted', 'approved'].includes(current?.status);
+  const teamReady = Number(task.teamProgress?.total || 0) > 0
+    && Number(task.teamProgress?.completed || 0) === Number(task.teamProgress?.total || 0);
   app.innerHTML = `
     <header class="hero"><h1>${escapeHtml(task.name)}</h1><p>${escapeHtml(task.description)}</p></header>
     <section class="card"><form id="taskSend">
@@ -559,9 +565,10 @@ function taskSubmissionForm(task) {
       <div class="image-preview" id="taskPreview"></div>
       ${user.trackId === 'health' ? `<label>餐次</label><select name="mealType" required><option value="">请选择</option><option value="breakfast" ${current?.mealType === 'breakfast' ? 'selected' : ''}>早餐</option><option value="lunch" ${current?.mealType === 'lunch' ? 'selected' : ''}>午餐</option><option value="dinner" ${current?.mealType === 'dinner' ? 'selected' : ''}>晚餐</option></select>` : ''}
       <label>活动文案${task.copyRequirement ? '（必填）' : '（选填）'}</label><textarea name="copy">${escapeHtml(current?.copy || '')}</textarea>
-      ${user.trackId === 'interaction' ? `<label class="check-label"><input name="isPublic" type="checkbox" ${current?.isPublic ? 'checked' : ''}> 同意发布至活动广场</label>
+      ${user.trackId === 'interaction' ? `${!teamReady ? '<div class="notice">队内成员全部完成个人打卡后，才可以发布至活动广场。</div>' : ''}
+      <label class="check-label"><input name="isPublic" type="checkbox" ${current?.isPublic ? 'checked' : ''} ${teamReady ? '' : 'disabled'}> 同意发布至活动广场</label>
       <div id="plazaCopyField" style="display:${current?.isPublic ? 'block' : 'none'}"><label>广场作品文案（发布时必填）</label><textarea name="plazaCopy">${escapeHtml(current?.plazaCopy || '')}</textarea></div>` : ''}
-      <div class="row"><button type="button" class="secondary" id="back">返回</button><button type="button" class="secondary" data-intent="draft">保存草稿</button><button data-intent="submit">最终提交</button></div>
+      <div class="row"><button type="button" class="secondary" id="back">返回</button>${isFinalInteraction ? '' : '<button type="button" class="secondary" data-intent="draft">保存草稿</button>'}<button data-intent="submit">${isFinalInteraction ? '保存修改' : '最终提交'}</button></div>
     </form></section>`;
   document.querySelector('#back').onclick = home;
   const form = document.querySelector('#taskSend');
@@ -881,10 +888,8 @@ async function admin(selectedDate) {
     <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">
       <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
       <strong>${escapeHtml(studentUser.name)}</strong>
-      <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
-      <small>累计完成 ${Number(studentUser.totalCompletedDays || 0)} 天</small>
+      ${studentUser.completed ? '<span class="completion-check" aria-label="已完成">✓</span>' : ''}
     </button>`).join('');
-  const completed = users.filter((item) => item.completed).length;
   app.innerHTML = `
     <header class="hero">
       <div class="row"><div><h1>活动管理后台</h1><div>${escapeHtml(config.activityName)}</div></div>
@@ -904,7 +909,6 @@ async function admin(selectedDate) {
         <button class="secondary" id="reload">查询</button>
       </div>
       <div class="completion-summary-grid">
-        <button class="completion-summary active"><span>当前列表完成情况</span><strong>${completed}/${users.length}</strong></button>
         <button class="completion-summary ${adminCompletionTrack === 'interaction' ? 'active' : ''}" data-track="interaction"><span>廿载同心</span><strong>查看</strong></button>
         <button class="completion-summary ${adminCompletionTrack === 'health' ? 'active' : ''}" data-track="health"><span>食光有约</span><strong>查看</strong></button>
       </div>
@@ -1003,15 +1007,13 @@ async function adminFull(selectedDate) {
     <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">
       <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
       <strong>${escapeHtml(studentUser.name)}</strong>
-      <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
-      <small>累计完成 ${Number(studentUser.totalCompletedDays || 0)} 天</small>
+      ${studentUser.completed ? '<span class="completion-check" aria-label="已完成">✓</span>' : ''}
     </button>`).join('');
   const trackStudents = (trackId) => dashboard.students.filter((item) => !trackId || item.trackId === trackId);
   const completionSummary = (trackId) => {
     const list = trackStudents(trackId);
     return { completed: list.filter((item) => item.completed).length, total: list.length };
   };
-  const overallSummary = completionSummary('');
   const interactionSummary = completionSummary('interaction');
   const healthSummary = completionSummary('health');
   const teamRows = teamResult.teams.map((team) => `
@@ -1101,7 +1103,6 @@ async function adminFull(selectedDate) {
         <label class="right">日期 <input id="date" type="date" value="${date}"></label><button class="secondary" id="reload">查询</button>
       </div>
       <div class="completion-summary-grid">
-        <button class="completion-summary ${adminCompletionTrack === 'all' ? 'active' : ''}" data-track="all"><span>总完成情况</span><strong>${overallSummary.completed}/${overallSummary.total}</strong></button>
         <button class="completion-summary ${adminCompletionTrack === 'interaction' ? 'active' : ''}" data-track="interaction"><span>廿载同心</span><strong>${interactionSummary.completed}/${interactionSummary.total}</strong></button>
         <button class="completion-summary ${adminCompletionTrack === 'health' ? 'active' : ''}" data-track="health"><span>食光有约</span><strong>${healthSummary.completed}/${healthSummary.total}</strong></button>
       </div>
@@ -1130,10 +1131,6 @@ async function adminFull(selectedDate) {
         <button>保存开关</button>
       </form>
       <div class="table-wrap"><table><thead><tr><th>任务</th><th>赛道</th><th>状态</th><th>时间</th><th>提交数</th><th>操作</th></tr></thead><tbody>${taskRows || '<tr><td colspan="6">尚无任务</td></tr>'}</tbody></table></div>
-    </section>
-    <section class="card">
-      <h2>任务材料审核</h2>
-      <div class="table-wrap"><table><thead><tr><th>任务</th><th>提交主体</th><th>状态</th><th>图片</th><th>文案</th><th>审核</th></tr></thead><tbody>${submissionRows || '<tr><td colspan="6">尚无材料</td></tr>'}</tbody></table></div>
     </section>
     <section class="card">
       <div class="row"><h2>活动广场管理</h2><span class="right muted">帖子仅由公开任务提交自动生成</span></div>

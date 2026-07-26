@@ -170,10 +170,11 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       let isCaptain = false;
       if (owner?.team) {
         const members = await membersForTeam(env, owner.team.id);
+        const memberOccurrenceDate = occurrenceDate || shanghaiDate();
         const checkins = await env.DB.prepare(
           `SELECT user_id AS userId,id FROM member_checkins
             WHERE team_id=?1 AND task_id=?2 AND occurrence_date=?3`
-        ).bind(owner.team.id, task.id, occurrenceDate).all();
+        ).bind(owner.team.id, task.id, memberOccurrenceDate).all();
         teamProgress = {
           total: members.length,
           completed: checkins.results.length,
@@ -289,8 +290,26 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       `SELECT id,status,version FROM task_submissions
         WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3 AND occurrence_date=?4`
     ).bind(task.id, owner.type, owner.id, occurrenceDate).first();
-    if (current?.status === 'submitted' || current?.status === 'approved') {
+    const isFinalInteractionEdit = task.trackId === 'interaction'
+      && ['submitted', 'approved'].includes(current?.status);
+    if (owner.team && user.role !== 'admin' && owner.team.captainId !== user.id) {
+      return json({ error: '仅队长可以提交或修改广场作品' }, 403);
+    }
+    if ((current?.status === 'submitted' || current?.status === 'approved') && !isFinalInteractionEdit) {
       return json({ error: '该任务已最终提交，不能重复提交' }, 409);
+    }
+    if (intent === 'submitted' && isPublic && owner.team) {
+      const progress = await env.DB.prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM team_members WHERE team_id=?1) AS total,
+          (SELECT COUNT(DISTINCT user_id) FROM member_checkins
+            WHERE team_id=?1 AND task_id=?2 AND occurrence_date=?3) AS completed`
+      ).bind(owner.team.id, task.id, occurrenceDate || shanghaiDate()).first();
+      if (!Number(progress?.total) || Number(progress.completed) < Number(progress.total)) {
+        return json({
+          error: `队内成员尚未全部完成打卡（${Number(progress?.completed || 0)}/${Number(progress?.total || 0)}），暂时不能发布至活动广场`
+        }, 409);
+      }
     }
     if (current && Number(body.version) !== Number(current.version)) return json({ error: '内容已被队友更新，请刷新后重试' }, 409);
     const uploaded = body.images?.length
@@ -356,6 +375,10 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
          ON CONFLICT(submission_id) DO UPDATE SET copy_text=excluded.copy_text,status='visible',
            updated_at=excluded.updated_at`
       ).bind(crypto.randomUUID(), id, owner.team.id, plazaCopy, nowIso()));
+    } else if (isFinalInteractionEdit && owner.team) {
+      statements.push(env.DB.prepare(
+        "UPDATE plaza_posts SET status='hidden',updated_at=?1 WHERE submission_id=?2"
+      ).bind(nowIso(), id));
     }
     try {
       if (claimStatement) {

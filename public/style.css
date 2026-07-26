@@ -816,34 +816,48 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
 .user-filter-tabs .active { color: #fff; border-color: transparent; background: linear-gradient(135deg, #df2863, #ff7254); }
 .admin-user-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+  gap: 8px;
   margin: 18px 0;
 }
 .admin-user-tile {
   position: relative;
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  min-height: 112px;
-  padding: 12px;
+  grid-template-rows: auto 1fr;
+  min-height: 86px;
+  padding: 10px;
   text-align: left;
   color: var(--ink);
   border: 1px solid #e5e7eb;
-  border-radius: 16px;
-  background: #fff;
+  border-radius: 14px;
+  background: #eef0f2;
   box-shadow: none;
 }
 .admin-user-tile.completed { border-color: #6bc99d; background: #f4fff9; }
-.admin-user-tile.missing { background: #fff9f6; }
+.admin-user-tile.missing { color: #737985; background: #eef0f2; }
 .admin-user-tile .user-number { color: #8b93a4; font-size: 13px; }
-.admin-user-tile strong { align-self: center; font-size: 16px; }
+.admin-user-tile strong { align-self: center; font-size: 14px; line-height: 1.25; }
+.completion-check {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  color: #fff;
+  border-radius: 0 13px 0 11px;
+  background: #18a66b;
+  font-size: 15px;
+  font-weight: 900;
+}
 .user-completion { color: #9b3a45; font-size: 13px; }
 .completed .user-completion { color: #13835a; }
 .user-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .completion-heading { align-items: end; }
 .completion-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
   margin: 20px 0;
 }
@@ -1003,11 +1017,11 @@ button:active, [role="button"]:active { transform: scale(.97); box-shadow: none;
   #app { padding-inline: 12px; }
   #app > .hero, #app > section { margin-left: 0; margin-right: 0; }
   .card { padding: 18px; border-radius: 22px; }
-  .admin-user-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .admin-user-tile { min-height: 106px; padding: 10px; }
+  .admin-user-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+  .admin-user-tile { min-height: 82px; padding: 9px; }
   .completion-heading { align-items: stretch; }
   .completion-heading label, .completion-heading button { width: 100%; }
-  .completion-summary-grid { grid-template-columns: 1fr; gap: 8px; }
+  .completion-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .completion-summary { grid-template-columns: 1fr auto; align-items: center; min-height: 68px; }
   .user-detail-list { grid-template-columns: 1fr 1fr; }
   .task-type-choices { grid-template-columns: 1fr; }
