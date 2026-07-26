@@ -313,11 +313,15 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
   const reviewMatch = route.match(/^\/api\/admin\/material-submissions\/([^/]+)$/);
   if (reviewMatch && request.method === 'PATCH') {
     const body = await readJson(request);
-    const result = await env.DB.prepare(
-      `UPDATE material_submissions SET status=?1,review_note=?2,updated_at=?3 WHERE id=?4`
-    ).bind(body.status === 'approved' ? 'approved' : 'returned', cleanText(body.reviewNote, 500),
-      nowIso(), decodeURIComponent(reviewMatch[1])).run();
-    return result.meta.changes ? json({ ok: true }) : json({ error: '提交不存在' }, 404);
+    const id = decodeURIComponent(reviewMatch[1]);
+    const status = body.status === 'approved' ? 'approved' : 'returned';
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE material_submissions SET status=?1,review_note=?2,updated_at=?3 WHERE id=?4`
+      ).bind(status, cleanText(body.reviewNote, 500), nowIso(), id),
+      audit(env, admin, status, 'material_submission', id)
+    ]);
+    return results[0].meta.changes ? json({ ok: true }) : json({ error: '提交不存在' }, 404);
   }
 
   return null;

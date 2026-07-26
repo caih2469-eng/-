@@ -761,6 +761,17 @@ async function admin(selectedDate) {
     <section class="metric-grid">
       ${[['用户数量',overview.userCount],['队伍数量',overview.teamCount],['今日提交',overview.todaySubmissions],['公开帖子',overview.publicPostCount],['点赞数量',overview.likeCount],['浏览数量',overview.viewCount]].map(([label,value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`).join('')}
     </section>
+    <section class="card">
+      <details>
+        <summary>修改我的管理员密码</summary>
+        <form id="changeAdminPassword" class="inline-form">
+          <input name="currentPassword" type="password" autocomplete="current-password" placeholder="当前密码" required>
+          <input name="newPassword" type="password" autocomplete="new-password" minlength="8" placeholder="新密码（至少8位）" required>
+          <input name="confirmPassword" type="password" autocomplete="new-password" minlength="8" placeholder="再次输入新密码" required>
+          <button>修改密码</button>
+        </form>
+      </details>
+    </section>
     ${governance.isPrimary ? `<section class="card">
       <div class="row"><div><h2>管理员账号与操作监督</h2><p class="muted">只有最高管理员可以创建管理员，并查看、驳回其他管理员的补卡和审核操作。</p></div><span class="pill done">最高管理员</span></div>
       <details>
@@ -920,6 +931,49 @@ async function admin(selectedDate) {
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
+  document.querySelector('#changeAdminPassword').onsubmit = async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.target));
+    if (values.newPassword !== values.confirmPassword) {
+      alert('两次输入的新密码不一致');
+      return;
+    }
+    try {
+      await api('/api/admin/password', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          currentPassword: values.currentPassword,
+          newPassword: values.newPassword
+        })
+      });
+      event.target.reset();
+      alert('管理员密码已修改');
+    } catch (error) { alert(error.message); }
+  };
+  if (document.querySelector('#createAdmin')) {
+    document.querySelector('#createAdmin').onsubmit = async (event) => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(event.target));
+      try {
+        await api('/api/admin/admins', { method: 'POST', body: JSON.stringify(values) });
+        alert('管理员账号已创建');
+        admin(date);
+      } catch (error) { alert(error.message); }
+    };
+  }
+  document.querySelectorAll('.reject-admin-action').forEach((button) => {
+    button.onclick = async () => {
+      if (!await askConfirm('是否驳回该管理员操作？', '补卡记录将被撤销；审核结果将恢复为待审核状态。')) return;
+      try {
+        await api(`/api/admin/governance/${button.dataset.id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ note: '最高管理员驳回' })
+        });
+        alert('该管理员操作已驳回');
+        admin(date);
+      } catch (error) { alert(error.message); }
+    };
+  });
   document.querySelector('#reload').onclick = () =>
     admin(document.querySelector('#date').value);
   document.querySelectorAll('.completion-summary').forEach((button) => {
