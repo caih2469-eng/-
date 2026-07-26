@@ -153,7 +153,12 @@ export const createToken = async (user, secret) => {
 
 export const authenticate = async (request, env) => {
   const header = request.headers.get('authorization') || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  const cookieToken = (request.headers.get('cookie') || '')
+    .split(';')
+    .map((item) => item.trim())
+    .find((item) => item.startsWith('session_token='))
+    ?.slice('session_token='.length) || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : cookieToken;
   const [payload, supplied] = token.split('.');
   if (!payload || !supplied) return null;
   const expected = await sign(payload, env.SESSION_SECRET);
