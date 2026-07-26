@@ -324,7 +324,12 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const id = current?.id || crypto.randomUUID();
     const nextVersion = Number(current?.version || 0) + 1;
     const oldImages = current ? await env.DB.prepare(
-      'SELECT object_key AS objectKey FROM task_submission_images WHERE submission_id=?1'
+      `SELECT i.id,i.object_key AS objectKey,v.object_key AS variantKey
+         FROM task_submission_images i
+         LEFT JOIN image_variants v
+           ON v.source_type='task_submission_image' AND v.source_id=i.id
+          AND v.variant='display'
+        WHERE i.submission_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [];
     let claimStatement = null;
@@ -350,6 +355,11 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         source_type TEXT NOT NULL, source_id TEXT NOT NULL, variant TEXT NOT NULL,
         object_key TEXT NOT NULL, content_type TEXT NOT NULL, bytes INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY (source_type,source_id,variant))`).run();
+      for (const oldImage of oldImages.results) {
+        statements.push(env.DB.prepare(
+          "DELETE FROM image_variants WHERE source_type='task_submission_image' AND source_id=?1"
+        ).bind(oldImage.id));
+      }
       statements.push(env.DB.prepare('DELETE FROM task_submission_images WHERE submission_id=?1').bind(id));
       for (const image of uploaded) {
         statements.push(env.DB.prepare(
@@ -386,7 +396,13 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         if (!claimed.meta.changes) throw Object.assign(new Error('内容已被更新'), { status: 409 });
       }
       await env.DB.batch(statements);
-      if (uploaded.length) ctx.waitUntil(Promise.all(oldImages.results.map((item) => env.UPLOADS.delete(item.objectKey))));
+      if (uploaded.length) {
+        ctx.waitUntil(Promise.all(oldImages.results.flatMap((item) => [
+          env.UPLOADS.delete(item.objectKey),
+          item.variantKey ? env.UPLOADS.delete(item.variantKey) : Promise.resolve(),
+          caches.default.delete(new Request(`${url.origin}/api/media/${encodeURIComponent(item.id)}`))
+        ])));
+      }
       return json({ ok: true, submission: { id, status: intent, version: nextVersion } });
     } catch (error) {
       await Promise.all([...uploaded, ...displayUploaded].map((item) => env.UPLOADS.delete(item.key)));
