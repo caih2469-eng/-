@@ -77,9 +77,9 @@ const commandClient = (socket) => {
       const login = await send('Runtime.evaluate', {
         awaitPromise: true,
         returnByValue: true,
-        expression: `(async()=>{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({studentId:'demo-health',password:'Demo123!'})});const x=await r.json();if(!r.ok)return {ok:false,status:r.status,error:x.error};localStorage.token=x.token;localStorage.user=JSON.stringify(x.user);location.reload();return {ok:true};})()`
+        expression: `(async()=>{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({studentId:'demo-health',password:'Demo123!'})});const x=await r.json();if(!r.ok)return {ok:false,status:r.status,error:x.error};localStorage.token=x.token;localStorage.user=JSON.stringify(x.user);location.replace('/');return {ok:true};})()`
       });
-      await wait(800);
+      await wait(1200);
       const evaluation = await send('Runtime.evaluate', {
         returnByValue: true,
         expression: `({title:document.title,hasProfile:document.body.innerText.includes('我的资料'),hasCheckin:document.body.innerText.includes('今日打卡'),hasFinalProof:document.body.innerText.includes('最终截图证明'),horizontalOverflow:document.documentElement.scrollWidth>window.innerWidth,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})`
