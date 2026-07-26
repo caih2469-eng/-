@@ -2,8 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>廿载同心·青春同行 - 破晓 (繁星流星增强版)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#07070a">
+    <title>廿载同心·青春同行</title>
     <style>@font-face{font-family:'Zhi Mang Xing';font-style:normal;font-weight:400;font-display:swap;src:url('/zhi-mang-xing-title.woff2') format('woff2')}</style>
     <style>
         :root {
@@ -13,10 +14,11 @@
         }
 
         body, html {
-            margin: 0; padding: 0; width: 100%; height: 100%;
+            margin: 0; padding: 0; width: 100%; height: 100%; min-height: 100%;
             overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: #07070a; 
         }
+        body { min-height: 100vh; min-height: 100dvh; }
 
         /* ==========================================
            1. 极简电影级流星开场
@@ -84,10 +86,11 @@
            3. 优雅的文字排版
            ========================================== */
         .ui-layer {
-            position: relative; z-index: 10; width: 100%; height: 100%;
+            position: relative; z-index: 10; width: 100%; height: 100vh; height: 100dvh;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
             opacity: 0; transform: translateY(20px);
             transition: all 1.5s cubic-bezier(0.16, 1, 0.3, 1) 0.6s;
+            box-sizing: border-box;
         }
 
         .main-title {
@@ -113,6 +116,7 @@
            ========================================== */
         .glass-panel {
             width: 360px; padding: 40px; background: rgba(255, 255, 255, 0.05);
+            box-sizing: border-box;
             backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
             border: 1px solid rgba(255, 255, 255, 0.15); border-top: 1px solid rgba(255, 255, 255, 0.3); border-left: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 20px; box-shadow: 0 30px 60px rgba(0,0,0,0.4), inset 0 0 20px rgba(255,255,255,0.05); text-align: center;
@@ -125,6 +129,64 @@
         
         .btn-submit { width: 100%; padding: 16px; margin-top: 5px; background: #ffffff; color: #000000; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: bold; letter-spacing: 8px; cursor: pointer; transition: all 0.3s; text-indent: 8px; }
         .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(255,255,255,0.3); }
+
+        @media (max-width: 600px) {
+            .ui-layer {
+                justify-content: flex-start;
+                padding: max(9vh, 54px) 20px max(24px, env(safe-area-inset-bottom));
+            }
+            .main-title {
+                width: 100%;
+                font-size: clamp(2rem, 9vw, 2.5rem);
+                line-height: 1.14;
+                letter-spacing: 1px;
+                text-align: center;
+                white-space: nowrap;
+            }
+            .subtitle {
+                font-size: .9rem;
+                letter-spacing: 16px;
+                margin: 14px -16px 30px 0;
+            }
+            .glass-panel {
+                width: min(100%, 360px);
+                padding: 25px 22px 24px;
+                border-radius: 18px;
+            }
+            .login-heading {
+                font-size: 1.25rem;
+                margin-bottom: 19px;
+                letter-spacing: 9px;
+                text-indent: 9px;
+            }
+            .input-box {
+                min-height: 52px;
+                padding: 13px 16px;
+                margin-bottom: 14px;
+                font-size: 16px;
+            }
+            .btn-submit {
+                min-height: 52px;
+                padding: 13px;
+                margin-top: 2px;
+                font-size: 1rem;
+            }
+            .mouse-glow { display: none; }
+            .ambient-canvas { filter: blur(65px); }
+            .orb-1 { width: 110vw; height: 110vw; }
+            .orb-2 { width: 95vw; height: 95vw; }
+            .orb-3 { width: 120vw; height: 75vw; left: 0; }
+        }
+
+        @media (max-width: 360px), (max-height: 680px) {
+            .ui-layer { padding-top: max(5vh, 28px); }
+            .main-title { font-size: clamp(1.9rem, 8.7vw, 2.25rem); }
+            .subtitle { margin-bottom: 20px; }
+            .glass-panel { padding: 20px 18px; }
+            .login-heading { margin-bottom: 14px; }
+            .input-box { min-height: 48px; margin-bottom: 11px; }
+            .btn-submit { min-height: 48px; }
+        }
 
         /* ==========================================
            5. 深度强化星空与多尺寸流星
