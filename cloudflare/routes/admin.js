@@ -260,7 +260,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const checkins = await env.DB.prepare(
       `SELECT c.id,c.user_id AS userId,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
               c.submitted_at AS submittedAt,c.review_note AS reviewNote,
-              (SELECT GROUP_CONCAT('/media/' || f.id, '|') FROM checkin_files f
+              (SELECT GROUP_CONCAT('/api/media/' || f.id, '|') FROM checkin_files f
                 WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
          FROM checkins c WHERE c.checkin_date=?1 ORDER BY c.submitted_at`
     ).bind(date).all();
@@ -282,7 +282,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
           })());
         const interactionCheckins = memberCheckins.results
           .filter((item) => item.userId === student.id)
-          .map((item) => ({ ...item, photos: [`/media/${item.id}`], note: item.taskName }));
+          .map((item) => ({ ...item, photos: [`/api/media/${item.id}`], note: item.taskName }));
         return {
           ...student,
           totalCompletedDays: Number(student.totalCompletedDays),
@@ -372,7 +372,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const [checkins, memberCheckins, taskRows] = await Promise.all([
       env.DB.prepare(
         `SELECT c.id,c.slot_id AS slotId,c.note,c.status,c.submitted_at AS submittedAt,
-                (SELECT GROUP_CONCAT('/media/' || f.id, '|') FROM checkin_files f
+                (SELECT GROUP_CONCAT('/api/media/' || f.id, '|') FROM checkin_files f
                   WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
            FROM checkins c WHERE c.user_id=?1 AND c.checkin_date=?2 ORDER BY c.submitted_at`
       ).bind(id, date).all(),
@@ -394,7 +394,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     });
     const interactionCheckins = memberCheckins.results.map((item) => ({
       ...item,
-      photos: [`/media/${item.id}`],
+      photos: [`/api/media/${item.id}`],
       note: item.taskName
     }));
     return json({

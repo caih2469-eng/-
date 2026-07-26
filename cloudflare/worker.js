@@ -153,7 +153,7 @@ const publicImageResponse = async (request, env, ctx, id) => {
 
 const mediaResponse = async (request, env, ctx, id) => {
   const cache = caches.default;
-  const cacheKey = new Request(new URL(request.url).origin + `/media/${encodeURIComponent(id)}`);
+  const cacheKey = new Request(new URL(request.url).origin + `/api/media/${encodeURIComponent(id)}`);
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
@@ -248,7 +248,7 @@ export default {
         if (publicImageMatch && (request.method === 'GET' || request.method === 'HEAD')) {
           return await publicImageResponse(request, env, ctx, decodeURIComponent(publicImageMatch[1]));
         }
-        const mediaMatch = url.pathname.match(/^\/media\/([^/]+)$/);
+        const mediaMatch = url.pathname.match(/^\/api\/media\/([^/]+)$/);
         if (mediaMatch && (request.method === 'GET' || request.method === 'HEAD')) {
           return await mediaResponse(request, env, ctx, decodeURIComponent(mediaMatch[1]));
         }

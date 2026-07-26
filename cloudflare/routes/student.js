@@ -73,7 +73,7 @@ const submissionImages = async (env, submissionId) => {
     `SELECT id, content_type AS contentType, bytes, sort_order AS sortOrder
        FROM task_submission_images WHERE submission_id = ?1 ORDER BY sort_order`
   ).bind(submissionId).all();
-  return results.map((item) => ({ ...item, url: `/media/${item.id}` }));
+  return results.map((item) => ({ ...item, url: `/api/media/${item.id}` }));
 };
 
 export const handleStudentRoutes = async (request, env, ctx, url) => {
@@ -382,9 +382,9 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       const files = await env.DB.prepare(
         'SELECT id,kind,sort_order AS sortOrder FROM checkin_files WHERE checkin_id=?1 ORDER BY kind,sort_order'
       ).bind(item.id).all();
-      item.photos = files.results.filter((file) => file.kind === 'photo').map((file) => `/media/${file.id}`);
+      item.photos = files.results.filter((file) => file.kind === 'photo').map((file) => `/api/media/${file.id}`);
       item.summary = files.results.find((file) => file.kind === 'summary')
-        ? `/media/${files.results.find((file) => file.kind === 'summary').id}` : null;
+        ? `/api/media/${files.results.find((file) => file.kind === 'summary').id}` : null;
     }
     return json({ checkins: results });
   }
