@@ -949,17 +949,17 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
 .meteor-stage { position: absolute; inset: 0; }
 .hero-meteor {
   position: absolute;
-  left: -42vw;
-  top: -18vh;
-  width: min(72vw, 720px);
+  left: 0;
+  top: 0;
+  width: min(48vw, 620px);
   height: 5px;
   border-radius: 999px;
   color: #ffda67;
   background: linear-gradient(90deg, transparent, #f7a53122 22%, #ffc94d99 67%, #fff 96%);
   filter: drop-shadow(0 0 7px #ffd054) drop-shadow(0 0 18px #ff8c34);
-  transform: rotate(27deg);
+  transform: translate(-58vw, -28vh) rotate(38deg);
   transform-origin: right center;
-  animation: hero-meteor-flight 1.5s .2s cubic-bezier(.3,.02,.2,1) forwards;
+  animation: hero-meteor-flight 1.9s .12s cubic-bezier(.32,.02,.24,1) forwards;
 }
 .hero-meteor:before {
   content: "";
@@ -989,17 +989,17 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
 .hero-meteor i:after { right: 38%; width: 58%; transform: translateY(38px); }
 .meteor-impact {
   position: absolute;
-  left: 67%;
-  top: 51%;
+  left: 86%;
+  top: 78%;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #fff;
   opacity: 0;
   box-shadow: 0 0 18px 8px #fff8cf, 0 0 60px 24px #ffbe43, 0 0 140px 55px #ff573a99;
-  animation: meteor-impact 1.45s 1.2s ease-out forwards;
+  animation: meteor-impact 1.25s 1.68s ease-out forwards;
 }
-.meteor-burst, .meteor-dust { position: absolute; left: 67%; top: 51%; }
+.meteor-burst, .meteor-dust { position: absolute; left: 86%; top: 78%; }
 .meteor-burst i, .meteor-dust i {
   --angle: calc(var(--i) * 15deg);
   position: absolute;
@@ -1009,7 +1009,7 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
   background: #fff4b0;
   box-shadow: 0 0 9px #ffb63e;
   opacity: 0;
-  animation: meteor-particle 1.45s calc(1.25s + var(--i) * 8ms) cubic-bezier(.1,.7,.2,1) forwards;
+  animation: meteor-particle 1.25s calc(1.7s + var(--i) * 8ms) cubic-bezier(.1,.7,.2,1) forwards;
 }
 .meteor-dust i {
   --angle: calc(var(--i) * 20deg + 8deg);
@@ -1028,12 +1028,12 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
   isolation: isolate;
   color: #fff;
   background: #f75c6c;
-  clip-path: circle(0 at 67% 51%);
+  clip-path: circle(0 at 86% 78%);
   opacity: 0;
 }
 .meteor-site.revealing {
   opacity: 1;
-  clip-path: circle(150vmax at 67% 51%);
+  clip-path: circle(150vmax at 86% 78%);
   transition: clip-path .9s cubic-bezier(.18,.74,.22,1), opacity .12s linear;
 }
 .fluid-bg { position: absolute; inset: -12%; z-index: -2; filter: blur(68px); transform: translateZ(0); }
@@ -1176,10 +1176,10 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
 .glass-close { width: 44px; height: 44px; padding: 0; border-radius: 50%; color: #fff; background: #ffffff26; font-size: 24px; }
 
 @keyframes hero-meteor-flight {
-  0% { opacity: 0; transform: rotate(27deg) translateX(0) scaleX(.25); }
+  0% { opacity: 0; transform: translate(-58vw, -28vh) rotate(38deg) scaleX(.25); }
   12% { opacity: 1; }
-  78% { opacity: 1; transform: rotate(27deg) translateX(102vw) scaleX(1); }
-  100% { opacity: 0; transform: rotate(27deg) translateX(116vw) scaleX(.4); }
+  78% { opacity: 1; transform: translate(54vw, 50vh) rotate(38deg) scaleX(1); }
+  100% { opacity: 0; transform: translate(70vw, 64vh) rotate(38deg) scaleX(.45); }
 }
 @keyframes meteor-impact {
   0%, 12% { opacity: 0; transform: scale(.2); }
@@ -1202,10 +1202,10 @@ body.poster-mode #app { width: 100%; max-width: none; min-height: 100dvh; paddin
 @keyframes ambient-meteor { from { translate: -25vw -25vh; } to { translate: 145vw 145vh; } }
 
 @media (max-width: 650px) {
-  .hero-meteor { width: 88vw; left: -76vw; top: 3vh; }
-  .meteor-impact, .meteor-burst, .meteor-dust { left: 62%; top: 45%; }
-  .meteor-site { clip-path: circle(0 at 62% 45%); }
-  .meteor-site.revealing { clip-path: circle(150vmax at 62% 45%); }
+  .hero-meteor { width: 50vw; }
+  .meteor-impact, .meteor-burst, .meteor-dust { left: 86%; top: 78%; }
+  .meteor-site { clip-path: circle(0 at 86% 78%); }
+  .meteor-site.revealing { clip-path: circle(150vmax at 86% 78%); }
   .meteor-site-copy { top: 45%; width: calc(100% - 34px); }
   .meteor-eyebrow { max-width: calc(100% - 58px); border-radius: 14px; font-size: 12px; }
   .meteor-site-copy h1 { margin-top: 22px; font-size: clamp(50px, 17vw, 76px); line-height: 1.05; letter-spacing: -.04em; }
