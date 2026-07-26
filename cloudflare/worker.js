@@ -50,11 +50,14 @@ const login = async (request, env) => {
   }
   await env.DB.prepare('DELETE FROM login_attempts WHERE identity_hash=?1').bind(identity).run();
   delete user.passwordHash;
+  const token = await createToken(user, env.SESSION_SECRET);
   return json({
-    token: await createToken(user, env.SESSION_SECRET),
+    token,
     user,
     config: await readConfig(env),
     tracks: TRACKS
+  }, 200, {
+    'set-cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`
   });
 };
 
@@ -150,6 +153,19 @@ export default {
         });
       }
       if (url.pathname === '/api/login' && request.method === 'POST') return await login(request, env);
+      if (url.pathname === '/api/session' && request.method === 'POST') {
+        const auth = await requireUser(request, env);
+        if (auth.error) return auth.error;
+        const token = await createToken(auth.user, env.SESSION_SECRET);
+        return json({ ok: true }, 200, {
+          'set-cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`
+        });
+      }
+      if (url.pathname === '/api/logout' && request.method === 'POST') {
+        return json({ ok: true }, 200, {
+          'set-cookie': 'session_token=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax'
+        });
+      }
       if (url.pathname === '/api/me' && request.method === 'GET') {
         const auth = await requireUser(request, env);
         if (auth.error) return auth.error;
