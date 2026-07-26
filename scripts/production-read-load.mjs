@@ -5,6 +5,9 @@ const studentId = process.env.LOAD_STUDENT_ID;
 const password = process.env.LOAD_PASSWORD;
 const users = Number(process.env.LOAD_USERS || 700);
 const batchSize = Number(process.env.LOAD_BATCH_SIZE || users);
+const filePath = process.env.LOAD_FILE_PATH || '';
+const postId = process.env.LOAD_POST_ID || '';
+const selectedScenarios = new Set((process.env.LOAD_SCENARIOS || '').split(',').map((item) => item.trim()).filter(Boolean));
 const agent = new https.Agent({
   keepAlive: true,
   maxSockets: Math.max(1, batchSize),
@@ -89,6 +92,8 @@ function summarize(name, results) {
 }
 
 const loginBody = JSON.stringify({ studentId, password });
+let seedToken = process.env.LOAD_TOKEN || '';
+if (!seedToken) {
 const seedResult = await new Promise((resolve, reject) => {
   const url = new URL('/api/login', baseUrl);
   const req = https.request(url, {
@@ -112,8 +117,9 @@ const seedResult = await new Promise((resolve, reject) => {
   req.end(loginBody);
 });
 if (seedResult.status < 200 || seedResult.status >= 300) throw new Error(`Seed login failed: ${seedResult.status}`);
-const seed = JSON.parse(seedResult.body);
-const authHeaders = { authorization: `Bearer ${seed.token}` };
+seedToken = JSON.parse(seedResult.body).token;
+}
+const authHeaders = { authorization: `Bearer ${seedToken}` };
 
 const scenarios = [
   ['login', () => request('/api/login', {
@@ -125,6 +131,12 @@ const scenarios = [
   ['plaza', () => request('/api/plaza?page=1&sort=latest', { headers: authHeaders })],
   ['rankings', () => request('/api/rankings?period=daily')],
 ];
+if (filePath) scenarios.push(['privateFile', () => request(filePath, { headers: authHeaders })]);
+if (postId) scenarios.push(['likeIdempotency', () => request(`/api/plaza/${encodeURIComponent(postId)}/like`, {
+  method: 'POST',
+  headers: { ...authHeaders, 'content-type': 'application/json' },
+  body: JSON.stringify({ liked: true }),
+})]);
 
 const report = {
   baseUrl,
@@ -134,7 +146,7 @@ const report = {
   results: [],
 };
 
-for (const [name, factory] of scenarios) {
+for (const [name, factory] of scenarios.filter(([name]) => !selectedScenarios.size || selectedScenarios.has(name))) {
   const started = performance.now();
   const results = await runBatched(factory);
   report.results.push({
