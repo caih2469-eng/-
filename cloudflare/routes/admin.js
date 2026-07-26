@@ -5,6 +5,7 @@ import {
   hashPassword,
   json,
   nowIso,
+  passwordMatches,
   putConfig,
   readConfig,
   readJson,
@@ -98,6 +99,27 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
   if (auth.error) return auth.error;
   const admin = auth.user;
   const route = url.pathname;
+
+  if (route === '/api/admin/password' && request.method === 'PATCH') {
+    const body = await readJson(request);
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+    if (!currentPassword || newPassword.length < 8) {
+      return json({ error: '请输入当前密码，新密码至少需要8位' }, 400);
+    }
+    const account = await env.DB.prepare(
+      'SELECT password_hash AS passwordHash FROM users WHERE id=?1 AND role=\'admin\''
+    ).bind(admin.id).first();
+    if (!account || !await passwordMatches(currentPassword, account.passwordHash)) {
+      return json({ error: '当前密码不正确' }, 403);
+    }
+    await env.DB.batch([
+      env.DB.prepare('UPDATE users SET password_hash=?1 WHERE id=?2')
+        .bind(await hashPassword(newPassword), admin.id),
+      audit(env, admin, 'change_password', 'admin', admin.id)
+    ]);
+    return json({ ok: true });
+  }
 
   if (route === '/api/admin/governance' && request.method === 'GET') {
     await ensureAdminGovernance(env);
