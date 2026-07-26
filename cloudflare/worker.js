@@ -111,11 +111,44 @@ const fileResponse = async (request, env, id) => {
       'content-type': object.httpMetadata?.contentType || file.contentType || 'application/octet-stream',
       'content-length': String(object.size),
       etag: object.httpEtag,
-      'cache-control': 'private, no-store',
+      'cache-control': 'private, max-age=86400, immutable',
       'content-security-policy': "default-src 'none'",
       'x-content-type-options': 'nosniff'
     }
   });
+};
+
+const publicImageResponse = async (request, env, id) => {
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(request.url).origin + `/api/public-images/${encodeURIComponent(id)}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+  const file = await env.DB.prepare(
+    `SELECT COALESCE(v.object_key,i.object_key) AS objectKey,
+            COALESCE(v.content_type,i.content_type) AS contentType
+       FROM task_submission_images i
+       JOIN task_submissions s ON s.id=i.submission_id
+       JOIN plaza_posts p ON p.submission_id=s.id
+       LEFT JOIN image_variants v ON v.source_type='task_submission_image'
+        AND v.source_id=i.id AND v.variant='display'
+      WHERE i.id=?1 AND s.is_public=1 AND p.status='visible'`
+  ).bind(id).first();
+  if (!file) return json({ error: '图片不存在' }, 404);
+  const object = await env.UPLOADS.get(file.objectKey);
+  if (!object) return json({ error: '图片文件不存在' }, 404);
+  const response = new Response(object.body, {
+    headers: {
+      'content-type': object.httpMetadata?.contentType || file.contentType || 'image/jpeg',
+      'content-length': String(object.size),
+      etag: object.httpEtag,
+      'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
+      'cdn-cache-control': 'public, max-age=2592000, stale-while-revalidate=86400',
+      'content-security-policy': "default-src 'none'",
+      'x-content-type-options': 'nosniff'
+    }
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
 };
 
 const materialFileResponse = async (request, env, id) => {
@@ -177,8 +210,12 @@ export default {
           time: shanghaiTime()
         });
       }
-      const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
-      if (fileMatch && request.method === 'GET') return await fileResponse(request, env, decodeURIComponent(fileMatch[1]));
+        const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
+        if (fileMatch && request.method === 'GET') return await fileResponse(request, env, decodeURIComponent(fileMatch[1]));
+        const publicImageMatch = url.pathname.match(/^\/api\/public-images\/([^/]+)$/);
+        if (publicImageMatch && request.method === 'GET') {
+          return await publicImageResponse(request, env, decodeURIComponent(publicImageMatch[1]));
+        }
       const materialFileMatch = url.pathname.match(/^\/api\/material-files\/([^/]+)$/);
       if (materialFileMatch && request.method === 'GET') {
         return await materialFileResponse(request, env, decodeURIComponent(materialFileMatch[1]));

@@ -87,25 +87,29 @@ const escapeHtml = (value) =>
     "'": '&#39;'
   })[character]);
 
-const compressImage = (file) => new Promise((resolve, reject) => {
+const compressImage = (file, options = {}) => new Promise((resolve, reject) => {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return reject(new Error('仅支持 JPG、PNG、WebP 图片'));
-  if (file.size > 12 * 1024 * 1024) return reject(new Error('原图不能超过 12MB'));
+  if (file.size > 5 * 1024 * 1024) return reject(new Error('图片大小超过5MB，请压缩后重新上传。'));
   const image = new Image();
   const url = URL.createObjectURL(file);
   image.onload = () => {
-    const scale = Math.min(1, 1920 / Math.max(image.width, image.height));
+    const maxEdge = Number(options.maxEdge || 2400);
+    const quality = Number(options.quality || 0.9);
+    const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(image.width * scale));
     canvas.height = Math.max(1, Math.round(image.height * scale));
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(url);
-    resolve(canvas.toDataURL('image/jpeg', 0.82));
+    resolve(canvas.toDataURL('image/jpeg', quality));
   };
   image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片无法读取')); };
   image.src = url;
 });
 
-const readFiles = async (files) => Promise.all([...files].map(compressImage));
+const readFiles = async (files, options = {}) =>
+  Promise.all([...files].map((file) => compressImage(file, options)));
+const readDisplayFiles = async (files) => readFiles(files, { maxEdge: 1200, quality: 0.84 });
 const renderPreviews = (container, images) => {
   container.innerHTML = images.map((src, index) => `<figure><img src="${src}" alt="待上传图片 ${index + 1}"><figcaption>第 ${index + 1} 张</figcaption></figure>`).join('');
 };
@@ -306,6 +310,7 @@ async function student(me) {
       <button data-jump="${isInteraction ? 'activityTasks' : 'historyRecords'}"><span>✓</span><strong>我的打卡</strong><small>${completedTasks} 项已完成</small></button>
       <button id="plaza"><span>▦</span><strong>活动广场</strong><small>发现青春作品</small></button>
       <button data-jump="myTeam" ${isInteraction ? '' : 'disabled'}><span>♢</span><strong>我的队伍</strong><small>${isInteraction ? (myTeam ? escapeHtml(myTeam.name) : '等待编队') : '仅互动赛道'}</small></button>
+      <button id="inbox"><span>✉</span><strong>信息箱</strong><small>评论与系统通知</small></button>
     </nav>
     <div class="student-top-actions">
       <button class="secondary" id="ranking">查看排行榜</button>
@@ -377,6 +382,7 @@ async function student(me) {
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
+  document.querySelector('#inbox').onclick = () => inbox();
   if (document.querySelector('#createAdmin')) {
     document.querySelector('#createAdmin').onsubmit = async (event) => {
       event.preventDefault();
@@ -504,6 +510,7 @@ function taskSubmissionForm(task) {
     try {
       if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
       form._images = await readFiles(form.images.files);
+      form._displayImages = await readDisplayFiles(form.images.files);
       renderPreviews(document.querySelector('#taskPreview'), form._images);
     } catch (error) { alert(error.message); form.images.value = ''; }
   };
@@ -516,6 +523,8 @@ function taskSubmissionForm(task) {
       try {
         if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
         const images = form.images.files.length ? (form._images || await readFiles(form.images.files)) : [];
+        const displayImages = form.images.files.length
+          ? (form._displayImages || await readDisplayFiles(form.images.files)) : [];
         const result = await api(`/api/tasks/${task.id}/submission`, {
           method: 'PUT',
           body: JSON.stringify({
@@ -523,6 +532,7 @@ function taskSubmissionForm(task) {
             version: current?.version || 0,
             occurrenceDate: task.occurrenceDate,
             images,
+            displayImages,
             copy: form.copy.value,
             plazaCopy: form.plazaCopy?.value || '',
             mealType: form.mealType?.value,
@@ -536,17 +546,54 @@ function taskSubmissionForm(task) {
   });
 }
 
+async function inbox(page = 1) {
+  const result = await api(`/api/inbox?page=${page}&limit=20`);
+  app.innerHTML = `
+    <header class="hero"><div class="row"><div><h1>个人信息箱</h1><p>评论提醒、系统通知和管理员通知</p></div><button class="secondary right" id="backInbox">返回</button></div></header>
+    <section class="card"><div class="row"><h2>消息</h2><span class="pill ${result.unread ? 'pending' : 'done'}">未读 ${result.unread}</span><button class="secondary right" id="readAll">全部已读</button></div>
+      <div class="notification-list">${result.notifications.map((notice) => `
+        <button class="notification-item ${notice.isRead ? '' : 'unread'}" data-notice="${notice.id}" data-post="${notice.postId || ''}">
+          <span class="notification-avatar">${escapeHtml((notice.actorName || '系统').slice(-1))}</span>
+          <span><strong>${escapeHtml(notice.actorName || (notice.type === 'admin' ? '管理员' : '系统通知'))}</strong>
+          <small>${formatDate(notice.createdAt)}</small><p>${escapeHtml(notice.content)}</p></span>
+        </button>`).join('') || '<p class="muted">暂无消息</p>'}</div>
+      <div class="row plaza-pager"><button class="secondary" id="prevInbox" ${page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${page} 页</span><button class="secondary" id="nextInbox" ${!result.hasMore ? 'disabled' : ''}>下一页</button></div>
+    </section><div id="modalRoot"></div>`;
+  document.querySelector('#backInbox').onclick = home;
+  document.querySelector('#readAll').onclick = async () => { await api('/api/inbox', { method: 'PATCH', body: '{}' }); inbox(page); };
+  document.querySelector('#prevInbox').onclick = () => inbox(page - 1);
+  document.querySelector('#nextInbox').onclick = () => inbox(page + 1);
+  document.querySelectorAll('[data-notice]').forEach((item) => {
+    item.onclick = async () => {
+      await api('/api/inbox', { method: 'PATCH', body: JSON.stringify({ id: item.dataset.notice }) });
+      if (item.dataset.post) {
+        await plaza();
+        openPlazaPost(item.dataset.post, 'latest', 1, '', true);
+      } else inbox(page);
+    };
+  });
+}
+
 async function plaza(sort = 'latest', page = 1, month = '') {
-  const result = await api(`/api/plaza?sort=${sort}&page=${page}&limit=6${month ? `&month=${month}` : ''}`);
+  const result = await api(`/api/plaza?sort=${sort}&page=${page}&limit=20${month ? `&month=${month}` : ''}`);
   const cards = result.posts.map((post) => `
     <article class="plaza-card" data-post="${post.id}">
-      <img loading="lazy" src="${escapeHtml(post.images[0] || '')}" alt="${escapeHtml(post.teamName)}活动图片">
+      <div class="image-shell">
+        ${post.images[0]
+          ? `<img loading="lazy" decoding="async" src="${escapeHtml(post.images[0].displayUrl)}"
+              alt="${escapeHtml(post.teamName)}活动图片"
+              onload="this.parentElement.classList.add('loaded')"
+              onerror="this.hidden=true;this.parentElement.classList.add('failed')">`
+          : '<span class="image-fallback">暂无图片</span>'}
+        <span class="image-error">图片加载失败</span>
+      </div>
       <div class="plaza-body">
         <span class="eyebrow dark">${escapeHtml(post.taskName)}</span>
         <h2>${escapeHtml(post.teamName)}</h2>
+        <p class="muted">发布人：${escapeHtml(post.publisherName)}</p>
         <p class="muted">${post.members.map((member) => escapeHtml(member.name)).join('、')}</p>
         <p>${escapeHtml(post.copy)}</p>
-        <div class="row muted"><span>${formatDate(post.publishedAt)}</span><span class="right">浏览 ${post.viewCount}　点赞 ${post.likeCount}</span></div>
+        <div class="row muted"><span>${formatDate(post.publishedAt)}</span><span class="right">浏览 ${post.viewCount}　点赞 ${post.likeCount}　评论 ${post.commentCount}</span></div>
       </div>
     </article>`).join('');
   app.innerHTML = `
@@ -619,19 +666,88 @@ async function rankings(period = 'day', key = '') {
 
 async function openPlazaPost(postId, sort, page, month, countView = true) {
   if (countView) await api(`/api/plaza/${postId}/view`, { method: 'POST' });
-  const { post } = await api(`/api/plaza/${postId}`);
+  const [{ post }, commentResult] = await Promise.all([
+    api(`/api/plaza/${postId}`),
+    api(`/api/plaza/${postId}/comments?page=1&limit=10`)
+  ]);
   const root = document.querySelector('#modalRoot');
+  const commentsHtml = commentResult.comments.map((comment) => `
+    <article class="comment-item" data-comment="${comment.id}">
+      <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
+      <p>${escapeHtml(comment.content)}</p>
+      ${comment.canDelete ? '<button class="link-button delete-comment">删除</button>' : ''}
+    </article>`).join('');
   root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail">
     <div class="row"><div><span class="eyebrow dark">${escapeHtml(post.taskName)}</span><h2>${escapeHtml(post.teamName)}</h2></div><button class="secondary right" id="closePost">关闭</button></div>
     <p class="muted">成员：${post.members.map((member) => `${escapeHtml(member.name)}（${escapeHtml(member.campus)}）`).join('、')}</p>
-    <div class="plaza-photos">${post.images.map((url) => `<img loading="lazy" src="${escapeHtml(url)}" alt="活动图片">`).join('')}</div>
+    <div class="plaza-photos">${post.images.map((image) => `
+      <a href="${escapeHtml(image.highUrl)}" target="_blank" rel="noopener">
+        <div class="image-shell">
+          <img loading="lazy" decoding="async" src="${escapeHtml(image.displayUrl)}" alt="活动图片"
+            onload="this.parentElement.classList.add('loaded')"
+            onerror="this.hidden=true;this.parentElement.classList.add('failed')">
+          <span class="image-error">图片加载失败</span>
+        </div>
+      </a>`).join('')}</div>
     <p>${escapeHtml(post.copy)}</p>
-    <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 ${post.viewCount} · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} ${post.likeCount}</button></div>
+    <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 ${post.viewCount} · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span></button></div>
+    <section class="comments-panel">
+      <h3>评论 <span id="commentCount">${post.commentCount}</span></h3>
+      <form id="commentForm"><textarea name="content" maxlength="500" required placeholder="写下你的评论（最多500字）"></textarea><button>发布评论</button></form>
+      <div id="commentList">${commentsHtml || '<p class="muted empty-comments">还没有评论</p>'}</div>
+      ${commentResult.hasMore ? '<button class="secondary" id="moreComments">加载更多评论</button>' : ''}
+    </section>
   </section></div>`;
   document.querySelector('#closePost').onclick = () => plaza(sort, page, month);
   document.querySelector('#likePost').onclick = async () => {
-    await api(`/api/plaza/${postId}/like`, { method: 'POST', body: JSON.stringify({ liked: !post.liked }) });
-    openPlazaPost(postId, sort, page, month, false);
+    const result = await api(`/api/plaza/${postId}/like`, { method: 'POST', body: JSON.stringify({ liked: !post.liked }) });
+    post.liked = result.liked;
+    post.likeCount += result.liked ? 1 : -1;
+    document.querySelector('#likeCount').textContent = post.likeCount;
+    document.querySelector('#likePost').classList.toggle('secondary', !post.liked);
+    document.querySelector('#likePost').childNodes[0].textContent = post.liked ? '取消点赞 ' : '点赞 ';
+  };
+  const bindDeleteComments = () => document.querySelectorAll('.delete-comment').forEach((button) => {
+    button.onclick = async () => {
+      const item = button.closest('[data-comment]');
+      await api(`/api/plaza/${postId}/comments/${item.dataset.comment}`, { method: 'DELETE' });
+      item.remove();
+      post.commentCount = Math.max(0, post.commentCount - 1);
+      document.querySelector('#commentCount').textContent = post.commentCount;
+    };
+  });
+  bindDeleteComments();
+  document.querySelector('#commentForm').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const result = await api(`/api/plaza/${postId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ content: form.content.value })
+    });
+    document.querySelector('.empty-comments')?.remove();
+    document.querySelector('#commentList').insertAdjacentHTML('afterbegin', `
+      <article class="comment-item" data-comment="${result.comment.id}">
+        <div><strong>${escapeHtml(result.comment.name)}</strong><span class="muted">${formatDate(result.comment.createdAt)}</span></div>
+        <p>${escapeHtml(result.comment.content)}</p><button class="link-button delete-comment">删除</button>
+      </article>`);
+    document.querySelector('#commentCount').textContent = result.commentCount;
+    post.commentCount = result.commentCount;
+    form.reset();
+    bindDeleteComments();
+  };
+  let commentPage = 1;
+  const moreComments = document.querySelector('#moreComments');
+  if (moreComments) moreComments.onclick = async () => {
+    commentPage += 1;
+    const next = await api(`/api/plaza/${postId}/comments?page=${commentPage}&limit=10`);
+    document.querySelector('#commentList').insertAdjacentHTML('beforeend', next.comments.map((comment) => `
+      <article class="comment-item" data-comment="${comment.id}">
+        <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
+        <p>${escapeHtml(comment.content)}</p>
+        ${comment.canDelete ? '<button class="link-button delete-comment">删除</button>' : ''}
+      </article>`).join(''));
+    moreComments.hidden = !next.hasMore;
+    bindDeleteComments();
   };
 }
 
@@ -665,6 +781,31 @@ function checkinForm(slotId) {
       alert(error.message);
     }
   };
+}
+
+async function adminComments(page = 1) {
+  const result = await api(`/api/admin/comments?page=${page}&limit=20`);
+  app.innerHTML = `
+    <header class="hero"><div class="row"><div><h1>评论管理</h1><p>管理员可查看并删除活动广场中的违规评论</p></div><button class="secondary right" id="backComments">返回后台</button></div></header>
+    <section class="card"><div class="admin-comment-list">${result.comments.map((comment) => `
+      <article class="comment-item" data-comment="${comment.id}">
+        <div class="row"><strong>${escapeHtml(comment.userName)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
+        <p>${escapeHtml(comment.content)}</p>
+        <div class="row"><span class="muted">所属队伍：${escapeHtml(comment.teamName)}</span><button class="danger right delete-admin-comment">删除评论</button></div>
+      </article>`).join('') || '<p class="muted">暂无评论</p>'}</div>
+      <div class="row plaza-pager"><button class="secondary" id="prevAdminComments" ${page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${page} 页</span><button class="secondary" id="nextAdminComments" ${!result.hasMore ? 'disabled' : ''}>下一页</button></div>
+    </section>`;
+  document.querySelector('#backComments').onclick = () => admin();
+  document.querySelector('#prevAdminComments').onclick = () => adminComments(page - 1);
+  document.querySelector('#nextAdminComments').onclick = () => adminComments(page + 1);
+  document.querySelectorAll('.delete-admin-comment').forEach((button) => {
+    button.onclick = async () => {
+      const item = button.closest('[data-comment]');
+      if (!await askConfirm('是否删除该评论？', '删除后活动广场会立即同步，且无法恢复。')) return;
+      await api(`/api/admin/comments/${item.dataset.comment}`, { method: 'DELETE' });
+      item.remove();
+    };
+  });
 }
 
 async function admin(selectedDate) {
@@ -757,7 +898,7 @@ async function admin(selectedDate) {
 
   app.innerHTML = `
     <header class="hero">
-      <div class="row"><div><h1>活动管理后台</h1><div>${escapeHtml(config.activityName)}</div></div><button class="secondary right" id="ranking">排行榜</button><button class="secondary" id="plaza">活动广场</button><button class="secondary" id="out">退出</button></div>
+      <div class="row"><div><h1>活动管理后台</h1><div>${escapeHtml(config.activityName)}</div></div><button class="secondary right" id="ranking">排行榜</button><button class="secondary" id="plaza">活动广场</button><button class="secondary" id="commentAdmin">评论管理</button><button class="secondary" id="out">退出</button></div>
     </header>
     <section class="metric-grid">
       ${[['用户数量',overview.userCount],['队伍数量',overview.teamCount],['今日提交',overview.todaySubmissions],['公开帖子',overview.publicPostCount],['点赞数量',overview.likeCount],['浏览数量',overview.viewCount]].map(([label,value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`).join('')}
@@ -932,6 +1073,7 @@ async function admin(selectedDate) {
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
+  document.querySelector('#commentAdmin').onclick = () => adminComments();
   document.querySelector('#changeAdminPassword').onsubmit = async (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.target));
