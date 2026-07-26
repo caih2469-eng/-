@@ -16,7 +16,7 @@ window.addEventListener('scroll', () => {
   scrollSaveTimer = setTimeout(() => { sessionStorage.adminScrollY = String(window.scrollY); }, 80);
 }, { passive: true });
 
-const labelMobileTables = () => {
+const prepareDynamicContent = () => {
   document.querySelectorAll('table').forEach((table) => {
     if (table.dataset.mobileReady) return;
     const labels = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
@@ -27,9 +27,37 @@ const labelMobileTables = () => {
     });
     table.dataset.mobileReady = 'true';
   });
+  document.querySelectorAll('img').forEach((image) => {
+    image.loading = image.dataset.priority === 'high' ? 'eager' : 'lazy';
+    image.decoding = 'async';
+    if (image.dataset.priority === 'high') image.fetchPriority = 'high';
+  });
 };
-new MutationObserver(() => requestAnimationFrame(labelMobileTables))
+new MutationObserver(() => requestAnimationFrame(prepareDynamicContent))
   .observe(app, { childList: true, subtree: true });
+
+const openImageViewer = (src, alt = '查看图片') => {
+  const viewer = document.createElement('div');
+  viewer.className = 'image-viewer';
+  viewer.setAttribute('role', 'dialog');
+  viewer.setAttribute('aria-modal', 'true');
+  viewer.innerHTML = `
+    <header><button class="image-viewer-back" aria-label="返回上一级">‹ 返回</button><strong>${escapeHtml(alt)}</strong></header>
+    <div class="image-viewer-stage"><div class="image-shell"><img decoding="async" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"
+      onload="this.parentElement.classList.add('loaded')" onerror="this.hidden=true;this.parentElement.classList.add('failed')"><span class="image-error">图片加载失败</span></div></div>`;
+  document.body.appendChild(viewer);
+  const close = () => viewer.remove();
+  viewer.querySelector('.image-viewer-back').onclick = close;
+  viewer.querySelector('.image-viewer-stage').onclick = close;
+};
+
+app.addEventListener('click', (event) => {
+  const trigger = event.target.closest('[data-image-viewer]');
+  if (!trigger) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openImageViewer(trigger.dataset.imageViewer, trigger.dataset.imageAlt || '查看图片');
+});
 
 const openDialog = ({ title, message = '', input = false, inputLabel = '', value = '', danger = false,
   cancelText = '取消', confirmText = '确定', notice = false }) => new Promise((resolve) => {
@@ -93,15 +121,24 @@ const compressImage = (file, options = {}) => new Promise((resolve, reject) => {
   const image = new Image();
   const url = URL.createObjectURL(file);
   image.onload = () => {
-    const maxEdge = Number(options.maxEdge || 2400);
-    const quality = Number(options.quality || 0.9);
+    const maxEdge = Math.min(1200, Number(options.maxEdge || 1200));
     const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(image.width * scale));
     canvas.height = Math.max(1, Math.round(image.height * scale));
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(url);
-    resolve(canvas.toDataURL('image/jpeg', quality));
+    let output = canvas.toDataURL('image/webp', Number(options.quality || 0.82));
+    if (output.length > 1_100_000) output = canvas.toDataURL('image/webp', 0.72);
+    if (output.length > 1_100_000 && Math.max(canvas.width, canvas.height) > 960) {
+      const reduced = document.createElement('canvas');
+      const reducedScale = 960 / Math.max(canvas.width, canvas.height);
+      reduced.width = Math.max(1, Math.round(canvas.width * reducedScale));
+      reduced.height = Math.max(1, Math.round(canvas.height * reducedScale));
+      reduced.getContext('2d').drawImage(canvas, 0, 0, reduced.width, reduced.height);
+      output = reduced.toDataURL('image/webp', 0.76);
+    }
+    resolve(output);
   };
   image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片无法读取')); };
   image.src = url;
@@ -109,9 +146,8 @@ const compressImage = (file, options = {}) => new Promise((resolve, reject) => {
 
 const readFiles = async (files, options = {}) =>
   Promise.all([...files].map((file) => compressImage(file, options)));
-const readDisplayFiles = async (files) => readFiles(files, { maxEdge: 1200, quality: 0.84 });
 const renderPreviews = (container, images) => {
-  container.innerHTML = images.map((src, index) => `<figure><img src="${src}" alt="待上传图片 ${index + 1}"><figcaption>第 ${index + 1} 张</figcaption></figure>`).join('');
+  container.innerHTML = images.map((src, index) => `<figure><img loading="lazy" decoding="async" src="${src}" alt="待上传图片 ${index + 1}"><figcaption>第 ${index + 1} 张</figcaption></figure>`).join('');
 };
 const readRawFile = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -510,7 +546,6 @@ function taskSubmissionForm(task) {
     try {
       if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
       form._images = await readFiles(form.images.files);
-      form._displayImages = await readDisplayFiles(form.images.files);
       renderPreviews(document.querySelector('#taskPreview'), form._images);
     } catch (error) { alert(error.message); form.images.value = ''; }
   };
@@ -523,8 +558,6 @@ function taskSubmissionForm(task) {
       try {
         if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
         const images = form.images.files.length ? (form._images || await readFiles(form.images.files)) : [];
-        const displayImages = form.images.files.length
-          ? (form._displayImages || await readDisplayFiles(form.images.files)) : [];
         const result = await api(`/api/tasks/${task.id}/submission`, {
           method: 'PUT',
           body: JSON.stringify({
@@ -532,7 +565,6 @@ function taskSubmissionForm(task) {
             version: current?.version || 0,
             occurrenceDate: task.occurrenceDate,
             images,
-            displayImages,
             copy: form.copy.value,
             plazaCopy: form.plazaCopy?.value || '',
             mealType: form.mealType?.value,
@@ -681,14 +713,14 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
     <div class="row"><div><span class="eyebrow dark">${escapeHtml(post.taskName)}</span><h2>${escapeHtml(post.teamName)}</h2></div><button class="secondary right" id="closePost">关闭</button></div>
     <p class="muted">成员：${post.members.map((member) => `${escapeHtml(member.name)}（${escapeHtml(member.campus)}）`).join('、')}</p>
     <div class="plaza-photos">${post.images.map((image) => `
-      <a href="${escapeHtml(image.highUrl)}" target="_blank" rel="noopener">
+      <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.highUrl)}" data-image-alt="活动图片">
         <div class="image-shell">
           <img loading="lazy" decoding="async" src="${escapeHtml(image.displayUrl)}" alt="活动图片"
             onload="this.parentElement.classList.add('loaded')"
             onerror="this.hidden=true;this.parentElement.classList.add('failed')">
           <span class="image-error">图片加载失败</span>
         </div>
-      </a>`).join('')}</div>
+      </button>`).join('')}</div>
     <p>${escapeHtml(post.copy)}</p>
     <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 ${post.viewCount} · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span></button></div>
     <section class="comments-panel">
@@ -1479,13 +1511,13 @@ function openAdminUserDrawer(studentUser, dashboardUser, teams, date, tasks = []
     return `<article class="meal-status-card ${checkin ? 'completed' : 'missing'}">
       <div class="row"><strong>${escapeHtml(slot.label)}</strong><span class="pill ${checkin ? 'done' : ''}">${checkin ? '已提交' : '未提交'}</span></div>
       <small>${escapeHtml(slot.start)}–${escapeHtml(slot.end)}${checkin ? ` · ${escapeHtml(formatDate(checkin.submittedAt))}` : ''}</small>
-      ${checkin?.photos?.length ? `<div class="drawer-photo-grid compact">${checkin.photos.map((url) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="${escapeHtml(slot.label)}图片"></a>`).join('')}</div>` : ''}
+            ${checkin?.photos?.length ? `<div class="drawer-photo-grid compact">${checkin.photos.map((url, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(url)}" data-image-alt="${escapeHtml(slot.label)}图片"><img src="${escapeHtml(url)}" data-priority="${index === 0 ? 'high' : ''}" loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(slot.label)}图片"></button>`).join('')}</div>` : ''}
       ${checkin?.note ? `<p>${escapeHtml(checkin.note)}</p>` : ''}
     </article>`;
   }).join('') : (dashboardUser?.interactionCheckins || []).map((checkin) => `
     <article class="meal-status-card completed"><div class="row"><strong>${escapeHtml(checkin.taskName)}</strong><span class="pill done">已提交</span></div>
       <small>${escapeHtml(formatDate(checkin.submittedAt))}</small>
-      <div class="drawer-photo-grid compact">${checkin.photos.map((url) => `<a href="${escapeHtml(url)}" target="_blank"><img src="${escapeHtml(url)}" loading="lazy" alt="活动打卡图片"></a>`).join('')}</div>
+            <div class="drawer-photo-grid compact">${checkin.photos.map((url, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(url)}" data-image-alt="活动打卡图片"><img src="${escapeHtml(url)}" data-priority="${index === 0 ? 'high' : ''}" loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="活动打卡图片"></button>`).join('')}</div>
     </article>`).join('') || '<p class="muted">当日暂无提交</p>';
   root.innerHTML = `<div class="drawer-backdrop" id="userDrawerBackdrop">
     <section class="bottom-drawer" role="dialog" aria-modal="true" aria-labelledby="userDrawerTitle">
@@ -1727,7 +1759,7 @@ function reviewCheckin(students, checkinId, date) {
     <div class="modal-backdrop">
       <section class="card modal">
         <div class="row"><h2>审核材料</h2><button class="secondary right" id="closeReview">关闭</button></div>
-        <div class="photos">${checkin.photos.map((photo) => `<a href="${photo}" target="_blank"><img loading="lazy" src="${photo}" alt="打卡截图"></a>`).join('')}${checkin.summary ? `<a href="${checkin.summary}" target="_blank"><img loading="lazy" src="${checkin.summary}" alt="汇总截图"></a>` : ''}</div>
+    <div class="photos">${checkin.photos.map((photo, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(photo)}" data-image-alt="打卡截图"><img loading="${index === 0 ? 'eager' : 'lazy'}" data-priority="${index === 0 ? 'high' : ''}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" src="${escapeHtml(photo)}" alt="打卡截图"></button>`).join('')}${checkin.summary ? `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(checkin.summary)}" data-image-alt="汇总截图"><img loading="lazy" decoding="async" src="${escapeHtml(checkin.summary)}" alt="汇总截图"></button>` : ''}</div>
         <p>${escapeHtml(checkin.note || '无备注')}</p>
         <button id="approve">通过</button> <button class="danger" id="reject">驳回</button>
       </section>
