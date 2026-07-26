@@ -151,6 +151,38 @@ const publicImageResponse = async (request, env, ctx, id) => {
   return response;
 };
 
+const mediaResponse = async (request, env, ctx, id) => {
+  const cache = caches.default;
+  const cacheKey = new Request(new URL(request.url).origin + `/media/${encodeURIComponent(id)}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const file = await env.DB.prepare(
+    `SELECT object_key AS objectKey,content_type AS contentType FROM checkin_files WHERE id=?1
+     UNION ALL
+     SELECT object_key AS objectKey,content_type AS contentType FROM task_submission_images WHERE id=?1
+     UNION ALL
+     SELECT object_key AS objectKey,content_type AS contentType FROM member_checkins WHERE id=?1
+     LIMIT 1`
+  ).bind(id).first();
+  if (!file) return json({ error: '图片不存在' }, 404);
+  const object = await env.UPLOADS.get(file.objectKey);
+  if (!object) return json({ error: '图片文件不存在' }, 404);
+  const response = new Response(object.body, {
+    headers: {
+      'content-type': object.httpMetadata?.contentType || file.contentType || 'image/webp',
+      'content-length': String(object.size),
+      etag: object.httpEtag,
+      'cache-control': 'public, max-age=31536000, immutable',
+      'cdn-cache-control': 'public, max-age=31536000, immutable',
+      'content-security-policy': "default-src 'none'",
+      'x-content-type-options': 'nosniff'
+    }
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+};
+
 const materialFileResponse = async (request, env, id) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
@@ -215,6 +247,10 @@ export default {
         const publicImageMatch = url.pathname.match(/^\/api\/public-images\/([^/]+)$/);
         if (publicImageMatch && (request.method === 'GET' || request.method === 'HEAD')) {
           return await publicImageResponse(request, env, ctx, decodeURIComponent(publicImageMatch[1]));
+        }
+        const mediaMatch = url.pathname.match(/^\/media\/([^/]+)$/);
+        if (mediaMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+          return await mediaResponse(request, env, ctx, decodeURIComponent(mediaMatch[1]));
         }
       const materialFileMatch = url.pathname.match(/^\/api\/material-files\/([^/]+)$/);
       if (materialFileMatch && request.method === 'GET') {

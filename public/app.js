@@ -128,15 +128,15 @@ const compressImage = (file, options = {}) => new Promise((resolve, reject) => {
     canvas.height = Math.max(1, Math.round(image.height * scale));
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
     URL.revokeObjectURL(url);
-    let output = canvas.toDataURL('image/webp', Number(options.quality || 0.82));
-    if (output.length > 1_100_000) output = canvas.toDataURL('image/webp', 0.72);
-    if (output.length > 1_100_000 && Math.max(canvas.width, canvas.height) > 960) {
+    let output = canvas.toDataURL('image/webp', Number(options.quality || 0.8));
+    if (output.length > 700_000) output = canvas.toDataURL('image/webp', 0.74);
+    if (output.length > 700_000 && Math.max(canvas.width, canvas.height) > 960) {
       const reduced = document.createElement('canvas');
       const reducedScale = 960 / Math.max(canvas.width, canvas.height);
       reduced.width = Math.max(1, Math.round(canvas.width * reducedScale));
       reduced.height = Math.max(1, Math.round(canvas.height * reducedScale));
       reduced.getContext('2d').drawImage(canvas, 0, 0, reduced.width, reduced.height);
-      output = reduced.toDataURL('image/webp', 0.76);
+      output = reduced.toDataURL('image/webp', 0.78);
     }
     resolve(output);
   };
@@ -607,6 +607,12 @@ async function inbox(page = 1) {
 }
 
 async function plaza(sort = 'latest', page = 1, month = '') {
+  if (!document.querySelector('.plaza-grid')) {
+    app.innerHTML = `
+      <header class="hero"><div class="row"><div><h1>四校区活动广场</h1><p>内容仅来自公开的四校区任务提交</p></div><button class="secondary right" id="backHome">返回</button></div></header>
+      <section class="plaza-grid"><div class="card muted">正在读取第一屏内容…</div></section>`;
+    document.querySelector('#backHome').onclick = home;
+  }
   const result = await api(`/api/plaza?sort=${sort}&page=${page}&limit=20${month ? `&month=${month}` : ''}`);
   const cards = result.posts.map((post) => `
     <article class="plaza-card" data-post="${post.id}">
@@ -697,7 +703,7 @@ async function rankings(period = 'day', key = '') {
 }
 
 async function openPlazaPost(postId, sort, page, month, countView = true) {
-  if (countView) await api(`/api/plaza/${postId}/view`, { method: 'POST' });
+  if (countView) void api(`/api/plaza/${postId}/view`, { method: 'POST' }).catch(() => {});
   const [{ post }, commentResult] = await Promise.all([
     api(`/api/plaza/${postId}`),
     api(`/api/plaza/${postId}/comments?page=1&limit=10`)
@@ -841,6 +847,107 @@ async function adminComments(page = 1) {
 }
 
 async function admin(selectedDate) {
+  document.body.dataset.view = 'admin';
+  const date = selectedDate || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const [overview, userResult] = await Promise.all([
+    api('/api/admin/overview'),
+    api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`)
+  ]);
+  const users = userResult.users;
+  const userTiles = users.map((studentUser, index) => `
+    <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">
+      <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
+      <strong>${escapeHtml(studentUser.name)}</strong>
+      <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
+      <small>累计完成 ${Number(studentUser.totalCompletedDays || 0)} 天</small>
+    </button>`).join('');
+  const completed = users.filter((item) => item.completed).length;
+  app.innerHTML = `
+    <header class="hero">
+      <div class="row"><div><h1>活动管理后台</h1><div>${escapeHtml(config.activityName)}</div></div>
+        <button class="secondary right" id="ranking">排行榜</button>
+        <button class="secondary" id="plaza">活动广场</button>
+        <button class="secondary" id="adminTools">管理工具</button>
+        <button class="secondary" id="out">退出</button>
+      </div>
+    </header>
+    <section class="metric-grid">
+      ${[['用户数量',overview.userCount],['队伍数量',overview.teamCount],['今日提交',overview.todaySubmissions],['公开帖子',overview.publicPostCount],['点赞数量',overview.likeCount],['浏览数量',overview.viewCount]].map(([label,value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`).join('')}
+    </section>
+    <section class="card admin-user-section">
+      <div class="row completion-heading">
+        <div><h2>每日完成情况</h2><p class="muted">点击姓名查看当日记录；图片会在详情打开后提前缓存。</p></div>
+        <label class="right">日期 <input id="date" type="date" value="${date}"></label>
+        <button class="secondary" id="reload">查询</button>
+      </div>
+      <div class="completion-summary-grid">
+        <button class="completion-summary active"><span>当前列表完成情况</span><strong>${completed}/${users.length}</strong></button>
+        <button class="completion-summary ${adminCompletionTrack === 'interaction' ? 'active' : ''}" data-track="interaction"><span>廿载同心</span><strong>查看</strong></button>
+        <button class="completion-summary ${adminCompletionTrack === 'health' ? 'active' : ''}" data-track="health"><span>食光有约</span><strong>查看</strong></button>
+      </div>
+      <div class="row completion-list-heading"><strong>${adminCompletionTrack === 'interaction' ? '廿载同心' : adminCompletionTrack === 'health' ? '食光有约' : '全部赛道'}用户</strong><span class="right muted">共 ${userResult.total} 人</span></div>
+      <form id="adminUserSearch" class="user-list-toolbar">
+        <input name="query" value="${escapeHtml(adminUserQuery)}" placeholder="搜索姓名或学号" aria-label="搜索姓名或学号">
+        <button>搜索</button>
+      </form>
+      <div class="user-filter-tabs" role="group" aria-label="完成状态筛选">
+        ${[['all','全部用户'],['completed','已完成'],['missing','未完成']].map(([value,label]) =>
+          `<button class="secondary user-filter ${adminUserFilter === value ? 'active' : ''}" data-filter="${value}">${label}</button>`).join('')}
+      </div>
+      <div class="admin-user-grid">${userTiles || '<p class="muted">没有符合条件的用户</p>'}</div>
+      <div class="user-pagination">
+        <button class="secondary" id="adminUserPrev" ${userResult.page <= 1 ? 'disabled' : ''}>上一页</button>
+        <span>第 ${userResult.page} / ${Math.max(1, Math.ceil(userResult.total / userResult.limit))} 页</span>
+        <button class="secondary" id="adminUserNext" ${userResult.page * userResult.limit >= userResult.total ? 'disabled' : ''}>下一页</button>
+      </div>
+    </section>
+    <div id="modalRoot"></div>`;
+  document.querySelector('#out').onclick = logout;
+  document.querySelector('#ranking').onclick = () => rankings();
+  document.querySelector('#plaza').onclick = () => plaza();
+  document.querySelector('#adminTools').onclick = () => adminFull(date);
+  document.querySelector('#reload').onclick = () => admin(document.querySelector('#date').value);
+  document.querySelectorAll('[data-track]').forEach((button) => {
+    button.onclick = () => {
+      adminCompletionTrack = button.dataset.track;
+      adminUserPage = 1;
+      sessionStorage.adminCompletionTrack = adminCompletionTrack;
+      admin(date);
+    };
+  });
+  document.querySelector('#adminUserSearch').onsubmit = (event) => {
+    event.preventDefault();
+    adminUserQuery = new FormData(event.target).get('query').trim();
+    adminUserPage = 1;
+    sessionStorage.adminUserQuery = adminUserQuery;
+    admin(date);
+  };
+  document.querySelectorAll('.user-filter').forEach((button) => {
+    button.onclick = () => {
+      adminUserFilter = button.dataset.filter;
+      adminUserPage = 1;
+      sessionStorage.adminUserFilter = adminUserFilter;
+      admin(date);
+    };
+  });
+  document.querySelector('#adminUserPrev').onclick = () => {
+    adminUserPage = Math.max(1, adminUserPage - 1);
+    admin(date);
+  };
+  document.querySelector('#adminUserNext').onclick = () => {
+    adminUserPage += 1;
+    admin(date);
+  };
+  document.querySelectorAll('.admin-user-tile').forEach((button) => {
+    button.onclick = () => openAdminUserDrawerAsync(
+      users.find((item) => item.id === button.dataset.id),
+      date
+    );
+  });
+  requestAnimationFrame(() => window.scrollTo(0, Number(sessionStorage.adminScrollY || 0)));
+}
+
+async function adminFull(selectedDate) {
   document.body.dataset.view = 'admin';
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
     timeZone: 'Asia/Shanghai'
@@ -1495,6 +1602,47 @@ function enhanceAdminSections() {
       sessionStorage.setItem(key, open ? 'open' : 'closed');
     };
   });
+}
+
+async function openAdminUserDrawerAsync(studentUser, date) {
+  const root = document.querySelector('#modalRoot');
+  root.innerHTML = `<div class="drawer-backdrop" id="userDrawerBackdrop">
+    <section class="bottom-drawer" role="dialog" aria-modal="true" aria-labelledby="userDrawerTitle">
+      <div class="drawer-handle"></div>
+      <div class="row"><div><small class="muted">用户详情</small><h2 id="userDrawerTitle">${escapeHtml(studentUser.name)}</h2></div><button class="secondary right" id="closeUserDrawer">关闭</button></div>
+      <dl class="user-detail-list">
+        <div><dt>姓名</dt><dd>${escapeHtml(studentUser.name)}</dd></div>
+        <div><dt>学号</dt><dd>${escapeHtml(studentUser.studentId)}</dd></div>
+        <div><dt>校区</dt><dd>${escapeHtml(studentUser.campus || '未设置')}</dd></div>
+        <div><dt>账号状态</dt><dd>${studentUser.status === 'active' ? '启用' : '禁用'}</dd></div>
+      </dl>
+      <div class="drawer-content-block"><p class="muted">正在读取当日记录…</p></div>
+    </section>
+  </div>`;
+  const close = () => { root.innerHTML = ''; };
+  document.querySelector('#closeUserDrawer').onclick = close;
+  document.querySelector('#userDrawerBackdrop').onclick = (event) => {
+    if (event.target.id === 'userDrawerBackdrop') close();
+  };
+  try {
+    const result = await api(`/api/admin/users/${studentUser.id}/daily?date=${date}`);
+    if (!root.querySelector('#userDrawerBackdrop')) return;
+    const team = result.student.teamId ? [{
+      id: result.student.teamId,
+      name: result.student.teamName,
+      members: [studentUser]
+    }] : [];
+    openAdminUserDrawer({ ...studentUser, ...result.student }, result.student, team, date, result.tasks);
+    const firstImage = root.querySelector('.drawer-photo-grid img');
+    if (firstImage && !firstImage.complete) {
+      firstImage.fetchPriority = 'high';
+      firstImage.loading = 'eager';
+    }
+  } catch (error) {
+    const block = root.querySelector('.drawer-content-block');
+    if (block) block.innerHTML = `<p class="image-error">${escapeHtml(error.message)}</p><button class="secondary" id="retryUserDetail">重新加载</button>`;
+    root.querySelector('#retryUserDetail')?.addEventListener('click', () => openAdminUserDrawerAsync(studentUser, date));
+  }
 }
 
 function openAdminUserDrawer(studentUser, dashboardUser, teams, date, tasks = []) {

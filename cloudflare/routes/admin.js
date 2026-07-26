@@ -260,7 +260,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const checkins = await env.DB.prepare(
       `SELECT c.id,c.user_id AS userId,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
               c.submitted_at AS submittedAt,c.review_note AS reviewNote,
-              (SELECT GROUP_CONCAT('/api/files/' || f.id, '|') FROM checkin_files f
+              (SELECT GROUP_CONCAT('/media/' || f.id, '|') FROM checkin_files f
                 WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
          FROM checkins c WHERE c.checkin_date=?1 ORDER BY c.submitted_at`
     ).bind(date).all();
@@ -282,7 +282,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
           })());
         const interactionCheckins = memberCheckins.results
           .filter((item) => item.userId === student.id)
-          .map((item) => ({ ...item, photos: [`/api/files/${item.id}`], note: item.taskName }));
+          .map((item) => ({ ...item, photos: [`/media/${item.id}`], note: item.taskName }));
         return {
           ...student,
           totalCompletedDays: Number(student.totalCompletedDays),
@@ -341,6 +341,74 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM users u WHERE ${where}`)
       .bind(query, date, search).first();
     return json({ users: results, tracks: TRACKS, page, limit, total: Number(count.total) });
+  }
+
+  const dailyUserMatch = route.match(/^\/api\/admin\/users\/([^/]+)\/daily$/);
+  if (dailyUserMatch && request.method === 'GET') {
+    await ensureMakeupPermissions(env);
+    const id = decodeURIComponent(dailyUserMatch[1]);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
+      ? url.searchParams.get('date') : shanghaiDate();
+    const student = await env.DB.prepare(
+      `SELECT ${safeUserColumns},
+        CASE WHEN track_id='health' THEN (
+          SELECT COUNT(*) FROM (
+            SELECT c.checkin_date FROM checkins c WHERE c.user_id=users.id
+            GROUP BY c.checkin_date HAVING COUNT(DISTINCT c.slot_id)>=3
+          )
+        ) ELSE (
+          SELECT COUNT(DISTINCT mc.occurrence_date) FROM member_checkins mc WHERE mc.user_id=users.id
+        ) END AS totalCompletedDays,
+        EXISTS(SELECT 1 FROM makeup_permissions mp
+          WHERE mp.user_id=users.id AND mp.checkin_date=?2 AND mp.enabled=1) AS makeupAllowed,
+        t.id AS teamId,t.name AS teamName
+       FROM users
+       LEFT JOIN team_members tm ON tm.user_id=users.id
+       LEFT JOIN teams t ON t.id=tm.team_id
+       WHERE users.id=?1 AND users.role='student'`
+    ).bind(id, date).first();
+    if (!student) return json({ error: '用户不存在' }, 404);
+    const [checkins, memberCheckins, taskRows] = await Promise.all([
+      env.DB.prepare(
+        `SELECT c.id,c.slot_id AS slotId,c.note,c.status,c.submitted_at AS submittedAt,
+                (SELECT GROUP_CONCAT('/media/' || f.id, '|') FROM checkin_files f
+                  WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
+           FROM checkins c WHERE c.user_id=?1 AND c.checkin_date=?2 ORDER BY c.submitted_at`
+      ).bind(id, date).all(),
+      env.DB.prepare(
+        `SELECT mc.id,mc.task_id AS taskId,mc.status,mc.submitted_at AS submittedAt,
+                t.name AS taskName
+           FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+          WHERE mc.user_id=?1 AND mc.occurrence_date=?2 ORDER BY mc.submitted_at`
+      ).bind(id, date).all(),
+      env.DB.prepare(
+        `SELECT id,name,track_id AS trackId FROM tasks
+          WHERE track_id='interaction' AND status='published' ORDER BY starts_at DESC`
+      ).all()
+    ]);
+    const appConfig = await readConfig(env);
+    const slots = appConfig.slots.map((slot) => {
+      const item = checkins.results.find((entry) => entry.slotId === slot.id);
+      return item ? { ...item, photos: item.photoUrls ? item.photoUrls.split('|') : [] } : null;
+    });
+    const interactionCheckins = memberCheckins.results.map((item) => ({
+      ...item,
+      photos: [`/media/${item.id}`],
+      note: item.taskName
+    }));
+    return json({
+      student: {
+        ...student,
+        totalCompletedDays: Number(student.totalCompletedDays),
+        makeupAllowed: Boolean(student.makeupAllowed),
+        slots,
+        interactionCheckins,
+        completed: student.trackId === 'health'
+          ? slots.filter(Boolean).length === appConfig.slots.length
+          : interactionCheckins.length > 0
+      },
+      tasks: taskRows.results
+    });
   }
 
   if (route === '/api/admin/users' && request.method === 'POST') {

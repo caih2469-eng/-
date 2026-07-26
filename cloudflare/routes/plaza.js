@@ -55,7 +55,7 @@ const postDetails = async (env, post, userId = null) => {
     images: images.results.map((item) => ({
       ...item,
       displayUrl: `/api/public-images/${item.id}`,
-      highUrl: `/api/files/${item.id}`
+      highUrl: `/media/${item.id}`
     })),
     likeCount: Number(counts.likes),
     viewCount: Number(counts.views),
