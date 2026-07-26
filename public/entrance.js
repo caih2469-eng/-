@@ -29,8 +29,12 @@
                     });
                     const result = await response.json();
                     if (!response.ok) throw new Error(result.error || '登录失败');
-                    localStorage.token = result.token;
-                    localStorage.user = JSON.stringify(result.user);
+                    try {
+                        localStorage.setItem('token', result.token);
+                        localStorage.setItem('user', JSON.stringify(result.user));
+                    } catch {
+                        // Login still works through the HttpOnly cookie in restricted WebViews.
+                    }
                     location.replace('/');
                 } catch (error) {
                     alert(error.message);

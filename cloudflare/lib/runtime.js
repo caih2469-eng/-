@@ -158,13 +158,22 @@ export const authenticate = async (request, env) => {
     .map((item) => item.trim())
     .find((item) => item.startsWith('session_token='))
     ?.slice('session_token='.length) || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : cookieToken;
-  const [payload, supplied] = token.split('.');
-  if (!payload || !supplied) return null;
-  const expected = await sign(payload, env.SESSION_SECRET);
-  if (!constantTimeEqual(encoder.encode(supplied), encoder.encode(expected))) return null;
-  const decoded = parseJson(new TextDecoder().decode(fromBase64Url(payload)));
-  if (!decoded?.sub || decoded.exp < Math.floor(Date.now() / 1000)) return null;
+  const candidates = [
+    cookieToken,
+    header.startsWith('Bearer ') ? header.slice(7) : ''
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  let decoded = null;
+  for (const token of candidates) {
+    const [payload, supplied] = token.split('.');
+    if (!payload || !supplied) continue;
+    const expected = await sign(payload, env.SESSION_SECRET);
+    if (!constantTimeEqual(encoder.encode(supplied), encoder.encode(expected))) continue;
+    const candidate = parseJson(new TextDecoder().decode(fromBase64Url(payload)));
+    if (!candidate?.sub || candidate.exp < Math.floor(Date.now() / 1000)) continue;
+    decoded = candidate;
+    break;
+  }
+  if (!decoded) return null;
   const user = await env.DB.prepare(
     `SELECT id, student_id AS studentId, name, role, campus, track_id AS trackId,
             status, created_at AS createdAt

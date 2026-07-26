@@ -1,6 +1,25 @@
 const app = document.querySelector('#app');
-let token = localStorage.token;
-let user = JSON.parse(localStorage.user || 'null');
+const readStoredValue = (key) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const writeStoredValue = (key, value) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The HttpOnly session cookie remains the source of truth in restricted WebViews.
+  }
+};
+let token = readStoredValue('token');
+let user;
+try {
+  user = JSON.parse(readStoredValue('user') || 'null');
+} catch {
+  user = null;
+}
 let config;
 let tracks = [];
 let materialAdminPage = 1;
@@ -189,7 +208,11 @@ const formatDate = (value) =>
 
 function logout() {
   void fetch('/api/logout', { method: 'POST', keepalive: true });
-  localStorage.clear();
+  try {
+    localStorage.clear();
+  } catch {
+    // Some embedded browsers restrict storage access.
+  }
   token = null;
   user = null;
   login();
@@ -283,8 +306,8 @@ function login() {
       user = result.user;
       config = result.config;
       tracks = result.tracks;
-      localStorage.token = token;
-      localStorage.user = JSON.stringify(user);
+      writeStoredValue('token', token);
+      writeStoredValue('user', JSON.stringify(user));
       document.body.classList.remove('poster-mode');
       user.role === 'admin' ? admin() : student(result);
     } catch (error) {
@@ -299,7 +322,7 @@ async function home() {
   config = result.config;
   tracks = result.tracks;
   user = result.user;
-  localStorage.user = JSON.stringify(user);
+  writeStoredValue('user', JSON.stringify(user));
   return user.role === 'admin' ? admin() : student(result);
 }
 
@@ -1930,5 +1953,13 @@ function reviewCheckin(students, checkinId, date) {
   document.querySelector('#reject').onclick = () => update('rejected');
 }
 
-if (token) api('/api/session', { method: 'POST' }).catch(() => null).then(home).catch(logout);
-else login();
+const restoreSession = async () => {
+  try {
+    await api('/api/session', { method: 'POST' });
+    await home();
+  } catch {
+    login();
+  }
+};
+
+void restoreSession();
