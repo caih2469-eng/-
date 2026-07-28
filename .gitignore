@@ -4,3 +4,4 @@ material-files/
 .env
 node_modules/
 .wrangler/
+.tmp-media-matrix/
