@@ -72,7 +72,8 @@ const submissionOwner = async (env, user, task) => {
 
 const submissionImages = async (env, submissionId, viewer) => {
   const { results } = await env.DB.prepare(
-    `SELECT i.id,i.object_key AS objectKey,i.content_type AS contentType,i.bytes,
+    `SELECT i.id,COALESCE(m.object_key,i.object_key) AS objectKey,
+            i.content_type AS contentType,i.bytes,
             i.sort_order AS sortOrder,m.id AS mediaId,
             tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey,
             tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
@@ -273,7 +274,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       ).bind(user.id, limit, offset).all();
       for (const record of records.results) {
         const files = await env.DB.prepare(
-          `SELECT f.id,f.object_key AS objectKey,f.kind,m.id AS mediaId,
+          `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,f.kind,m.id AS mediaId,
                   tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
              FROM checkin_files f
              LEFT JOIN media_objects m ON m.id=f.id
@@ -309,7 +310,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id).first();
     const records = await env.DB.prepare(
       `SELECT mc.id,mc.occurrence_date AS date,mc.status,mc.submitted_at AS submittedAt,
-               t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey,
+               t.name AS taskName,m.id AS mediaId,COALESCE(m.object_key,mc.object_key) AS objectKey,
                tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
          LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
@@ -362,7 +363,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       env, body.mediaIds, user, task.id, 'member-checkin', 1
     );
     const old = await env.DB.prepare(
-      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId,
+      `SELECT c.id,COALESCE(m.object_key,c.object_key) AS objectKey,m.id AS mediaId,
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins c
          LEFT JOIN media_objects m ON m.business_id=c.id AND m.business_type='member-checkin'
@@ -458,7 +459,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const id = current?.id || crypto.randomUUID();
     const nextVersion = Number(current?.version || 0) + 1;
     const oldImages = current ? await env.DB.prepare(
-      `SELECT i.id,i.object_key AS objectKey,m.id AS mediaId,
+      `SELECT i.id,COALESCE(m.object_key,i.object_key) AS objectKey,m.id AS mediaId,
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM task_submission_images i
          LEFT JOIN media_objects m ON m.id=i.id
@@ -566,7 +567,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id, date).all();
     for (const item of results) {
       const files = await env.DB.prepare(
-        `SELECT f.id,f.object_key AS objectKey,f.kind,f.sort_order AS sortOrder,m.id AS mediaId
+        `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,
+                f.kind,f.sort_order AS sortOrder,m.id AS mediaId
            FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
           WHERE f.checkin_id=?1 ORDER BY f.kind,f.sort_order`
       ).bind(item.id).all();
@@ -607,7 +609,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id, date, slot.id).first();
     const id = existing?.id || crypto.randomUUID();
     const old = existing ? await env.DB.prepare(
-      `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId,
+      `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,m.id AS mediaId,
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM checkin_files f
          LEFT JOIN media_objects m ON m.id=f.id

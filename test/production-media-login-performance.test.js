@@ -62,6 +62,8 @@ test('图片列表在SQL层分页，首屏不超过20张且管理员每页不超
   assert.doesNotMatch(`${plaza}\n${admin}\n${student}`, /data:image\/[^;]+;base64/i);
   assert.match(admin, /IN \('task:thumb','admin-makeup:thumb'\)/);
   assert.match(student, /IN \('member-checkin:thumb','admin-makeup:thumb'\)/);
+  assert.match(admin, /COALESCE\(m\.object_key,i\.object_key\) AS objectKey/);
+  assert.match(student, /COALESCE\(m\.object_key,i\.object_key\) AS objectKey/);
 });
 
 test('未发布图片公共接口404且不缓存；可见图片返回WebP并在第二次命中Cache API', async () => {

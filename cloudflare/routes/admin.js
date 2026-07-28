@@ -273,7 +273,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
          ORDER BY c.submitted_at`
     ).bind(date, ...userIds).all();
     const checkinFiles = await env.DB.prepare(
-      `SELECT f.id,f.checkin_id AS checkinId,f.object_key AS objectKey,f.kind,m.id AS mediaId,
+      `SELECT f.id,f.checkin_id AS checkinId,COALESCE(m.object_key,f.object_key) AS objectKey,
+              f.kind,m.id AS mediaId,
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id
          LEFT JOIN media_objects m ON m.id=f.id
@@ -454,7 +455,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
           ORDER BY c.submitted_at`
       ).bind(userId, date).all();
       const files = await env.DB.prepare(
-        `SELECT f.id,f.checkin_id AS checkinId,f.object_key AS objectKey,f.kind,m.id AS mediaId,
+        `SELECT f.id,f.checkin_id AS checkinId,COALESCE(m.object_key,f.object_key) AS objectKey,
+                f.kind,m.id AS mediaId,
                 tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
            FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id
            LEFT JOIN media_objects m ON m.id=f.id
@@ -492,7 +494,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
 
     const records = await env.DB.prepare(
       `SELECT mc.id,mc.task_id AS taskId,mc.status,mc.submitted_at AS submittedAt,
-               t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey,
+               t.name AS taskName,m.id AS mediaId,COALESCE(m.object_key,mc.object_key) AS objectKey,
                tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
          LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
@@ -656,7 +658,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
       ).bind(userId, date, slot.id).first();
       const id = existing?.id || crypto.randomUUID();
        const oldFiles = existing ? await env.DB.prepare(
-        `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId,
+        `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,m.id AS mediaId,
                 tv.object_key AS thumbObjectKey,tm.id AS thumbMediaId
            FROM checkin_files f
            LEFT JOIN media_objects m ON m.id=f.id
@@ -729,7 +731,7 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     }
     const uploaded = await claimConfirmedMedia(env, body.mediaIds, admin, taskId, 'admin-makeup', 1);
     const existing = await env.DB.prepare(
-      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId,
+      `SELECT c.id,COALESCE(m.object_key,c.object_key) AS objectKey,m.id AS mediaId,
               tv.object_key AS thumbObjectKey,tm.id AS thumbMediaId
          FROM member_checkins c
          LEFT JOIN media_objects m ON m.business_id=c.id
@@ -1105,7 +1107,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     if (submissions.results.length) {
       const placeholders = submissions.results.map((_, index) => `?${index + 1}`).join(',');
       const images = await env.DB.prepare(
-        `SELECT i.submission_id AS submissionId,i.id,i.object_key AS objectKey,m.id AS mediaId,
+        `SELECT i.submission_id AS submissionId,i.id,
+                COALESCE(m.object_key,i.object_key) AS objectKey,m.id AS mediaId,
                 tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
            FROM task_submission_images i
            LEFT JOIN media_objects m ON m.id=i.id
