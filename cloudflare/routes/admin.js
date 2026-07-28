@@ -458,7 +458,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
                 tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
            FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id
            LEFT JOIN media_objects m ON m.id=f.id
-           LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='meal-checkin:thumb'
+           LEFT JOIN media_objects tm ON tm.business_id=m.id
+            AND tm.business_type IN ('meal-checkin:thumb','admin-makeup:thumb')
           WHERE c.user_id=?1 AND c.checkin_date=?2 ORDER BY f.sort_order`
       ).bind(userId, date).all();
       await Promise.all(files.results.map(async (file) => {
@@ -495,7 +496,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
                tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
          LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
-         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='member-checkin:thumb'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id
+          AND tm.business_type IN ('member-checkin:thumb','admin-makeup:thumb')
         WHERE mc.user_id=?1 AND mc.occurrence_date=?2 ORDER BY mc.submitted_at`
     ).bind(userId, date).all();
     await Promise.all(records.results.map(async (item) => {
@@ -1107,7 +1109,8 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
                 tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
            FROM task_submission_images i
            LEFT JOIN media_objects m ON m.id=i.id
-           LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='task:thumb'
+           LEFT JOIN media_objects tm ON tm.business_id=m.id
+            AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
           WHERE i.submission_id IN (${placeholders})
           ORDER BY i.submission_id,i.sort_order`
       ).bind(...submissions.results.map((submission) => submission.id)).all();

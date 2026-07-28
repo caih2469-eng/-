@@ -78,7 +78,8 @@ const submissionImages = async (env, submissionId, viewer) => {
             tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
        FROM task_submission_images i
        LEFT JOIN media_objects m ON m.id=i.id
-       LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='task:thumb'
+       LEFT JOIN media_objects tm ON tm.business_id=m.id
+        AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
       WHERE i.submission_id=?1 ORDER BY i.sort_order`
   ).bind(submissionId).all();
   return Promise.all(results.map(async (item) => {
@@ -276,7 +277,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
                   tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
              FROM checkin_files f
              LEFT JOIN media_objects m ON m.id=f.id
-             LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='meal-checkin:thumb'
+             LEFT JOIN media_objects tm ON tm.business_id=m.id
+              AND tm.business_type IN ('meal-checkin:thumb','admin-makeup:thumb')
              WHERE f.checkin_id=?1 ORDER BY f.sort_order`
         ).bind(record.id).all();
         record.images = [];
@@ -311,7 +313,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
                tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
          LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
-         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='member-checkin:thumb'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id
+          AND tm.business_type IN ('member-checkin:thumb','admin-makeup:thumb')
         WHERE mc.user_id=?1 ORDER BY mc.occurrence_date DESC,mc.submitted_at DESC
         LIMIT ?2 OFFSET ?3`
     ).bind(user.id, limit, offset).all();
@@ -363,7 +366,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins c
          LEFT JOIN media_objects m ON m.business_id=c.id AND m.business_type='member-checkin'
-         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='member-checkin:thumb'
+             LEFT JOIN media_objects tm ON tm.business_id=m.id
+              AND tm.business_type IN ('member-checkin:thumb','admin-makeup:thumb')
         WHERE c.task_id=?1 AND c.occurrence_date=?2 AND c.user_id=?3`
     ).bind(task.id, occurrenceDate, user.id).first();
     const id = old?.id || crypto.randomUUID();
@@ -458,7 +462,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM task_submission_images i
          LEFT JOIN media_objects m ON m.id=i.id
-         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='task:thumb'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id
+          AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
         WHERE i.submission_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [];
@@ -606,7 +611,8 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM checkin_files f
          LEFT JOIN media_objects m ON m.id=f.id
-         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='meal-checkin:thumb'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id
+          AND tm.business_type IN ('meal-checkin:thumb','admin-makeup:thumb')
         WHERE f.checkin_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [
