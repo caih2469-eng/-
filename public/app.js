@@ -36,19 +36,52 @@ const prepareDynamicContent = () => {
 new MutationObserver(() => requestAnimationFrame(prepareDynamicContent))
   .observe(app, { childList: true, subtree: true });
 
+let activeImageViewer = null;
+let imageViewerCloseTimer = null;
+const closeImageViewer = (fromHistory = false) => {
+  if (!activeImageViewer) return;
+  activeImageViewer.remove();
+  activeImageViewer = null;
+  clearTimeout(imageViewerCloseTimer);
+  if (!fromHistory && history.state?.imageViewer) history.back();
+};
+window.addEventListener('popstate', () => {
+  if (activeImageViewer) closeImageViewer(true);
+});
+
 const openImageViewer = (src, alt = '查看图片') => {
+  if (activeImageViewer) closeImageViewer(true);
   const viewer = document.createElement('div');
   viewer.className = 'image-viewer';
   viewer.setAttribute('role', 'dialog');
   viewer.setAttribute('aria-modal', 'true');
   viewer.innerHTML = `
-    <header><button class="image-viewer-back" aria-label="返回上一级">‹ 返回</button><strong>${escapeHtml(alt)}</strong></header>
-    <div class="image-viewer-stage"><div class="image-shell"><img decoding="async" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"
+    <div class="image-viewer-stage" aria-label="单击返回上一层"><div class="image-shell"><img decoding="async" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"
       onload="this.parentElement.classList.add('loaded')" onerror="this.hidden=true;this.parentElement.classList.add('failed')"><span class="image-error">图片加载失败</span></div></div>`;
   document.body.appendChild(viewer);
-  const close = () => viewer.remove();
-  viewer.querySelector('.image-viewer-back').onclick = close;
-  viewer.querySelector('.image-viewer-stage').onclick = close;
+  activeImageViewer = viewer;
+  history.pushState({ ...(history.state || {}), imageViewer: true }, '');
+  const stage = viewer.querySelector('.image-viewer-stage');
+  let pointerStart = null;
+  let moved = false;
+  stage.addEventListener('pointerdown', (event) => {
+    pointerStart = { x: event.clientX, y: event.clientY };
+    moved = false;
+  }, { passive: true });
+  stage.addEventListener('pointermove', (event) => {
+    if (!pointerStart) return;
+    moved ||= Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > 8;
+  }, { passive: true });
+  stage.addEventListener('pointerup', () => {
+    pointerStart = null;
+    if (moved) return;
+    clearTimeout(imageViewerCloseTimer);
+    imageViewerCloseTimer = setTimeout(() => closeImageViewer(), 220);
+  }, { passive: true });
+  stage.addEventListener('dblclick', (event) => {
+    clearTimeout(imageViewerCloseTimer);
+    event.preventDefault();
+  });
 };
 
 app.addEventListener('click', (event) => {
@@ -980,8 +1013,8 @@ async function admin(selectedDate) {
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
     timeZone: 'Asia/Shanghai'
   });
-  const [dashboard, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin, governance] = await Promise.all([
-    api(`/api/admin/dashboard?date=${date}`),
+  const [completion, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin, governance] = await Promise.all([
+    api(`/api/admin/completion-summary?date=${date}`),
     api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`),
     api('/api/admin/teams'),
     api('/api/admin/tasks'),
@@ -991,34 +1024,17 @@ async function admin(selectedDate) {
     api('/api/admin/governance')
   ]);
   const users = userResult.users;
-  const slotHeaders = config.slots
-    .map((slot) => `<th>${escapeHtml(slot.label)}<br><small>${slot.start}–${slot.end}</small></th>`)
-    .join('');
-  const dashboardRows = dashboard.students
-    .map((studentUser) => `
-      <tr>
-        <td>${escapeHtml(studentUser.name)}<br><small>${escapeHtml(studentUser.studentId)}</small></td>
-        <td>${escapeHtml(trackName(studentUser.trackId))}</td>
-        ${studentUser.slots.map((checkin) => `
-          <td>${checkin
-            ? `<span class="pill ${checkin.status === 'approved' ? 'done' : 'pending'}">${checkin.status === 'approved' ? '通过' : checkin.status === 'rejected' ? '驳回' : '已交'}</span><br><button class="secondary review" data-id="${checkin.id}">查看</button>`
-            : '<span class="muted">未交</span>'}</td>`).join('')}
-      </tr>`).join('');
   const userTiles = users.map((studentUser, index) => `
     <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">
       <span class="user-number">${(userResult.page - 1) * userResult.limit + index + 1}</span>
       <strong>${escapeHtml(studentUser.name)}</strong>
-      <span class="user-completion">${studentUser.completed ? '已完成' : '未完成'}</span>
-      <small>累计完成 ${Number(studentUser.totalCompletedDays || 0)} 天</small>
+      ${studentUser.completed ? '<span class="user-completion" aria-label="已完成">✓</span>' : ''}
     </button>`).join('');
-  const trackStudents = (trackId) => dashboard.students.filter((item) => !trackId || item.trackId === trackId);
-  const completionSummary = (trackId) => {
-    const list = trackStudents(trackId);
-    return { completed: list.filter((item) => item.completed).length, total: list.length };
-  };
-  const overallSummary = completionSummary('');
-  const interactionSummary = completionSummary('interaction');
-  const healthSummary = completionSummary('health');
+  const overallSummary = completion.overall;
+  const interactionSummary = completion.tracks.find((item) => item.trackId === 'interaction')
+    || { completed: 0, total: 0 };
+  const healthSummary = completion.tracks.find((item) => item.trackId === 'health')
+    || { completed: 0, total: 0 };
   const teamRows = teamResult.teams.map((team) => `
     <tr>
       <td>${escapeHtml(team.name)}<br><small>邀请码：<strong>${escapeHtml(team.inviteCode)}</strong></small></td>
@@ -1325,7 +1341,6 @@ async function admin(selectedDate) {
   document.querySelectorAll('.admin-user-tile').forEach((button) => {
     button.onclick = () => openAdminUserDrawer(
       users.find((item) => item.id === button.dataset.id),
-      dashboard.students.find((item) => item.id === button.dataset.id),
       teamResult.teams,
       date,
       taskAdminResult.tasks
@@ -1512,9 +1527,6 @@ async function admin(selectedDate) {
       }
     };
   });
-  document.querySelectorAll('.review').forEach((button) => {
-    button.onclick = () => reviewCheckin(dashboard.students, button.dataset.id, date);
-  });
   document.querySelector('#switches').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.target;
@@ -1632,111 +1644,216 @@ function enhanceAdminSections() {
   });
 }
 
-function openAdminUserDrawer(studentUser, dashboardUser, teams, date, tasks = []) {
+function openAdminUserDrawer(studentUser, teams, date, tasks = []) {
   const root = document.querySelector('#modalRoot');
   const team = teams.find((item) => item.members.some((member) => member.id === studentUser.id));
   const isHealth = studentUser.trackId === 'health';
-  const submitted = isHealth
-    ? (dashboardUser?.slots || []).filter(Boolean)
-    : (dashboardUser?.interactionCheckins || []);
-  const latest = submitted.sort((a, b) => String(b.submittedAt).localeCompare(String(a.submittedAt)))[0];
   const interactionTasks = tasks.filter((task) => task.trackId === 'interaction');
-  const mealDetails = isHealth ? config.slots.map((slot, index) => {
-    const checkin = dashboardUser?.slots?.[index];
-    return `<article class="meal-status-card ${checkin ? 'completed' : 'missing'}">
-      <div class="row"><strong>${escapeHtml(slot.label)}</strong><span class="pill ${checkin ? 'done' : ''}">${checkin ? '已提交' : '未提交'}</span></div>
-      <small>${escapeHtml(slot.start)}–${escapeHtml(slot.end)}${checkin ? ` · ${escapeHtml(formatDate(checkin.submittedAt))}` : ''}</small>
-            ${checkin?.photos?.length ? `<div class="drawer-photo-grid compact">${checkin.photos.map((url, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(url)}" data-image-alt="${escapeHtml(slot.label)}图片"><img src="${escapeHtml(url)}" data-priority="${index === 0 ? 'high' : ''}" loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(slot.label)}图片"></button>`).join('')}</div>` : ''}
-      ${checkin?.note ? `<p>${escapeHtml(checkin.note)}</p>` : ''}
-    </article>`;
-  }).join('') : (dashboardUser?.interactionCheckins || []).map((checkin) => `
-    <article class="meal-status-card completed"><div class="row"><strong>${escapeHtml(checkin.taskName)}</strong><span class="pill done">已提交</span></div>
-      <small>${escapeHtml(formatDate(checkin.submittedAt))}</small>
-            <div class="drawer-photo-grid compact">${checkin.photos.map((url, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(url)}" data-image-alt="活动打卡图片"><img src="${escapeHtml(url)}" data-priority="${index === 0 ? 'high' : ''}" loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="活动打卡图片"></button>`).join('')}</div>
-    </article>`).join('') || '<p class="muted">当日暂无提交</p>';
+  const sectionState = new Map();
   root.innerHTML = `<div class="drawer-backdrop" id="userDrawerBackdrop">
     <section class="bottom-drawer" role="dialog" aria-modal="true" aria-labelledby="userDrawerTitle">
-      <div class="drawer-handle"></div>
-      <div class="row"><div><small class="muted">用户详情</small><h2 id="userDrawerTitle">${escapeHtml(studentUser.name)}</h2></div><button class="secondary right" id="closeUserDrawer">关闭</button></div>
-      <dl class="user-detail-list">
-        <div><dt>姓名</dt><dd>${escapeHtml(studentUser.name)}</dd></div>
-        <div><dt>学号</dt><dd>${escapeHtml(studentUser.studentId)}</dd></div>
-        <div><dt>校区</dt><dd>${escapeHtml(studentUser.campus || '未设置')}</dd></div>
-        <div><dt>所属队伍</dt><dd>${escapeHtml(team?.name || '未加入队伍')}</dd></div>
-        <div><dt>当日状态</dt><dd><span class="pill ${dashboardUser?.completed ? 'done' : ''}">${dashboardUser?.completed ? '已完成' : '未完成'}</span></dd></div>
-        <div><dt>提交时间</dt><dd>${latest ? escapeHtml(formatDate(latest.submittedAt)) : '—'}</dd></div>
-        <div><dt>累计完成</dt><dd><strong>${Number(studentUser.totalCompletedDays || dashboardUser?.totalCompletedDays || 0)} 天</strong></dd></div>
-      </dl>
-      <div class="drawer-content-block"><h3>${isHealth ? '三餐完成情况' : '活动提交情况'}</h3><div class="meal-status-grid">${mealDetails}</div></div>
-      <div class="drawer-content-block makeup-permission-card">
-        <div class="row"><div><h3>用户补卡权限</h3><p class="muted">仅对 ${escapeHtml(date)} 生效；默认关闭。</p></div>
-          <button class="${dashboardUser?.makeupAllowed ? 'danger' : 'secondary'} right" id="toggleMakeupPermission">${dashboardUser?.makeupAllowed ? '关闭用户补卡' : '允许用户补卡'}</button>
-        </div>
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-sticky-header row">
+        <div><small class="muted">用户详情</small><h2 id="userDrawerTitle">${escapeHtml(studentUser.name)}</h2></div>
+        <button class="secondary right" id="closeUserDrawer">关闭</button>
       </div>
-      <div class="drawer-content-block">
-        <details class="admin-makeup-details"><summary>管理员代为补卡</summary>
-          <form id="adminMakeupForm">
-            ${isHealth
-              ? `<label>餐次</label><select name="slotId">${config.slots.map((slot) => `<option value="${slot.id}">${escapeHtml(slot.label)}</option>`).join('')}</select>`
-              : `<label>活动任务</label><select name="taskId" required>${interactionTasks.map((task) => `<option value="${task.id}">${escapeHtml(task.name)}</option>`).join('')}</select>`}
-            <label>补卡图片</label><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" required>
-            ${isHealth ? '<label>备注（可选）</label><textarea name="note"></textarea>' : ''}
-            <button>确认管理员补卡</button>
-          </form>
-        </details>
+      <div class="drawer-summary">
+        <div><span>学号</span><strong>${escapeHtml(studentUser.studentId)}</strong></div>
+        <div><span>账号状态</span><strong>${studentUser.status === 'active' ? '启用' : '禁用'}</strong></div>
+        <div><span>所属赛道</span><strong>${escapeHtml(trackName(studentUser.trackId))}</strong></div>
+        <div><span>最近状态</span><strong>${studentUser.completed ? '已完成' : '未完成'}</strong></div>
       </div>
-      <div class="drawer-actions">
-        <button class="secondary" id="editDrawerUser">编辑用户</button>
-        <button class="${studentUser.status === 'active' ? 'danger' : 'secondary'}" id="toggleDrawerUser">${studentUser.status === 'active' ? '禁用用户' : '启用用户'}</button>
+      <div class="drawer-accordions">
+        ${[
+          ['records', '最近打卡记录', studentUser.submittedAt ? formatDate(studentUser.submittedAt) : '暂无提交', true],
+          ['profile', '基本资料', `${studentUser.campus || '未设置'} · 累计 ${Number(studentUser.totalCompletedDays || 0)} 天`, false],
+          ['team', '所属队伍', team?.name || '未加入队伍', false],
+          ['makeup', '补卡权限', '点击查看当前状态', false],
+          ['adminMakeup', '管理员代为补卡', '按需展开', false],
+          ['manage', '管理操作', '编辑或禁用账号', false]
+        ].map(([key, label, summary, open]) => `
+          <section class="drawer-accordion ${open ? 'is-open' : ''}" data-drawer-section="${key}">
+            <button class="drawer-accordion-toggle" type="button" aria-expanded="${open}">
+              <span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(summary)}</small></span><b aria-hidden="true">›</b>
+            </button>
+            <div class="drawer-accordion-panel" ${open ? '' : 'hidden'}><div class="drawer-panel-inner" data-panel-content="${key}"></div></div>
+          </section>`).join('')}
       </div>
     </section>
   </div>`;
+
+  const backdrop = root.querySelector('#userDrawerBackdrop');
+  const drawer = root.querySelector('.bottom-drawer');
   const close = () => { root.innerHTML = ''; };
-  document.querySelector('#closeUserDrawer').onclick = close;
-  document.querySelector('#userDrawerBackdrop').onclick = (event) => { if (event.target.id === 'userDrawerBackdrop') close(); };
-  document.querySelector('#editDrawerUser').onclick = () => editUser(studentUser, date);
-  document.querySelector('#toggleMakeupPermission').onclick = async () => {
+  root.querySelector('#closeUserDrawer').onclick = close;
+  backdrop.onclick = (event) => { if (event.target === backdrop) close(); };
+  let touchStartY = null;
+  drawer.addEventListener('touchstart', (event) => {
+    if (event.target.closest('.drawer-handle')) touchStartY = event.touches[0].clientY;
+  }, { passive: true });
+  drawer.addEventListener('touchend', (event) => {
+    if (touchStartY !== null && event.changedTouches[0].clientY - touchStartY > 80) close();
+    touchStartY = null;
+  }, { passive: true });
+
+  const renderImages = (images, label) => images.length
+    ? `<div class="drawer-photo-grid compact">${images.map((imageUrl, index) => `
+        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(imageUrl)}" data-image-alt="${escapeHtml(label)}">
+          <span class="image-shell"><img src="${escapeHtml(imageUrl)}" data-priority="${index === 0 ? 'high' : ''}"
+            loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}"
+            decoding="async" alt="${escapeHtml(label)}"
+            onload="this.parentElement.classList.add('loaded')"
+            onerror="this.hidden=true;this.parentElement.classList.add('failed')"><span class="image-error">图片加载失败，点击重试</span></span>
+        </button>`).join('')}</div>` : '';
+
+  const loadRecords = async (panel, force = false) => {
+    if (sectionState.get('records') && !force) return;
+    sectionState.set('records', 'loading');
+    panel.innerHTML = '<p class="muted">正在读取最近打卡记录…</p>';
     try {
-      await api(`/api/admin/users/${studentUser.id}/makeup-permission?date=${date}`, {
-        method: 'PUT',
-        body: JSON.stringify({ enabled: !dashboardUser?.makeupAllowed })
-      });
-      root.innerHTML = '';
-      admin(date);
-    } catch (error) { alert(error.message); }
+      const result = await api(`/api/admin/users/${encodeURIComponent(studentUser.id)}/checkins?date=${encodeURIComponent(date)}`);
+      const bySlot = new Map(result.records.map((item) => [item.slotId, item]));
+      const records = isHealth ? config.slots.map((slot) => {
+        const record = bySlot.get(slot.id);
+        return record ? { ...record, taskName: slot.label } : null;
+      }).filter(Boolean) : result.records;
+      panel.innerHTML = records.length ? `<div class="meal-status-grid">${records.map((record) => `
+        <article class="meal-status-card completed">
+          <div class="row"><strong>${escapeHtml(record.taskName || record.slotId || '打卡')}</strong><span class="pill done">${escapeHtml(record.status || '已提交')}</span></div>
+          <small>${escapeHtml(formatDate(record.submittedAt))}</small>
+          ${renderImages(record.images || [], `${record.taskName || record.slotId || '打卡'}图片`)}
+          ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ''}
+        </article>`).join('')}</div>` : '<p class="muted">当日暂无提交</p>';
+      const firstImage = result.records.flatMap((item) => item.images || [])[0];
+      if (firstImage) {
+        const preload = new Image();
+        preload.decoding = 'async';
+        preload.fetchPriority = 'low';
+        preload.src = firstImage;
+      }
+      sectionState.set('records', 'loaded');
+    } catch (error) {
+      panel.innerHTML = `<button class="secondary retry-drawer-records">读取失败，点击重试</button>`;
+      panel.querySelector('.retry-drawer-records').onclick = () => loadRecords(panel, true);
+      sectionState.delete('records');
+    }
   };
-  document.querySelector('#adminMakeupForm').onsubmit = async (event) => {
-    event.preventDefault();
-    const form = event.target;
-    try {
-      const photos = await readFiles(form.photos.files, {
-        taskId: isHealth ? null : form.taskId.value,
-        businessType: 'admin-makeup',
-        limit: isHealth ? 3 : 1
-      });
-      await api(`/api/admin/users/${studentUser.id}/makeup`, {
-        method: 'POST',
-        body: JSON.stringify(isHealth
-          ? { date, slotId: form.slotId.value, mediaIds: photos.map((item) => item.mediaId), note: form.note.value }
-          : { date, taskId: form.taskId.value, mediaIds: photos.map((item) => item.mediaId) })
-      });
-      root.innerHTML = '';
-      admin(date);
-    } catch (error) { alert(error.message); }
+
+  const loadSection = async (key, panel) => {
+    if (key === 'records') return loadRecords(panel);
+    if (sectionState.get(key)) return;
+    sectionState.set(key, 'loaded');
+    if (key === 'profile') {
+      panel.innerHTML = `<dl class="user-detail-list">
+        <div><dt>姓名</dt><dd>${escapeHtml(studentUser.name)}</dd></div>
+        <div><dt>学号</dt><dd>${escapeHtml(studentUser.studentId)}</dd></div>
+        <div><dt>校区</dt><dd>${escapeHtml(studentUser.campus || '未设置')}</dd></div>
+        <div><dt>创建时间</dt><dd>${escapeHtml(formatDate(studentUser.createdAt))}</dd></div>
+        <div><dt>累计完成</dt><dd>${Number(studentUser.totalCompletedDays || 0)} 天</dd></div>
+      </dl>`;
+    } else if (key === 'team') {
+      panel.innerHTML = team
+        ? `<p><strong>${escapeHtml(team.name)}</strong></p><p class="muted">${team.memberCount}/${team.memberLimit} 人</p>`
+        : '<p class="muted">该用户尚未加入队伍</p>';
+    } else if (key === 'makeup') {
+      panel.innerHTML = '<p class="muted">正在读取补卡权限…</p>';
+      try {
+        const permission = await api(`/api/admin/users/${encodeURIComponent(studentUser.id)}/makeup-permission?date=${encodeURIComponent(date)}`);
+        let enabled = Boolean(permission.enabled);
+        panel.innerHTML = `<div class="row"><p class="muted">仅对 ${escapeHtml(date)} 生效；默认关闭。</p>
+          <button class="${enabled ? 'danger' : 'secondary'} right" id="toggleMakeupPermission">${enabled ? '关闭用户补卡' : '允许用户补卡'}</button></div>`;
+        panel.querySelector('#toggleMakeupPermission').onclick = async (event) => {
+          event.currentTarget.disabled = true;
+          try {
+            await api(`/api/admin/users/${encodeURIComponent(studentUser.id)}/makeup-permission?date=${encodeURIComponent(date)}`, {
+              method: 'PUT', body: JSON.stringify({ enabled: !enabled })
+            });
+            enabled = !enabled;
+            event.currentTarget.textContent = enabled ? '关闭用户补卡' : '允许用户补卡';
+            event.currentTarget.className = enabled ? 'danger right' : 'secondary right';
+          } catch (error) { alert(error.message); }
+          finally { event.currentTarget.disabled = false; }
+        };
+      } catch (error) {
+        panel.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+      }
+    } else if (key === 'adminMakeup') {
+      panel.innerHTML = `<form id="adminMakeupForm">
+        ${isHealth
+          ? `<label>餐次</label><select name="slotId">${config.slots.map((slot) => `<option value="${slot.id}">${escapeHtml(slot.label)}</option>`).join('')}</select>`
+          : `<label>活动任务</label><select name="taskId" required>${interactionTasks.map((task) => `<option value="${task.id}">${escapeHtml(task.name)}</option>`).join('')}</select>`}
+        <label>补卡图片</label><input name="photos" type="file" accept="image/jpeg,image/png,image/webp" required>
+        ${isHealth ? '<label>备注（可选）</label><textarea name="note"></textarea>' : ''}
+        <button>确认管理员补卡</button>
+      </form>`;
+      panel.querySelector('#adminMakeupForm').onsubmit = async (event) => {
+        event.preventDefault();
+        const form = event.target;
+        const submit = form.querySelector('button');
+        submit.disabled = true;
+        try {
+          const photos = await readFiles(form.photos.files, {
+            taskId: isHealth ? null : form.taskId.value,
+            businessType: 'admin-makeup',
+            limit: isHealth ? 3 : 1
+          });
+          await api(`/api/admin/users/${encodeURIComponent(studentUser.id)}/makeup`, {
+            method: 'POST',
+            body: JSON.stringify(isHealth
+              ? { date, slotId: form.slotId.value, mediaIds: photos.map((item) => item.mediaId), note: form.note.value }
+              : { date, taskId: form.taskId.value, mediaIds: photos.map((item) => item.mediaId) })
+          });
+          const recordsPanel = root.querySelector('[data-panel-content="records"]');
+          sectionState.delete('records');
+          await loadRecords(recordsPanel, true);
+          alert('补卡已完成');
+        } catch (error) { alert(error.message); }
+        finally { submit.disabled = false; }
+      };
+    } else if (key === 'manage') {
+      panel.innerHTML = `<div class="drawer-actions">
+        <button class="secondary" id="editDrawerUser">编辑用户</button>
+        <button class="${studentUser.status === 'active' ? 'danger' : 'secondary'}" id="toggleDrawerUser">${studentUser.status === 'active' ? '禁用用户' : '启用用户'}</button>
+      </div>`;
+      panel.querySelector('#editDrawerUser').onclick = () => editUser(studentUser, date);
+      panel.querySelector('#toggleDrawerUser').onclick = async (event) => {
+        const next = studentUser.status === 'active' ? 'disabled' : 'active';
+        const action = next === 'disabled' ? '禁用' : '启用';
+        if (!await askConfirm(`是否${action}该用户？`, `${action}后将立即影响该账号的登录状态。`)) return;
+        event.currentTarget.disabled = true;
+        try {
+          await api(`/api/admin/users/${encodeURIComponent(studentUser.id)}/status`, {
+            method: 'PATCH', body: JSON.stringify({ status: next })
+          });
+          studentUser.status = next;
+          event.currentTarget.textContent = next === 'active' ? '禁用用户' : '启用用户';
+          event.currentTarget.className = next === 'active' ? 'danger' : 'secondary';
+        } catch (error) { alert(error.message); }
+        finally { event.currentTarget.disabled = false; }
+      };
+    }
   };
-  document.querySelector('#toggleDrawerUser').onclick = async () => {
-    const next = studentUser.status === 'active' ? 'disabled' : 'active';
-    const action = next === 'disabled' ? '禁用' : '启用';
-    if (!await askConfirm(`是否${action}该用户？`, `${action}后将立即影响该账号的登录状态。`)) return;
-    try {
-      await api(`/api/admin/users/${studentUser.id}/status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status: next })
+
+  root.querySelectorAll('.drawer-accordion-toggle').forEach((toggle) => {
+    toggle.onclick = () => {
+      const section = toggle.closest('.drawer-accordion');
+      const key = section.dataset.drawerSection;
+      const shouldOpen = !section.classList.contains('is-open');
+      root.querySelectorAll('.drawer-accordion').forEach((item) => {
+        item.classList.remove('is-open');
+        item.querySelector('.drawer-accordion-toggle').setAttribute('aria-expanded', 'false');
+        item.querySelector('.drawer-accordion-panel').hidden = true;
       });
-      root.innerHTML = '';
-      admin(date);
-    } catch (error) { alert(error.message); }
-  };
+      if (!shouldOpen) return;
+      section.classList.add('is-open');
+      toggle.setAttribute('aria-expanded', 'true');
+      const panel = section.querySelector('.drawer-accordion-panel');
+      panel.hidden = false;
+      void loadSection(key, panel.querySelector('.drawer-panel-inner'));
+    };
+  });
+  const initialRecords = root.querySelector('[data-panel-content="records"]');
+  void loadRecords(initialRecords);
 }
 
 function taskFormFields(task = {}, requestedType = '') {

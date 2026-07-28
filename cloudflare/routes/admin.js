@@ -319,6 +319,30 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     });
   }
 
+  if (route === '/api/admin/completion-summary' && request.method === 'GET') {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
+      ? url.searchParams.get('date') : shanghaiDate();
+    const expression = completionExpression.replaceAll('?2', '?1');
+    const summary = await env.DB.prepare(
+      `SELECT u.track_id AS trackId,COUNT(*) AS total,
+        SUM(CASE WHEN ${expression} THEN 1 ELSE 0 END) AS completed
+       FROM users u WHERE u.role='student' GROUP BY u.track_id`
+    ).bind(date).all();
+    const tracks = summary.results.map((item) => ({
+      trackId: item.trackId,
+      total: Number(item.total),
+      completed: Number(item.completed)
+    }));
+    return json({
+      date,
+      tracks,
+      overall: {
+        total: tracks.reduce((sum, item) => sum + item.total, 0),
+        completed: tracks.reduce((sum, item) => sum + item.completed, 0)
+      }
+    });
+  }
+
   if (route === '/api/admin/users' && request.method === 'GET') {
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 48)));
@@ -363,6 +387,72 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM users u WHERE ${where}`)
       .bind(query, date, search).first();
     return json({ users: results, tracks: TRACKS, page, limit, total: Number(count.total) });
+  }
+
+  const userCheckinsMatch = route.match(/^\/api\/admin\/users\/([^/]+)\/checkins$/);
+  if (userCheckinsMatch && request.method === 'GET') {
+    const userId = decodeURIComponent(userCheckinsMatch[1]);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '')
+      ? url.searchParams.get('date') : shanghaiDate();
+    const target = await env.DB.prepare(
+      "SELECT id,track_id AS trackId FROM users WHERE id=?1 AND role='student'"
+    ).bind(userId).first();
+    if (!target) return json({ error: '用户不存在' }, 404);
+
+    if (target.trackId === 'health') {
+      const checkins = await env.DB.prepare(
+        `SELECT c.id,c.slot_id AS slotId,c.note,c.status,c.submitted_at AS submittedAt,
+                c.review_note AS reviewNote
+           FROM checkins c WHERE c.user_id=?1 AND c.checkin_date=?2
+          ORDER BY c.submitted_at`
+      ).bind(userId, date).all();
+      const files = await env.DB.prepare(
+        `SELECT f.id,f.checkin_id AS checkinId,f.object_key AS objectKey,f.kind,m.id AS mediaId
+           FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id
+           LEFT JOIN media_objects m ON m.id=f.id
+          WHERE c.user_id=?1 AND c.checkin_date=?2 ORDER BY f.sort_order`
+      ).bind(userId, date).all();
+      await Promise.all(files.results.map(async (file) => {
+        file.imageUrl = file.mediaId
+          ? await createPrivateMediaUrl(env, file, 'admin', admin.id)
+          : `/api/files/${file.id}`;
+      }));
+      return json({
+        date,
+        trackId: target.trackId,
+        records: checkins.results.map((item) => ({
+          ...item,
+          images: files.results
+            .filter((file) => file.checkinId === item.id && file.kind === 'photo')
+            .map((file) => file.imageUrl)
+        }))
+      });
+    }
+
+    const records = await env.DB.prepare(
+      `SELECT mc.id,mc.task_id AS taskId,mc.status,mc.submitted_at AS submittedAt,
+              t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey
+         FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+         LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
+        WHERE mc.user_id=?1 AND mc.occurrence_date=?2 ORDER BY mc.submitted_at`
+    ).bind(userId, date).all();
+    await Promise.all(records.results.map(async (item) => {
+      item.imageUrl = item.mediaId
+        ? await createPrivateMediaUrl(env, item, 'admin', admin.id)
+        : `/api/files/${item.id}`;
+    }));
+    return json({
+      date,
+      trackId: target.trackId,
+      records: records.results.map((item) => ({
+        id: item.id,
+        taskId: item.taskId,
+        taskName: item.taskName,
+        status: item.status,
+        submittedAt: item.submittedAt,
+        images: item.imageUrl ? [item.imageUrl] : []
+      }))
+    });
   }
 
   if (route === '/api/admin/users' && request.method === 'POST') {

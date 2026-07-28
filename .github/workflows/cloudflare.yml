@@ -61,6 +61,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-test
+          command: d1 execute jinshan20-test --remote --file ../../migrations/production/0006_media_pipeline.sql
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
           command: pages deploy ../../public --project-name jinshan20-test --branch develop
 
   deploy-production:
@@ -80,6 +86,12 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-production
           command: d1 execute jinshan20 --remote --file ../../migrations/production/0005_plaza_interactions.sql
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0006_media_pipeline.sql
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
