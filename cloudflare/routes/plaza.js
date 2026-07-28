@@ -29,9 +29,14 @@ const postDetails = async (env, post, userId = null) => {
       WHERE tm.team_id=?1 ORDER BY tm.joined_at`
     ).bind(post.teamId).all(),
     env.DB.prepare(
-    `SELECT i.id,i.sort_order AS sortOrder,m.id AS mediaId
+    `SELECT i.id,i.sort_order AS sortOrder,
+            COALESCE(tv.bytes,i.bytes) AS thumbVersion,
+            COALESCE(dv.bytes,i.bytes) AS displayVersion
        FROM task_submission_images i
-       LEFT JOIN media_objects m ON m.id=i.id
+       LEFT JOIN image_variants tv ON tv.source_type='task_submission_image'
+        AND tv.source_id=i.id AND tv.variant='thumb'
+       LEFT JOIN image_variants dv ON dv.source_type='task_submission_image'
+        AND dv.source_id=i.id AND dv.variant='display'
       WHERE i.submission_id=?1 ORDER BY i.sort_order`
     ).bind(post.submissionId).all(),
     env.DB.prepare(
@@ -50,12 +55,12 @@ const postDetails = async (env, post, userId = null) => {
     ...post,
     members: members.results,
     publisherName: members.results[0]?.name || post.teamName,
-    images: images.results.map((item) => {
-      const imageUrl = item.mediaId
-        ? `/api/public-media/${encodeURIComponent(item.id)}`
-        : `/api/public-images/${encodeURIComponent(item.id)}`;
-      return { ...item, imageUrl };
-    }),
+    images: images.results.map((item) => ({
+      ...item,
+      thumbUrl: `/api/public-images/${encodeURIComponent(item.id)}?variant=thumb&v=${encodeURIComponent(item.thumbVersion)}`,
+      displayUrl: `/api/public-images/${encodeURIComponent(item.id)}?variant=display&v=${encodeURIComponent(item.displayVersion)}`,
+      imageUrl: `/api/public-images/${encodeURIComponent(item.id)}?variant=thumb&v=${encodeURIComponent(item.thumbVersion)}`
+    })),
     likeCount: Number(counts.likes),
     viewCount: Number(counts.views),
     commentCount: Number(counts.comments),
@@ -170,18 +175,58 @@ export const handlePlazaRoutes = async (request, env, ctx, url) => {
       ? '(SELECT COUNT(*) FROM plaza_likes WHERE post_id=p.id) + (SELECT COUNT(*) FROM plaza_views WHERE post_id=p.id) DESC'
       : 'p.published_at DESC';
     const monthFilter = sort === 'monthly'
-      ? "AND strftime('%Y-%m',p.published_at,'+8 hours')=?1" : '';
-    const params = sort === 'monthly' ? [month, limit, (page - 1) * limit] : [limit, (page - 1) * limit];
+      ? "AND strftime('%Y-%m',p.published_at,'+8 hours')=?2" : '';
+    const params = sort === 'monthly'
+      ? [user.id, month, limit, (page - 1) * limit]
+      : [user.id, limit, (page - 1) * limit];
+    const countQuery = `SELECT COUNT(*) AS total
+       FROM plaza_posts p
+      WHERE p.status='visible' ${sort === 'monthly'
+        ? "AND strftime('%Y-%m',p.published_at,'+8 hours')=?1" : ''}`;
     const query = `SELECT p.id,p.submission_id AS submissionId,p.team_id AS teamId,
-          t.name AS teamName,task.name AS taskName,p.copy_text AS copy,p.published_at AS publishedAt
+          t.name AS teamName,task.name AS taskName,p.copy_text AS copy,p.published_at AS publishedAt,
+          COALESCE((SELECT u.name FROM team_members tm JOIN users u ON u.id=tm.user_id
+            WHERE tm.team_id=p.team_id ORDER BY tm.joined_at LIMIT 1),t.name) AS publisherName,
+          (SELECT COUNT(*) FROM plaza_likes WHERE post_id=p.id) AS likeCount,
+          (SELECT COUNT(*) FROM plaza_views WHERE post_id=p.id) AS viewCount,
+          (SELECT COUNT(*) FROM plaza_comments WHERE post_id=p.id AND status='visible') AS commentCount,
+          EXISTS(SELECT 1 FROM plaza_likes WHERE post_id=p.id AND user_id=?1) AS liked,
+          (SELECT i.id FROM task_submission_images i WHERE i.submission_id=p.submission_id
+            ORDER BY i.sort_order LIMIT 1) AS firstImageId,
+          (SELECT COALESCE(tv.bytes,i.bytes) FROM task_submission_images i
+            LEFT JOIN image_variants tv ON tv.source_type='task_submission_image'
+              AND tv.source_id=i.id AND tv.variant='thumb'
+            WHERE i.submission_id=p.submission_id ORDER BY i.sort_order LIMIT 1) AS thumbVersion,
+          (SELECT COALESCE(dv.bytes,i.bytes) FROM task_submission_images i
+            LEFT JOIN image_variants dv ON dv.source_type='task_submission_image'
+              AND dv.source_id=i.id AND dv.variant='display'
+            WHERE i.submission_id=p.submission_id ORDER BY i.sort_order LIMIT 1) AS displayVersion
        FROM plaza_posts p JOIN teams t ON t.id=p.team_id
        JOIN task_submissions s ON s.id=p.submission_id JOIN tasks task ON task.id=s.task_id
       WHERE p.status='visible' ${monthFilter} ORDER BY ${order}
       LIMIT ?${params.length - 1} OFFSET ?${params.length}`;
-    const { results } = await env.DB.prepare(query).bind(...params).all();
-    const posts = [];
-    for (const post of results) posts.push(await postDetails(env, post, user.id));
-    return json({ posts, page, limit, hasMore: posts.length === limit });
+    const [{ results }, count] = await Promise.all([
+      env.DB.prepare(query).bind(...params).all(),
+      sort === 'monthly'
+        ? env.DB.prepare(countQuery).bind(month).first()
+        : env.DB.prepare(countQuery).first()
+    ]);
+    const posts = results.map((post) => ({
+      ...post,
+      members: [],
+      likeCount: Number(post.likeCount),
+      viewCount: Number(post.viewCount),
+      commentCount: Number(post.commentCount),
+      liked: Boolean(post.liked),
+      images: post.firstImageId ? [{
+        id: post.firstImageId,
+        thumbUrl: `/api/public-images/${encodeURIComponent(post.firstImageId)}?variant=thumb&v=${encodeURIComponent(post.thumbVersion || post.firstImageId)}`,
+        displayUrl: `/api/public-images/${encodeURIComponent(post.firstImageId)}?variant=display&v=${encodeURIComponent(post.displayVersion || post.firstImageId)}`,
+        imageUrl: `/api/public-images/${encodeURIComponent(post.firstImageId)}?variant=thumb&v=${encodeURIComponent(post.thumbVersion || post.firstImageId)}`
+      }] : []
+    }));
+    const total = Number(count?.total || 0);
+    return json({ posts, page, limit, month, total, hasMore: page * limit < total });
   }
 
   const detailMatch = route.match(/^\/api\/plaza\/([^/]+)$/);

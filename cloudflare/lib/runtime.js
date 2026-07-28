@@ -276,6 +276,14 @@ export const claimConfirmedMedia = async (env, mediaIds, user, taskId, businessT
     if (!media || media.intentStatus !== 'confirmed' || media.businessId) {
       throw Object.assign(new Error('图片不存在、无权使用或已被其他提交占用'), { status: 403 });
     }
+    const thumb = await env.DB.prepare(
+      `SELECT id,object_key AS objectKey,mime_type AS contentType,file_size AS bytes,
+              width,height,etag
+         FROM media_objects
+        WHERE owner_user_id=?1 AND COALESCE(task_id,'')=COALESCE(?2,'')
+          AND business_type=?3 AND business_id=?4 LIMIT 1`
+    ).bind(user.id, taskId || null, `${businessType}:thumb`, media.id).first();
+    media.thumb = thumb || null;
     claimed.push(media);
   }
   return claimed.map((media, sortOrder) => ({ ...media, sortOrder }));

@@ -1,5 +1,5 @@
 import { AwsClient } from 'aws4fetch';
-import { cleanText, json, nowIso, readJson, requireUser, verifySessionClaims } from '../lib/runtime.js';
+import { cleanText, json, nowIso, readJson, requireUser } from '../lib/runtime.js';
 import { verifyPrivateMediaRequest } from '../lib/media-signing.js';
 
 const ALLOWED_TYPES = new Map([
@@ -10,7 +10,10 @@ const ALLOWED_TYPES = new Map([
 const MAX_FINAL_BYTES = 1_572_864;
 const INTENT_TTL_SECONDS = 180;
 
-const noLeak = (status = 404) => json({ error: '媒体不可访问' }, status);
+const noLeak = (status = 404) => json({ error: '媒体不可访问' }, status, {
+  'cache-control': 'no-store',
+  'x-image-cache': 'MISS'
+});
 
 const signatureMatches = (bytes, type) => {
   if (!bytes?.length) return false;
@@ -41,12 +44,14 @@ const createUploadIntent = async (request, env) => {
   const height = Number(body.height);
   const taskId = cleanText(body.taskId, 80) || null;
   const businessType = cleanText(body.businessType, 40);
+  const variant = body.variant === 'thumb' ? 'thumb' : 'display';
+  const storedBusinessType = variant === 'thumb' ? `${businessType}:thumb` : businessType;
   if (!extension || !['task', 'member-checkin', 'meal-checkin', 'material-image', 'admin-makeup'].includes(businessType)) {
     return json({ error: '不支持的图片类型或上传用途' }, 415);
   }
   if (!Number.isInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_FINAL_BYTES
-      || !Number.isInteger(width) || width < 1 || width > 1600
-      || !Number.isInteger(height) || height < 1 || height > 1600) {
+      || !Number.isInteger(width) || width < 1 || width > (variant === 'thumb' ? 480 : 1280)
+      || !Number.isInteger(height) || height < 1 || height > (variant === 'thumb' ? 480 : 1280)) {
     return json({ error: '压缩图片的大小或尺寸不符合要求' }, 400);
   }
   if (taskId) {
@@ -58,7 +63,7 @@ const createUploadIntent = async (request, env) => {
     return json({ error: '测试环境R2直传尚未配置' }, 503);
   }
   const id = crypto.randomUUID();
-  const objectKey = `media/${env.ENVIRONMENT || 'test'}/${auth.user.id}/${id}.${extension}`;
+  const objectKey = `media/${env.ENVIRONMENT || 'test'}/${auth.user.id}/${variant}/${id}.${extension}`;
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + INTENT_TTL_SECONDS * 1000).toISOString();
   await env.DB.prepare(
@@ -66,7 +71,7 @@ const createUploadIntent = async (request, env) => {
       (id,user_id,task_id,business_type,object_key,mime_type,expected_size,width,height,status,
        expires_at,created_at,updated_at)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'pending',?10,?11,?11)`
-  ).bind(id, auth.user.id, taskId, businessType, objectKey, mimeType,
+  ).bind(id, auth.user.id, taskId, storedBusinessType, objectKey, mimeType,
     expectedSize, width, height, expiresAt, createdAt).run();
   const client = new AwsClient({
     accessKeyId: env.R2_ACCESS_KEY_ID,
@@ -95,6 +100,7 @@ const createUploadIntent = async (request, env) => {
 const confirmUpload = async (request, env, intentId) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
+  const body = await readJson(request, 8 * 1024);
   const intent = await env.DB.prepare(
     `SELECT id,user_id AS userId,task_id AS taskId,business_type AS businessType,
             object_key AS objectKey,mime_type AS mimeType,expected_size AS expectedSize,
@@ -116,7 +122,8 @@ const confirmUpload = async (request, env, intentId) => {
     return json({ error: '上传地址已过期，请重新选择图片' }, 410);
   }
   if (intent.taskId) {
-    const taskTable = intent.businessType === 'material-image' ? 'material_tasks' : 'tasks';
+    const baseBusinessType = intent.businessType.replace(/:thumb$/, '');
+    const taskTable = baseBusinessType === 'material-image' ? 'material_tasks' : 'tasks';
     const task = await env.DB.prepare(`SELECT status FROM ${taskTable} WHERE id=?1`).bind(intent.taskId).first();
     if (!task || task.status !== 'published') {
       await rejectIntent(env, intent, '任务已关闭，图片不能继续确认');
@@ -134,14 +141,28 @@ const confirmUpload = async (request, env, intentId) => {
   if (!signatureMatches(bytes, actualType)) return rejectIntent(env, intent, '图片真实格式校验失败');
   const now = nowIso();
   const mediaId = intent.id;
+  const isThumb = intent.businessType.endsWith(':thumb');
+  const parentMediaId = isThumb ? cleanText(body.parentMediaId, 80) : null;
+  if (isThumb) {
+    const parent = parentMediaId ? await env.DB.prepare(
+      `SELECT id FROM media_objects
+        WHERE id=?1 AND owner_user_id=?2 AND COALESCE(task_id,'')=COALESCE(?3,'')
+          AND business_type=?4 AND business_id IS NULL LIMIT 1`
+    ).bind(parentMediaId, intent.userId, intent.taskId || null,
+      intent.businessType.replace(/:thumb$/, '')).first() : null;
+    if (!parent || Math.max(Number(intent.width), Number(intent.height)) > 480) {
+      await env.UPLOADS.delete(intent.objectKey).catch(() => null);
+      return json({ error: '缩略图与原图片不匹配' }, 403, { 'cache-control': 'no-store' });
+    }
+  }
   const statements = [
     env.DB.prepare(
       `INSERT INTO media_objects
         (id,owner_user_id,task_id,business_type,object_key,mime_type,file_size,width,height,etag,
-         visibility,created_at,updated_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'private',?11,?11)`
+          visibility,business_id,created_at,updated_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'private',?11,?12,?12)`
     ).bind(mediaId, intent.userId, intent.taskId, intent.businessType, intent.objectKey,
-      actualType, object.size, intent.width, intent.height, object.httpEtag || '', now),
+      actualType, object.size, intent.width, intent.height, object.httpEtag || '', parentMediaId, now),
     env.DB.prepare(
       "UPDATE media_upload_intents SET status='confirmed',confirmed_at=?1,updated_at=?1 WHERE id=?2 AND status='pending'"
     ).bind(now, intent.id)
@@ -157,6 +178,7 @@ const mediaHeaders = (object, contentType, cacheControl) => ({
   'content-type': object.httpMetadata?.contentType || contentType || 'application/octet-stream',
   'content-length': String(object.size),
   etag: object.httpEtag,
+  'content-disposition': 'inline',
   'cache-control': cacheControl,
   'content-security-policy': "default-src 'none'",
   'x-content-type-options': 'nosniff'
@@ -165,10 +187,11 @@ const mediaHeaders = (object, contentType, cacheControl) => ({
 const privateMedia = async (request, env, url, mediaId) => {
   const signed = await verifyPrivateMediaRequest(env, mediaId, url.searchParams);
   if (!signed) return noLeak(403);
-  const claims = await verifySessionClaims(request, env);
-  if (!claims || claims.sub !== signed.scope
-      || (signed.aud === 'admin' && claims.role !== 'admin')
-      || (signed.aud === 'owner' && claims.role === 'admin')) return noLeak(403);
+  const auth = await requireUser(request, env);
+  if (auth.error) return noLeak(403);
+  if (auth.user.id !== signed.scope
+      || (signed.aud === 'admin' && auth.user.role !== 'admin')
+      || (signed.aud === 'owner' && auth.user.role === 'admin')) return noLeak(403);
   const object = await env.UPLOADS.get(signed.objectKey);
   if (!object) return noLeak(404);
   if (request.headers.get('if-none-match') === object.httpEtag) {

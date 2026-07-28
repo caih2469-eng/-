@@ -136,12 +136,27 @@ function mediaRouteEnv(visible = false) {
     SESSION_SECRET: 'test-session-secret-with-sufficient-length',
     _visible: visible,
     DB: {
-      prepare() {
+      prepare(sql) {
         return {
-          bind() { return this; },
-          first: async () => routeEnv._visible
-            ? { objectKey: media.objectKey, mimeType: 'image/webp' }
-            : null
+          bind(...args) { this.args = args; return this; },
+          first: async function () {
+            if (/FROM users WHERE id/i.test(sql)) {
+              const id = this.args?.[0];
+              return {
+                id,
+                studentId: id,
+                name: id,
+                role: String(id).startsWith('admin') ? 'admin' : 'student',
+                campus: '测试',
+                trackId: 'interaction',
+                status: 'active',
+                createdAt: '2026-07-29T00:00:00.000Z'
+              };
+            }
+            return routeEnv._visible
+              ? { objectKey: media.objectKey, mimeType: 'image/webp' }
+              : null;
+          }
         };
       }
     },

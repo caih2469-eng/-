@@ -130,6 +130,7 @@
         .input-box:focus { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.5); box-shadow: 0 0 15px rgba(255,255,255,0.15); }
         
         .btn-submit { width: 100%; padding: 16px; margin-top: 5px; background: #ffffff; color: #000000; border: none; border-radius: 12px; font-size: 1.1rem; font-weight: bold; letter-spacing: 8px; cursor: pointer; transition: all 0.3s; text-indent: 8px; }
+        .login-error { min-height: 22px; margin: -8px 0 10px; color: #ffe3a8; font-size: 14px; line-height: 1.5; }
         .btn-submit:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(255,255,255,0.3); }
 
         @media (max-width: 600px) {
@@ -227,6 +228,22 @@
             80% { opacity: 0.9; }
             100% { transform: rotate(45deg) translateX(110vw); opacity: 0; }
         }
+        @media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+            .orb, .mouse-glow, .floating-particle, .bg-shooting-star { display: none !important; }
+            .ambient-canvas, .vignette-overlay, .ui-layer, .bg-stars { transition: none !important; }
+            .ambient-canvas { filter: none !important; }
+            .star { animation: none !important; box-shadow: none !important; }
+        }
+        .reduced-effects .orb,
+        .reduced-effects .mouse-glow,
+        .reduced-effects .floating-particle,
+        .reduced-effects .bg-shooting-star { display: none !important; }
+        .reduced-effects .ambient-canvas,
+        .reduced-effects .vignette-overlay,
+        .reduced-effects .ui-layer,
+        .reduced-effects .bg-stars { transition: none !important; }
+        .reduced-effects .ambient-canvas { filter: none !important; }
+        .reduced-effects .star { animation: none !important; box-shadow: none !important; }
     </style>
 </head>
 <body>
@@ -261,10 +278,11 @@
             <div class="login-heading">登 入</div>
             <input type="text" class="input-box" name="studentId" placeholder="账号" autocomplete="username" required>
             <input type="password" class="input-box" name="password" placeholder="密码" autocomplete="current-password" required>
+            <p class="login-error" id="login-error" role="alert" aria-live="polite"></p>
             <button class="btn-submit" type="submit">确 认</button>
         </form>
     </div>
 
-    <script src="/entrance.js?v=20260727-2"></script>
+    <script src="/entrance.js?v=20260729-perf1"></script>
 </body>
 </html>

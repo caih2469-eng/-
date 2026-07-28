@@ -129,8 +129,12 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
       }
       const id = current?.id || crypto.randomUUID();
       const old = current ? await env.DB.prepare(
-        `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId
+        `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId,
+                tv.object_key AS thumbObjectKey,tm.id AS thumbMediaId
            FROM material_files f LEFT JOIN media_objects m ON m.id=f.id
+           LEFT JOIN image_variants tv ON tv.source_type='material_file'
+             AND tv.source_id=f.id AND tv.variant='thumb'
+           LEFT JOIN media_objects tm ON tm.object_key=tv.object_key
           WHERE f.submission_id=?1`
       ).bind(id).all() : { results: [] };
       if (current) {
@@ -152,6 +156,10 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
       ];
       for (const file of old.results) {
         if (file.mediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.mediaId));
+        if (file.thumbMediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.thumbMediaId));
+        statements.push(env.DB.prepare(
+          "DELETE FROM image_variants WHERE source_type='material_file' AND source_id=?1"
+        ).bind(file.id));
       }
       for (const file of uploaded) {
         const originalName = cleanText(
@@ -167,16 +175,31 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
           `UPDATE media_objects SET business_id=?1,updated_at=?2
             WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
         ).bind(id, nowIso(), file.id, user.id));
+        statements.push(env.DB.prepare(
+          `INSERT OR REPLACE INTO image_variants
+            (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+           VALUES ('material_file',?1,'display',?2,?3,?4,?5)`
+        ).bind(file.id, file.objectKey, file.contentType, file.bytes, nowIso()));
+        if (file.thumb) {
+          statements.push(env.DB.prepare(
+            `INSERT OR REPLACE INTO image_variants
+              (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+             VALUES ('material_file',?1,'thumb',?2,?3,?4,?5)`
+          ).bind(file.id, file.thumb.objectKey, file.thumb.contentType, file.thumb.bytes, nowIso()));
+        }
       }
       await env.DB.batch(statements);
-      ctx.waitUntil(Promise.all(old.results.map((file) => env.UPLOADS.delete(file.objectKey))));
+      ctx.waitUntil(Promise.all(old.results.flatMap((file) => [
+        env.UPLOADS.delete(file.objectKey),
+        ...(file.thumbObjectKey ? [env.UPLOADS.delete(file.thumbObjectKey)] : [])
+      ])));
       return json({ ok: true, id });
     } catch (error) { throw error; }
   }
 
   if (route === '/api/admin/material-tasks' && request.method === 'GET') {
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)));
+    const limit = Math.min(30, Math.max(1, Number(url.searchParams.get('limit') || 30)));
     const campus = cleanText(url.searchParams.get('campus'), 50);
     const tasks = await env.DB.prepare(
       `SELECT id,title,description,deadline,allowed_types_json AS allowedTypesJson,
@@ -205,20 +228,53 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
         fileTypes: parseJson(task.allowedTypesJson, []).map((item) => item.replace(/^\./, '')),
         requireSummary: Boolean(task.requireSummary)
       }));
-    for (const submission of submissions.results) {
+    const filesBySubmission = new Map();
+    const ownersById = new Map();
+    if (submissions.results.length) {
+      const submissionPlaceholders = submissions.results.map((_, index) => `?${index + 1}`).join(',');
       const files = await env.DB.prepare(
-        `SELECT id,original_name AS originalName,content_type AS contentType,bytes
-           FROM material_files WHERE submission_id=?1 ORDER BY created_at`
-      ).bind(submission.id).all();
-      submission.files = files.results.map((file) => ({
-        ...file,
-        downloadUrl: `/api/material-files/${file.id}`
-      }));
-      submission.owner = submission.ownerType === 'user'
-        ? await env.DB.prepare(
-          'SELECT id,name,student_id AS studentId,campus FROM users WHERE id=?1'
-        ).bind(submission.ownerId).first()
-        : await env.DB.prepare('SELECT id,name FROM teams WHERE id=?1').bind(submission.ownerId).first();
+        `SELECT id,submission_id AS submissionId,original_name AS originalName,
+                content_type AS contentType,bytes
+           FROM material_files
+          WHERE submission_id IN (${submissionPlaceholders})
+          ORDER BY submission_id,created_at`
+      ).bind(...submissions.results.map((submission) => submission.id)).all();
+      for (const file of files.results) {
+        if (!filesBySubmission.has(file.submissionId)) filesBySubmission.set(file.submissionId, []);
+        filesBySubmission.get(file.submissionId).push({
+          id: file.id,
+          originalName: file.originalName,
+          contentType: file.contentType,
+          bytes: file.bytes,
+          downloadUrl: `/api/material-files/${file.id}`
+        });
+      }
+
+      const userOwnerIds = [...new Set(submissions.results
+        .filter((submission) => submission.ownerType === 'user')
+        .map((submission) => submission.ownerId))];
+      if (userOwnerIds.length) {
+        const placeholders = userOwnerIds.map((_, index) => `?${index + 1}`).join(',');
+        const users = await env.DB.prepare(
+          `SELECT id,name,student_id AS studentId,campus FROM users WHERE id IN (${placeholders})`
+        ).bind(...userOwnerIds).all();
+        for (const userOwner of users.results) ownersById.set(`user:${userOwner.id}`, userOwner);
+      }
+
+      const teamOwnerIds = [...new Set(submissions.results
+        .filter((submission) => submission.ownerType === 'team')
+        .map((submission) => submission.ownerId))];
+      if (teamOwnerIds.length) {
+        const placeholders = teamOwnerIds.map((_, index) => `?${index + 1}`).join(',');
+        const teams = await env.DB.prepare(
+          `SELECT id,name FROM teams WHERE id IN (${placeholders})`
+        ).bind(...teamOwnerIds).all();
+        for (const teamOwner of teams.results) ownersById.set(`team:${teamOwner.id}`, teamOwner);
+      }
+    }
+    for (const submission of submissions.results) {
+      submission.files = filesBySubmission.get(submission.id) || [];
+      submission.owner = ownersById.get(`${submission.ownerType}:${submission.ownerId}`) || null;
     }
     const campuses = await env.DB.prepare(
       "SELECT DISTINCT campus FROM users WHERE role='student' AND campus<>'' ORDER BY campus"

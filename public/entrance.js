@@ -14,18 +14,32 @@
             const bgStars = document.getElementById('bg-stars');
             const glow = document.getElementById('glow');
             const loginForm = document.getElementById('login-form');
+            const loginError = document.getElementById('login-error');
+            const userAgent = navigator.userAgent || '';
+            const constrainedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+                || matchMedia('(hover: none)').matches
+                || matchMedia('(pointer: coarse)').matches
+                || /iP(?:hone|ad|od)|MicroMessenger|MQQBrowser|QQ\//i.test(userAgent);
+            if (constrainedMotion) document.documentElement.classList.add('reduced-effects');
+            let loginPending = false;
 
             loginForm.addEventListener('submit', async (event) => {
                 event.preventDefault();
+                if (loginPending) return;
+                loginPending = true;
                 const button = loginForm.querySelector('.btn-submit');
                 button.disabled = true;
                 button.textContent = '登录中';
+                loginError.textContent = '';
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 10000);
                 try {
                     const values = Object.fromEntries(new FormData(loginForm));
                     const response = await fetch('/api/login', {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify(values)
+                        body: JSON.stringify(values),
+                        signal: controller.signal
                     });
                     const result = await response.json();
                     if (!response.ok) throw new Error(result.error || '登录失败');
@@ -37,9 +51,12 @@
                     }
                     location.replace('/');
                 } catch (error) {
-                    alert(error.message);
+                    loginError.textContent = error.name === 'AbortError' ? '登录请求超时，请检查网络后重试。' : error.message;
+                    loginPending = false;
                     button.disabled = false;
                     button.textContent = '确 认';
+                } finally {
+                    clearTimeout(timeout);
                 }
             });
 
@@ -56,13 +73,13 @@
                 uiLayer.style.transform = 'translateY(0)';
             }, 800);
 
-            document.addEventListener('mousemove', (e) => {
+            if (!constrainedMotion) document.addEventListener('mousemove', (e) => {
                 glow.style.left = e.clientX + 'px';
                 glow.style.top = e.clientY + 'px';
             });
 
             // 1. 生成高密度、有大小层次的静态繁星 (数量180颗，大小扩大到1px - 4.5px)
-            for(let i = 0; i < 180; i++) {
+            for(let i = 0; i < (constrainedMotion ? 36 : 180); i++) {
                 let star = document.createElement('div');
                 star.className = 'star';
                 star.style.left = Math.random() * 100 + 'vw';
@@ -79,7 +96,7 @@
             }
 
             // 2. 生成缓慢漂浮的环境星尘粒子
-            for(let i = 0; i < 70; i++) {
+            for(let i = 0; i < (constrainedMotion ? 0 : 70); i++) {
                 let particle = document.createElement('div');
                 particle.className = 'floating-particle';
                 particle.style.left = Math.random() * 100 + 'vw';
@@ -127,7 +144,7 @@
             }
 
             // 缩短触发间隔，大幅增加流星出现频率
-            setTimeout(() => {
+            if (!constrainedMotion) setTimeout(() => {
                 setInterval(() => {
                     // 提高生成触发概率到 85%
                     if (Math.random() > 0.15) {

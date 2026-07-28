@@ -73,16 +73,25 @@ const submissionOwner = async (env, user, task) => {
 const submissionImages = async (env, submissionId, viewer) => {
   const { results } = await env.DB.prepare(
     `SELECT i.id,i.object_key AS objectKey,i.content_type AS contentType,i.bytes,
-            i.sort_order AS sortOrder,m.id AS mediaId
+            i.sort_order AS sortOrder,m.id AS mediaId,
+            tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey,
+            tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
        FROM task_submission_images i
        LEFT JOIN media_objects m ON m.id=i.id
+       LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='task:thumb'
       WHERE i.submission_id=?1 ORDER BY i.sort_order`
   ).bind(submissionId).all();
   return Promise.all(results.map(async (item) => {
-    const imageUrl = item.mediaId
+    const displayUrl = item.mediaId
       ? await createPrivateMediaUrl(env, item, viewer.role === 'admin' ? 'admin' : 'owner', viewer.id)
       : `/api/files/${item.id}`;
-    return { ...item, imageUrl, url: imageUrl };
+    const thumbUrl = item.thumbMediaId
+      ? await createPrivateMediaUrl(env, {
+        id: item.thumbMediaId,
+        objectKey: item.thumbObjectKey
+      }, viewer.role === 'admin' ? 'admin' : 'owner', viewer.id)
+      : displayUrl;
+    return { ...item, thumbUrl, displayUrl, imageUrl: thumbUrl, url: thumbUrl };
   }));
 };
 
@@ -220,15 +229,25 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
   }
 
   if (route === '/api/submissions/history' && request.method === 'GET') {
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit') || 20)));
+    const offset = (page - 1) * limit;
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM task_submissions WHERE owner_type='user' AND owner_id=?1"
+    ).bind(user.id).first();
     const { results } = await env.DB.prepare(
       `SELECT s.id,s.task_id AS taskId,t.name AS taskName,s.occurrence_date AS occurrenceDate,
               s.meal_type AS mealType,s.copy_text AS copy,s.status,s.submitted_at AS submittedAt,
               s.review_note AS reviewNote,s.version
          FROM task_submissions s JOIN tasks t ON t.id=s.task_id
-        WHERE s.owner_type='user' AND s.owner_id=?1 ORDER BY s.updated_at DESC LIMIT 200`
-    ).bind(user.id).all();
+        WHERE s.owner_type='user' AND s.owner_id=?1 ORDER BY s.updated_at DESC LIMIT ?2 OFFSET ?3`
+    ).bind(user.id, limit, offset).all();
     for (const item of results) item.images = await submissionImages(env, item.id, user);
     return json({
+      page,
+      limit,
+      total: Number(count.total),
+      hasMore: offset + results.length < Number(count.total),
       submissions: results.map((item) => ({
         ...item,
         task: { id: item.taskId, name: item.taskName }
@@ -238,7 +257,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
 
   if (route === '/api/checkins/history' && request.method === 'GET') {
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') || 20)));
+    const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit') || 20)));
     const offset = (page - 1) * limit;
 
     if (user.trackId === 'health') {
@@ -253,15 +272,25 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       ).bind(user.id, limit, offset).all();
       for (const record of records.results) {
         const files = await env.DB.prepare(
-          `SELECT f.id,f.object_key AS objectKey,f.kind,m.id AS mediaId
-             FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
-            WHERE f.checkin_id=?1 ORDER BY f.sort_order`
+          `SELECT f.id,f.object_key AS objectKey,f.kind,m.id AS mediaId,
+                  tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
+             FROM checkin_files f
+             LEFT JOIN media_objects m ON m.id=f.id
+             LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='meal-checkin:thumb'
+             WHERE f.checkin_id=?1 ORDER BY f.sort_order`
         ).bind(record.id).all();
         record.images = [];
         for (const file of files.results.filter((item) => item.kind === 'photo')) {
-          record.images.push(file.mediaId
+          const displayUrl = file.mediaId
             ? await createPrivateMediaUrl(env, file, 'owner', user.id)
-            : `/api/files/${file.id}`);
+            : `/api/files/${file.id}`;
+          const thumbUrl = file.thumbMediaId
+            ? await createPrivateMediaUrl(env, {
+              id: file.thumbMediaId,
+              objectKey: file.thumbObjectKey
+            }, 'owner', user.id)
+            : displayUrl;
+          record.images.push({ thumbUrl, displayUrl, imageUrl: thumbUrl });
         }
       }
       return json({
@@ -278,18 +307,27 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id).first();
     const records = await env.DB.prepare(
       `SELECT mc.id,mc.occurrence_date AS date,mc.status,mc.submitted_at AS submittedAt,
-              t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey
+               t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey,
+               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
          LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='member-checkin:thumb'
         WHERE mc.user_id=?1 ORDER BY mc.occurrence_date DESC,mc.submitted_at DESC
         LIMIT ?2 OFFSET ?3`
     ).bind(user.id, limit, offset).all();
     for (const record of records.results) {
-      record.images = record.objectKey
-        ? [record.mediaId
+      const displayUrl = record.objectKey
+        ? (record.mediaId
           ? await createPrivateMediaUrl(env, record, 'owner', user.id)
-          : `/api/files/${record.id}`]
-        : [];
+          : `/api/files/${record.id}`)
+        : null;
+      const thumbUrl = record.thumbMediaId
+        ? await createPrivateMediaUrl(env, {
+          id: record.thumbMediaId,
+          objectKey: record.thumbObjectKey
+        }, 'owner', user.id)
+        : displayUrl;
+      record.images = displayUrl ? [{ thumbUrl, displayUrl, imageUrl: thumbUrl }] : [];
     }
     return json({
       trackId: user.trackId,
@@ -321,14 +359,21 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       env, body.mediaIds, user, task.id, 'member-checkin', 1
     );
     const old = await env.DB.prepare(
-      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId
-         FROM member_checkins c LEFT JOIN media_objects m ON m.business_id=c.id
+      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId,
+              tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
+         FROM member_checkins c
+         LEFT JOIN media_objects m ON m.business_id=c.id AND m.business_type='member-checkin'
+         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='member-checkin:thumb'
         WHERE c.task_id=?1 AND c.occurrence_date=?2 AND c.user_id=?3`
     ).bind(task.id, occurrenceDate, user.id).first();
     const id = old?.id || crypto.randomUUID();
     try {
       const statements = [
         ...(old?.mediaId ? [env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(old.mediaId)] : []),
+        ...(old?.thumbMediaId ? [env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(old.thumbMediaId)] : []),
+        ...(old?.id ? [env.DB.prepare(
+          "DELETE FROM image_variants WHERE source_type='member_checkin' AND source_id=?1"
+        ).bind(old.id)] : []),
         env.DB.prepare(
           `INSERT INTO member_checkins
           (id,task_id,occurrence_date,user_id,team_id,object_key,content_type,bytes,status,submitted_at)
@@ -344,8 +389,26 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
             WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
         ).bind(id, nowIso(), uploaded[0].id, user.id)
       ];
+      statements.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO image_variants
+          (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+         VALUES ('member_checkin',?1,'display',?2,?3,?4,?5)`
+      ).bind(id, uploaded[0].objectKey, uploaded[0].contentType, uploaded[0].bytes, nowIso()));
+      if (uploaded[0].thumb) {
+        statements.push(env.DB.prepare(
+          `INSERT OR REPLACE INTO image_variants
+            (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+           VALUES ('member_checkin',?1,'thumb',?2,?3,?4,?5)`
+        ).bind(id, uploaded[0].thumb.objectKey, uploaded[0].thumb.contentType,
+          uploaded[0].thumb.bytes, nowIso()));
+      }
       await env.DB.batch(statements);
-      if (old?.objectKey) ctx.waitUntil(env.UPLOADS.delete(old.objectKey));
+      if (old?.objectKey) {
+        ctx.waitUntil(Promise.all([
+          env.UPLOADS.delete(old.objectKey),
+          ...(old.thumbObjectKey ? [env.UPLOADS.delete(old.thumbObjectKey)] : [])
+        ]));
+      }
       return json({ ok: true, occurrenceDate });
     } catch (error) {
       throw error;
@@ -391,8 +454,11 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const id = current?.id || crypto.randomUUID();
     const nextVersion = Number(current?.version || 0) + 1;
     const oldImages = current ? await env.DB.prepare(
-      `SELECT i.id,i.object_key AS objectKey,m.id AS mediaId
-         FROM task_submission_images i LEFT JOIN media_objects m ON m.id=i.id
+      `SELECT i.id,i.object_key AS objectKey,m.id AS mediaId,
+              tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
+         FROM task_submission_images i
+         LEFT JOIN media_objects m ON m.id=i.id
+         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='task:thumb'
         WHERE i.submission_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [];
@@ -420,6 +486,12 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         if (oldImage.mediaId) {
           statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(oldImage.mediaId));
         }
+        if (oldImage.thumbMediaId) {
+          statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(oldImage.thumbMediaId));
+        }
+        statements.push(env.DB.prepare(
+          "DELETE FROM image_variants WHERE source_type='task_submission_image' AND source_id=?1"
+        ).bind(oldImage.id));
       }
       for (const image of uploaded) {
         statements.push(env.DB.prepare(
@@ -431,6 +503,18 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
           `UPDATE media_objects SET business_id=?1,visibility=?2,updated_at=?3
             WHERE id=?4 AND owner_user_id=?5 AND business_id IS NULL`
         ).bind(id, intent === 'submitted' && isPublic ? 'public' : 'private', nowIso(), image.id, user.id));
+        statements.push(env.DB.prepare(
+          `INSERT OR REPLACE INTO image_variants
+            (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+           VALUES ('task_submission_image',?1,'display',?2,?3,?4,?5)`
+        ).bind(image.id, image.objectKey, image.contentType, image.bytes, nowIso()));
+        if (image.thumb) {
+          statements.push(env.DB.prepare(
+            `INSERT OR REPLACE INTO image_variants
+              (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+             VALUES ('task_submission_image',?1,'thumb',?2,?3,?4,?5)`
+          ).bind(image.id, image.thumb.objectKey, image.thumb.contentType, image.thumb.bytes, nowIso()));
+        }
       }
     }
     if (intent === 'submitted' && isPublic && owner.team) {
@@ -452,8 +536,13 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         const origin = new URL(request.url).origin;
         ctx.waitUntil(Promise.all(oldImages.results.flatMap((item) => [
           env.UPLOADS.delete(item.objectKey),
+          ...(item.thumbObjectKey ? [env.UPLOADS.delete(item.thumbObjectKey)] : []),
           ...(item.mediaId
-            ? [caches.default.delete(new Request(`${origin}/api/public-media/${encodeURIComponent(item.mediaId)}`))]
+            ? [
+              caches.default.delete(new Request(`${origin}/api/public-media/${encodeURIComponent(item.mediaId)}`)),
+              caches.default.delete(new Request(`${origin}/api/public-images/${encodeURIComponent(item.id)}?variant=thumb`)),
+              caches.default.delete(new Request(`${origin}/api/public-images/${encodeURIComponent(item.id)}?variant=display`))
+            ]
             : [])
         ])));
       }
@@ -513,8 +602,11 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id, date, slot.id).first();
     const id = existing?.id || crypto.randomUUID();
     const old = existing ? await env.DB.prepare(
-      `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId
-         FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
+      `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId,
+              tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
+         FROM checkin_files f
+         LEFT JOIN media_objects m ON m.id=f.id
+         LEFT JOIN media_objects tm ON tm.business_id=m.id AND tm.business_type='meal-checkin:thumb'
         WHERE f.checkin_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [
@@ -530,6 +622,10 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ];
     for (const file of old.results) {
       if (file.mediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.mediaId));
+      if (file.thumbMediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.thumbMediaId));
+      statements.push(env.DB.prepare(
+        "DELETE FROM image_variants WHERE source_type='checkin_file' AND source_id=?1"
+      ).bind(file.id));
     }
     for (const file of [...photos, ...(summary ? [{ ...summary, sortOrder: 0, kind: 'summary' }] : [])]) {
       statements.push(env.DB.prepare(
@@ -541,10 +637,25 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         `UPDATE media_objects SET business_id=?1,updated_at=?2
           WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
       ).bind(id, nowIso(), file.id, user.id));
+      statements.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO image_variants
+          (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+         VALUES ('checkin_file',?1,'display',?2,?3,?4,?5)`
+      ).bind(file.id, file.objectKey, file.contentType, file.bytes, nowIso()));
+      if (file.thumb) {
+        statements.push(env.DB.prepare(
+          `INSERT OR REPLACE INTO image_variants
+            (source_type,source_id,variant,object_key,content_type,bytes,created_at)
+           VALUES ('checkin_file',?1,'thumb',?2,?3,?4,?5)`
+        ).bind(file.id, file.thumb.objectKey, file.thumb.contentType, file.thumb.bytes, nowIso()));
+      }
     }
     try {
       await env.DB.batch(statements);
-      ctx.waitUntil(Promise.all(old.results.map((item) => env.UPLOADS.delete(item.objectKey))));
+      ctx.waitUntil(Promise.all(old.results.flatMap((item) => [
+        env.UPLOADS.delete(item.objectKey),
+        ...(item.thumbObjectKey ? [env.UPLOADS.delete(item.thumbObjectKey)] : [])
+      ])));
       return json({ ok: true, id });
     } catch (error) {
       throw error;

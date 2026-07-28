@@ -16,8 +16,22 @@ window.addEventListener('scroll', () => {
   scrollSaveTimer = setTimeout(() => { sessionStorage.adminScrollY = String(window.scrollY); }, 80);
 }, { passive: true });
 
-const prepareDynamicContent = () => {
-  document.querySelectorAll('table').forEach((table) => {
+const lazyImageObserver = 'IntersectionObserver' in window
+  ? new IntersectionObserver((entries, observer) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const image = entry.target;
+      if (image.dataset.src) {
+        image.src = buildMediaUrl(image.dataset.src);
+        image.removeAttribute('data-src');
+      }
+      observer.unobserve(image);
+    });
+  }, { rootMargin: '240px 0px' })
+  : null;
+
+const prepareDynamicContent = (container = app) => {
+  container.querySelectorAll('table').forEach((table) => {
     if (table.dataset.mobileReady) return;
     const labels = [...table.querySelectorAll('thead th')].map((cell) => cell.textContent.trim());
     table.querySelectorAll('tbody tr').forEach((row) => {
@@ -27,14 +41,22 @@ const prepareDynamicContent = () => {
     });
     table.dataset.mobileReady = 'true';
   });
-  document.querySelectorAll('img').forEach((image) => {
+  container.querySelectorAll('img').forEach((image) => {
+    if (image.dataset.dynamicReady) return;
+    image.dataset.dynamicReady = 'true';
     image.loading = image.dataset.priority === 'high' ? 'eager' : 'lazy';
     image.decoding = 'async';
-    if (image.dataset.priority === 'high') image.fetchPriority = 'high';
+    image.fetchPriority = image.dataset.priority === 'high' ? 'high' : 'low';
+    if (image.dataset.src) {
+      if (image.dataset.priority === 'high' || !lazyImageObserver) {
+        image.src = buildMediaUrl(image.dataset.src);
+        image.removeAttribute('data-src');
+      } else {
+        lazyImageObserver.observe(image);
+      }
+    }
   });
 };
-new MutationObserver(() => requestAnimationFrame(prepareDynamicContent))
-  .observe(app, { childList: true, subtree: true });
 
 let activeImageViewer = null;
 let imageViewerCloseTimer = null;
@@ -49,19 +71,53 @@ window.addEventListener('popstate', () => {
   if (activeImageViewer) closeImageViewer(true);
 });
 
-const openImageViewer = (src, alt = '查看图片') => {
+const openImageViewer = (thumbSrc, displaySrc, alt = '查看图片') => {
   if (activeImageViewer) closeImageViewer(true);
+  const thumb = buildMediaUrl(thumbSrc || displaySrc);
+  const display = buildMediaUrl(displaySrc || thumbSrc);
   const viewer = document.createElement('div');
   viewer.className = 'image-viewer';
   viewer.setAttribute('role', 'dialog');
   viewer.setAttribute('aria-modal', 'true');
   viewer.innerHTML = `
-    <div class="image-viewer-stage" aria-label="单击返回上一层"><div class="image-shell"><img decoding="async" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"
-      onload="this.parentElement.classList.add('loaded')" onerror="this.hidden=true;this.parentElement.classList.add('failed')"><span class="image-error">图片加载失败</span></div></div>`;
+    <div class="image-viewer-stage" aria-label="单击返回上一层"><div class="image-shell"><img decoding="async" src="${escapeHtml(thumb)}" alt="${escapeHtml(alt)}"><button type="button" class="image-error" hidden>图片加载失败，点击重试</button></div></div>`;
   document.body.appendChild(viewer);
   activeImageViewer = viewer;
   history.pushState({ ...(history.state || {}), imageViewer: true }, '');
   const stage = viewer.querySelector('.image-viewer-stage');
+  const image = viewer.querySelector('img');
+  const retry = viewer.querySelector('.image-error');
+  let manualRetryUsed = false;
+  const markLoaded = () => {
+    image.parentElement.classList.add('loaded');
+    image.parentElement.classList.remove('failed');
+    retry.hidden = true;
+  };
+  const markFailed = () => {
+    image.parentElement.classList.add('failed');
+    retry.hidden = false;
+  };
+  image.addEventListener('load', markLoaded);
+  image.addEventListener('error', markFailed);
+  if (image.complete && image.naturalWidth) markLoaded();
+  if (display && display !== thumb) {
+    const displayImage = new Image();
+    displayImage.decoding = 'async';
+    displayImage.fetchPriority = 'high';
+    displayImage.onload = () => {
+      image.src = display;
+      image.dataset.displayLoaded = 'true';
+    };
+    displayImage.onerror = markFailed;
+    displayImage.src = display;
+  }
+  retry.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (manualRetryUsed) return;
+    manualRetryUsed = true;
+    retry.hidden = true;
+    image.src = `${display}${display.includes('?') ? '&' : '?'}retry=1`;
+  });
   let pointerStart = null;
   let moved = false;
   stage.addEventListener('pointerdown', (event) => {
@@ -89,7 +145,11 @@ app.addEventListener('click', (event) => {
   if (!trigger) return;
   event.preventDefault();
   event.stopPropagation();
-  openImageViewer(trigger.dataset.imageViewer, trigger.dataset.imageAlt || '查看图片');
+  openImageViewer(
+    trigger.dataset.imageThumb || trigger.dataset.imageViewer,
+    trigger.dataset.imageDisplay || trigger.dataset.imageViewer,
+    trigger.dataset.imageAlt || '查看图片'
+  );
 });
 
 const openDialog = ({ title, message = '', input = false, inputLabel = '', value = '', danger = false,
@@ -126,7 +186,7 @@ const askText = (title, message, inputLabel) => openDialog({
 });
 
 const api = async (path, options = {}) => {
-  const response = await fetch(path, {
+  const response = await fetch(normalizeSitePath(path), {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -194,10 +254,11 @@ const imageDimensions = async (blob) => {
 const compressImage = async (file, options = {}) => {
   await validateSourceImage(file);
   if (typeof window.imageCompression !== 'function') throw new Error('图片压缩模块加载失败，请刷新后重试。');
+  const isThumb = options.variant === 'thumb';
   const common = {
-    maxSizeMB: 1.2,
-    maxWidthOrHeight: 1600,
-    initialQuality: 0.9,
+    maxSizeMB: isThumb ? 0.18 : 1.2,
+    maxWidthOrHeight: isThumb ? 480 : 1280,
+    initialQuality: isThumb ? 0.82 : 0.88,
     useWebWorker: true,
     libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
     preserveExif: false,
@@ -207,7 +268,7 @@ const compressImage = async (file, options = {}) => {
   let blob = await window.imageCompression(file, { ...common, fileType: 'image/webp' });
   let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
   if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
-    blob = await window.imageCompression(file, { ...common, fileType: 'image/jpeg', initialQuality: 0.9 });
+    blob = await window.imageCompression(file, { ...common, fileType: 'image/jpeg', initialQuality: isThumb ? 0.82 : 0.88 });
     header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
     if (blob.type !== 'image/jpeg' || !bytesMatchMime(header, 'image/jpeg')) {
       throw new Error('当前浏览器无法稳定生成压缩图片，请改用JPG后重试。');
@@ -215,7 +276,7 @@ const compressImage = async (file, options = {}) => {
   }
   if (!blob.size || blob.size > 1.5 * 1024 * 1024) throw new Error('压缩后图片仍然过大，请重新选择图片。');
   const dimensions = await imageDimensions(blob);
-  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > 1600) {
+  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > (isThumb ? 480 : 1280)) {
     throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
   }
   const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
@@ -237,7 +298,8 @@ const uploadCompressedImage = async (image, context, signal) => {
       mimeType: image.mimeType,
       fileSize: image.file.size,
       width: image.width,
-      height: image.height
+      height: image.height,
+      variant: context.variant || 'display'
     })
   });
   const uploaded = await fetch(intent.uploadUrl, {
@@ -249,7 +311,7 @@ const uploadCompressedImage = async (image, context, signal) => {
   if (!uploaded.ok) throw new Error(`图片直传失败（${uploaded.status}），请重新选择图片。`);
   const confirmed = await api(`/api/media/upload-intents/${encodeURIComponent(intent.intentId)}/confirm`, {
     method: 'POST',
-    body: '{}'
+    body: JSON.stringify({ parentMediaId: context.parentMediaId || null })
   });
   return { ...image, mediaId: confirmed.media.id };
 };
@@ -268,8 +330,24 @@ const readFiles = async (files, context = {}) => {
   const worker = async () => {
     while (cursor < selected.length) {
       const index = cursor++;
-      const compressed = await compressImage(selected[index], { signal: activeMediaController.signal });
-      results[index] = await uploadCompressedImage(compressed, context, activeMediaController.signal);
+      const compressed = await compressImage(selected[index], {
+        signal: activeMediaController.signal,
+        variant: 'display'
+      });
+      const display = await uploadCompressedImage(compressed, {
+        ...context,
+        variant: 'display'
+      }, activeMediaController.signal);
+      const thumbCompressed = await compressImage(compressed.file, {
+        signal: activeMediaController.signal,
+        variant: 'thumb'
+      });
+      const thumb = await uploadCompressedImage(thumbCompressed, {
+        ...context,
+        variant: 'thumb',
+        parentMediaId: display.mediaId
+      }, activeMediaController.signal);
+      results[index] = { ...display, thumbMediaId: thumb.mediaId };
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, worker));
@@ -432,6 +510,7 @@ function login() {
 
 async function home() {
   document.body.classList.remove('poster-mode');
+  app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="card"></section><section class="card"></section></main>';
   const result = await api('/api/me');
   config = result.config;
   tracks = result.tracks;
@@ -442,6 +521,7 @@ async function home() {
 
 async function student(me) {
   delete document.body.dataset.view;
+  app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="student-hero"></header><section class="student-user-card"></section><section class="card"></section></main>';
   const isInteraction = user.trackId === 'interaction';
   const [teamListResult, myTeamResult, taskResult, materialResult] = await Promise.all([
     isInteraction ? api('/api/teams') : Promise.resolve(null),
@@ -551,6 +631,7 @@ async function student(me) {
       ${task.submission?.files?.length ? `<div>${task.submission.files.map((file) => `<button class="secondary material-download" data-url="${file.downloadUrl}" data-name="${escapeHtml(file.originalName)}">${escapeHtml(file.originalName)}</button>`).join(' ')}</div>` : ''}
       <button data-material="${task.id}" ${task.submission?.status === 'submitted' ? 'disabled' : ''}>${task.submission?.status === 'returned' ? '修改并重新提交' : '提交材料'}</button>
     </article>`).join('') || '<p class="muted">暂无材料任务</p>'}</div></section>`);
+  prepareDynamicContent(app);
   document.querySelector('#out').onclick = logout;
   document.querySelector('#historyCheckins').onclick = () => openStudentCheckinHistory();
   document.querySelector('#ranking').onclick = () => rankings();
@@ -634,15 +715,21 @@ function openStudentCheckinHistory() {
       rejected: '已退回',
       returned: '退回修改'
     }[record.status] || record.status;
-    const images = (record.images || []).map((imageUrl, index) => `
-      <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(imageUrl)}"
+    const images = (record.images || []).map((media, index) => {
+      const thumbUrl = typeof media === 'string' ? media : media.thumbUrl || media.imageUrl;
+      const displayUrl = typeof media === 'string' ? media : media.displayUrl || thumbUrl;
+      return `
+      <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(thumbUrl)}"
+        data-image-thumb="${escapeHtml(thumbUrl)}" data-image-display="${escapeHtml(displayUrl)}"
         data-image-alt="${escapeHtml(title)}图片">
-        <span class="image-shell"><img src="${escapeHtml(imageUrl)}" loading="${index ? 'lazy' : 'eager'}"
+        <span class="image-shell"><img data-src="${escapeHtml(thumbUrl)}" loading="${index ? 'lazy' : 'eager'}"
+          width="480" height="360" fetchpriority="${index ? 'low' : 'high'}"
           decoding="async" alt="${escapeHtml(title)}图片"
           onload="this.parentElement.classList.add('loaded')"
           onerror="this.hidden=true;this.parentElement.classList.add('failed')">
           <span class="image-error">图片加载失败，点击重试</span></span>
-      </button>`).join('');
+      </button>`;
+    }).join('');
     return `<article class="history-checkin-card">
       <div class="row"><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(record.date)}</small></div>
         <span class="pill ${record.status === 'approved' ? 'done' : 'pending'}">${escapeHtml(status)}</span></div>
@@ -665,6 +752,7 @@ function openStudentCheckinHistory() {
         list.innerHTML = '<p class="muted">暂无历史打卡记录</p>';
       }
       const loaded = Math.min(result.total, page * result.limit);
+      prepareDynamicContent(list);
       more.hidden = loaded >= result.total;
       more.textContent = `加载更多（${loaded}/${result.total}）`;
       page += 1;
@@ -851,7 +939,8 @@ async function plaza(sort = 'latest', page = 1, month = '') {
     <article class="plaza-card" data-post="${post.id}">
       <div class="image-shell">
         ${post.images[0]
-          ? `<img loading="lazy" decoding="async" src="${escapeHtml(post.images[0].imageUrl)}"
+          ? `<img loading="lazy" decoding="async" fetchpriority="low" width="480" height="360"
+              data-src="${escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}"
               alt="${escapeHtml(post.teamName)}活动图片"
               onload="this.parentElement.classList.add('loaded')"
               onerror="this.hidden=true;this.parentElement.classList.add('failed')">`
@@ -884,6 +973,7 @@ async function plaza(sort = 'latest', page = 1, month = '') {
       <button class="secondary" id="nextPage" ${!result.hasMore ? 'disabled' : ''}>下一页</button>
     </div>
     <div id="modalRoot"></div>`;
+  prepareDynamicContent(app);
   document.querySelector('#backHome').onclick = home;
   document.querySelectorAll('[data-sort]').forEach((button) => {
     button.onclick = () => plaza(button.dataset.sort, 1, document.querySelector('#plazaMonth').value);
@@ -920,6 +1010,7 @@ async function rankings(period = 'day', key = '') {
         <div class="card"><h2>综合热度榜</h2>${rankingTable(result.heatRank, 'heatScore', '热度')}</div>
       </section>`}
     ${period === 'month' && user.role === 'admin' ? `<section class="card"><div class="row"><button id="freezeRanking" ${result.frozen ? 'disabled' : ''}>冻结最终排名</button><button class="secondary" id="exportRanking">导出 Excel</button></div></section>` : ''}`;
+  prepareDynamicContent(app);
   document.querySelector('#backRanking').onclick = home;
   document.querySelectorAll('[data-period]').forEach((button) => { button.onclick = () => rankings(button.dataset.period); });
   document.querySelector('#rankingKey').onchange = (event) => rankings(period, event.target.value);
@@ -952,9 +1043,12 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
     <div class="row"><div><span class="eyebrow dark">${escapeHtml(post.taskName)}</span><h2>${escapeHtml(post.teamName)}</h2></div><button class="secondary right" id="closePost">关闭</button></div>
     <p class="muted">成员：${post.members.map((member) => `${escapeHtml(member.name)}（${escapeHtml(member.campus)}）`).join('、')}</p>
     <div class="plaza-photos">${post.images.map((image) => `
-        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.imageUrl)}" data-image-alt="活动图片">
+        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.thumbUrl || image.imageUrl)}"
+          data-image-thumb="${escapeHtml(image.thumbUrl || image.imageUrl)}"
+          data-image-display="${escapeHtml(image.displayUrl || image.imageUrl)}" data-image-alt="活动图片">
         <div class="image-shell">
-          <img loading="lazy" decoding="async" src="${escapeHtml(image.imageUrl)}" alt="活动图片"
+          <img loading="lazy" decoding="async" fetchpriority="low" width="480" height="360"
+            data-src="${escapeHtml(image.thumbUrl || image.imageUrl)}" alt="活动图片"
             onload="this.parentElement.classList.add('loaded')"
             onerror="this.hidden=true;this.parentElement.classList.add('failed')">
           <span class="image-error">图片加载失败</span>
@@ -969,6 +1063,7 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
       ${commentResult.hasMore ? '<button class="secondary" id="moreComments">加载更多评论</button>' : ''}
     </section>
   </section></div>`;
+  prepareDynamicContent(root);
   document.querySelector('#closePost').onclick = () => plaza(sort, page, month);
   document.querySelector('#likePost').onclick = async () => {
     const result = await api(`/api/plaza/${postId}/like`, { method: 'POST', body: JSON.stringify({ liked: !post.liked }) });
@@ -1089,17 +1184,18 @@ async function adminComments(page = 1) {
 
 async function admin(selectedDate) {
   document.body.dataset.view = 'admin';
+  app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="metric-grid"></section><section class="card"></section></main>';
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
     timeZone: 'Asia/Shanghai'
   });
   const [completion, userResult, teamResult, taskAdminResult, plazaAdminResult, overview, materialAdmin, governance] = await Promise.all([
     api(`/api/admin/completion-summary?date=${date}`),
-    api(`/api/admin/users?page=${adminUserPage}&limit=48&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`),
+    api(`/api/admin/users?page=${adminUserPage}&limit=30&q=${encodeURIComponent(adminUserQuery)}&completion=${adminUserFilter}&date=${date}&track=${adminCompletionTrack === 'all' ? '' : adminCompletionTrack}`),
     api('/api/admin/teams'),
     api('/api/admin/tasks'),
-    api('/api/admin/plaza'),
+    api('/api/admin/plaza?page=1&limit=30'),
     api('/api/admin/overview'),
-    api(`/api/admin/material-tasks?page=${materialAdminPage}&limit=50&campus=${encodeURIComponent(materialAdminCampus)}`),
+    api(`/api/admin/material-tasks?page=${materialAdminPage}&limit=30&campus=${encodeURIComponent(materialAdminCampus)}`),
     api('/api/admin/governance')
   ]);
   const users = userResult.users;
@@ -1332,6 +1428,7 @@ async function admin(selectedDate) {
     <div id="modalRoot"></div>`;
 
   enhanceAdminSections();
+  prepareDynamicContent(app);
   document.querySelector('#out').onclick = logout;
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
@@ -1776,14 +1873,20 @@ function openAdminUserDrawer(studentUser, teams, date, tasks = []) {
   }, { passive: true });
 
   const renderImages = (images, label) => images.length
-    ? `<div class="drawer-photo-grid compact">${images.map((imageUrl, index) => `
-        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(imageUrl)}" data-image-alt="${escapeHtml(label)}">
-          <span class="image-shell"><img src="${escapeHtml(imageUrl)}" data-priority="${index === 0 ? 'high' : ''}"
+    ? `<div class="drawer-photo-grid compact">${images.map((media, index) => {
+      const thumbUrl = typeof media === 'string' ? media : media.thumbUrl || media.imageUrl;
+      const displayUrl = typeof media === 'string' ? media : media.displayUrl || thumbUrl;
+      return `
+        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(thumbUrl)}"
+          data-image-thumb="${escapeHtml(thumbUrl)}" data-image-display="${escapeHtml(displayUrl)}"
+          data-image-alt="${escapeHtml(label)}">
+          <span class="image-shell"><img data-src="${escapeHtml(thumbUrl)}" data-priority="${index === 0 ? 'high' : ''}"
             loading="${index === 0 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}"
-            decoding="async" alt="${escapeHtml(label)}"
+            width="480" height="360" decoding="async" alt="${escapeHtml(label)}"
             onload="this.parentElement.classList.add('loaded')"
             onerror="this.hidden=true;this.parentElement.classList.add('failed')"><span class="image-error">图片加载失败，点击重试</span></span>
-        </button>`).join('')}</div>` : '';
+        </button>`;
+    }).join('')}</div>` : '';
 
   const loadRecords = async (panel, force = false) => {
     if (sectionState.get('records') && !force) return;
@@ -1803,7 +1906,11 @@ function openAdminUserDrawer(studentUser, teams, date, tasks = []) {
           ${renderImages(record.images || [], `${record.taskName || record.slotId || '打卡'}图片`)}
           ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ''}
         </article>`).join('')}</div>` : '<p class="muted">当日暂无提交</p>';
-      const firstImage = result.records.flatMap((item) => item.images || [])[0];
+      prepareDynamicContent(panel);
+      const firstImageMedia = result.records.flatMap((item) => item.images || [])[0];
+      const firstImage = typeof firstImageMedia === 'string'
+        ? firstImageMedia
+        : firstImageMedia?.displayUrl || firstImageMedia?.thumbUrl;
       if (firstImage) {
         const preload = new Image();
         preload.decoding = 'async';
@@ -2090,15 +2197,29 @@ function reviewCheckin(students, checkinId, date) {
     if (checkin) break;
   }
   const root = document.querySelector('#modalRoot');
+  const reviewImage = (media, index, alt) => {
+    const thumbUrl = typeof media === 'string' ? media : media.thumbUrl || media.imageUrl;
+    const displayUrl = typeof media === 'string' ? media : media.displayUrl || thumbUrl;
+    return `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(thumbUrl)}"
+      data-image-thumb="${escapeHtml(thumbUrl)}" data-image-display="${escapeHtml(displayUrl)}"
+      data-image-alt="${escapeHtml(alt)}"><span class="image-shell">
+      <img data-src="${escapeHtml(thumbUrl)}" loading="${index === 0 ? 'eager' : 'lazy'}"
+        data-priority="${index === 0 ? 'high' : ''}" fetchpriority="${index === 0 ? 'high' : 'low'}"
+        decoding="async" width="480" height="360" alt="${escapeHtml(alt)}"
+        onload="this.parentElement.classList.add('loaded')"
+        onerror="this.hidden=true;this.parentElement.classList.add('failed')">
+      <span class="image-error">图片加载失败</span></span></button>`;
+  };
   root.innerHTML = `
     <div class="modal-backdrop">
       <section class="card modal">
         <div class="row"><h2>审核材料</h2><button class="secondary right" id="closeReview">关闭</button></div>
-    <div class="photos">${checkin.photos.map((photo, index) => `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(photo)}" data-image-alt="打卡截图"><img loading="${index === 0 ? 'eager' : 'lazy'}" data-priority="${index === 0 ? 'high' : ''}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" src="${escapeHtml(photo)}" alt="打卡截图"></button>`).join('')}${checkin.summary ? `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(checkin.summary)}" data-image-alt="汇总截图"><img loading="lazy" decoding="async" src="${escapeHtml(checkin.summary)}" alt="汇总截图"></button>` : ''}</div>
+    <div class="photos">${checkin.photos.map((photo, index) => reviewImage(photo, index, '打卡截图')).join('')}${checkin.summary ? reviewImage(checkin.summary, checkin.photos.length, '汇总截图') : ''}</div>
         <p>${escapeHtml(checkin.note || '无备注')}</p>
         <button id="approve">通过</button> <button class="danger" id="reject">驳回</button>
       </section>
     </div>`;
+  prepareDynamicContent(root);
   document.querySelector('#closeReview').onclick = () => {
     root.innerHTML = '';
   };
