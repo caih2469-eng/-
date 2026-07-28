@@ -236,6 +236,70 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     });
   }
 
+  if (route === '/api/checkins/history' && request.method === 'GET') {
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') || 20)));
+    const offset = (page - 1) * limit;
+
+    if (user.trackId === 'health') {
+      const count = await env.DB.prepare(
+        'SELECT COUNT(*) AS total FROM checkins WHERE user_id=?1'
+      ).bind(user.id).first();
+      const records = await env.DB.prepare(
+        `SELECT c.id,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
+                c.submitted_at AS submittedAt,c.review_note AS reviewNote
+           FROM checkins c WHERE c.user_id=?1
+          ORDER BY c.checkin_date DESC,c.submitted_at DESC LIMIT ?2 OFFSET ?3`
+      ).bind(user.id, limit, offset).all();
+      for (const record of records.results) {
+        const files = await env.DB.prepare(
+          `SELECT f.id,f.object_key AS objectKey,f.kind,m.id AS mediaId
+             FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
+            WHERE f.checkin_id=?1 ORDER BY f.sort_order`
+        ).bind(record.id).all();
+        record.images = [];
+        for (const file of files.results.filter((item) => item.kind === 'photo')) {
+          record.images.push(file.mediaId
+            ? await createPrivateMediaUrl(env, file, 'owner', user.id)
+            : `/api/files/${file.id}`);
+        }
+      }
+      return json({
+        trackId: user.trackId,
+        page,
+        limit,
+        total: Number(count.total),
+        records: records.results
+      });
+    }
+
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM member_checkins WHERE user_id=?1'
+    ).bind(user.id).first();
+    const records = await env.DB.prepare(
+      `SELECT mc.id,mc.occurrence_date AS date,mc.status,mc.submitted_at AS submittedAt,
+              t.name AS taskName,m.id AS mediaId,m.object_key AS objectKey
+         FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+         LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
+        WHERE mc.user_id=?1 ORDER BY mc.occurrence_date DESC,mc.submitted_at DESC
+        LIMIT ?2 OFFSET ?3`
+    ).bind(user.id, limit, offset).all();
+    for (const record of records.results) {
+      record.images = record.objectKey
+        ? [record.mediaId
+          ? await createPrivateMediaUrl(env, record, 'owner', user.id)
+          : `/api/files/${record.id}`]
+        : [];
+    }
+    return json({
+      trackId: user.trackId,
+      page,
+      limit,
+      total: Number(count.total),
+      records: records.results
+    });
+  }
+
   const memberMatch = route.match(/^\/api\/tasks\/([^/]+)\/member-checkin$/);
   if (memberMatch && request.method === 'PUT') {
     if (user.role !== 'student' || user.trackId !== 'interaction') return json({ error: '仅互动赛道可打卡' }, 403);

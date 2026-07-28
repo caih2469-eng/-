@@ -16,6 +16,32 @@
   margin: 12px 0 18px;
 }
 
+.history-drawer #studentHistoryList {
+  display: grid;
+  gap: 12px;
+  padding: 8px 0 16px;
+}
+
+.history-checkin-card {
+  padding: 16px;
+  border: 1px solid rgba(174, 42, 72, .12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.history-checkin-card .row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.history-checkin-card .drawer-photo-grid {
+  margin-top: 10px;
+}
+
+.full-width {
+  width: 100%;
+}
+
 /* Original entrance supplied by the organizer. */
 body.poster-mode { margin: 0; overflow: hidden; background-color: #f75c6c; }
 body.poster-mode main { width: 100%; max-width: none; min-height: 100dvh; padding: 0; }

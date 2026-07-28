@@ -443,11 +443,10 @@ async function home() {
 async function student(me) {
   delete document.body.dataset.view;
   const isInteraction = user.trackId === 'interaction';
-  const [teamListResult, myTeamResult, taskResult, historyResult, materialResult] = await Promise.all([
+  const [teamListResult, myTeamResult, taskResult, materialResult] = await Promise.all([
     isInteraction ? api('/api/teams') : Promise.resolve(null),
     isInteraction ? api('/api/teams/me') : Promise.resolve(null),
     api('/api/tasks'),
-    isInteraction ? Promise.resolve({ submissions: [] }) : api('/api/submissions/history'),
     api('/api/material-tasks')
   ]);
   const myTeam = myTeamResult?.team;
@@ -480,7 +479,7 @@ async function student(me) {
     </section>
     <nav class="student-shortcuts" aria-label="常用功能">
       <button data-jump="activityTasks"><span>✦</span><strong>今日任务</strong><small>${taskResult.tasks.length} 项待查看</small></button>
-      <button data-jump="${isInteraction ? 'activityTasks' : 'historyRecords'}"><span>✓</span><strong>我的打卡</strong><small>${completedTasks} 项已完成</small></button>
+      <button id="historyCheckins"><span>✓</span><strong>历史打卡</strong><small>查看以前的提交</small></button>
       <button id="plaza"><span>▦</span><strong>活动广场</strong><small>发现青春作品</small></button>
       <button data-jump="myTeam" ${isInteraction ? '' : 'disabled'}><span>♢</span><strong>我的队伍</strong><small>${isInteraction ? (myTeam ? escapeHtml(myTeam.name) : '等待编队') : '仅互动赛道'}</small></button>
       <button id="inbox"><span>✉</span><strong>信息箱</strong><small>评论与系统通知</small></button>
@@ -542,7 +541,7 @@ async function student(me) {
     <section class="card" id="activityTasks"><div class="row"><h2>今日打卡</h2><span class="right muted">${isInteraction ? '个人打卡后由队长汇总' : '个人提交'}</span></div>
       <div class="grid">${taskCards || '<p class="muted">当前没有已发布任务</p>'}</div>
     </section>
-    ${!isInteraction ? `<section class="card" id="historyRecords"><h2>我的历史记录</h2><div class="history-list">${historyResult.submissions.map((item) => `<div><strong>${escapeHtml(item.task.name || '已归档任务')}</strong><span>${mealNames[item.mealType] || '未分类'} · ${submissionNames[item.status] || item.status} · ${formatDate(item.updatedAt)}</span></div>`).join('') || '<p class="muted">暂无历史记录</p>'}</div></section>` : ''}`);
+    `);
   const materialStatus = { submitted: '已提交', returned: '退回修改' };
   app.insertAdjacentHTML('beforeend', `<section class="card"><div class="row"><h2>最终截图证明</h2><span class="right muted">最多 8 张 · 压缩后单张不超过 5MB</span></div>
     <div class="grid">${materialResult.tasks.map((task) => `<article class="slot">
@@ -553,6 +552,7 @@ async function student(me) {
       <button data-material="${task.id}" ${task.submission?.status === 'submitted' ? 'disabled' : ''}>${task.submission?.status === 'returned' ? '修改并重新提交' : '提交材料'}</button>
     </article>`).join('') || '<p class="muted">暂无材料任务</p>'}</div></section>`);
   document.querySelector('#out').onclick = logout;
+  document.querySelector('#historyCheckins').onclick = () => openStudentCheckinHistory();
   document.querySelector('#ranking').onclick = () => rankings();
   document.querySelector('#plaza').onclick = () => plaza();
   document.querySelector('#inbox').onclick = () => inbox();
@@ -600,6 +600,85 @@ async function student(me) {
   setTimeout(() => {
     if (document.querySelector('#activityTasks')) home();
   }, Math.max(1000, nextMidnight.getTime() - Date.now()));
+}
+
+function openStudentCheckinHistory() {
+  const root = document.querySelector('#modalRoot');
+  let page = 1;
+  let loading = false;
+  root.innerHTML = `<div class="drawer-backdrop" id="historyDrawerBackdrop">
+    <section class="bottom-drawer history-drawer" role="dialog" aria-modal="true" aria-labelledby="historyDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-sticky-header row">
+        <div><small class="muted">我的记录</small><h2 id="historyDrawerTitle">历史打卡</h2></div>
+        <button class="secondary right" id="closeHistoryDrawer">关闭</button>
+      </div>
+      <div id="studentHistoryList"><p class="muted">正在读取历史打卡…</p></div>
+      <button class="secondary full-width" id="moreStudentHistory" hidden>加载更多</button>
+    </section>
+  </div>`;
+  const list = root.querySelector('#studentHistoryList');
+  const more = root.querySelector('#moreStudentHistory');
+  const close = () => { root.innerHTML = ''; };
+  root.querySelector('#closeHistoryDrawer').onclick = close;
+  root.querySelector('#historyDrawerBackdrop').onclick = (event) => {
+    if (event.target.id === 'historyDrawerBackdrop') close();
+  };
+
+  const renderRecord = (record) => {
+    const title = record.taskName || config.slots.find((slot) => slot.id === record.slotId)?.label || '打卡';
+    const status = {
+      pending: '待审核',
+      submitted: '已提交',
+      approved: '已通过',
+      rejected: '已退回',
+      returned: '退回修改'
+    }[record.status] || record.status;
+    const images = (record.images || []).map((imageUrl, index) => `
+      <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(imageUrl)}"
+        data-image-alt="${escapeHtml(title)}图片">
+        <span class="image-shell"><img src="${escapeHtml(imageUrl)}" loading="${index ? 'lazy' : 'eager'}"
+          decoding="async" alt="${escapeHtml(title)}图片"
+          onload="this.parentElement.classList.add('loaded')"
+          onerror="this.hidden=true;this.parentElement.classList.add('failed')">
+          <span class="image-error">图片加载失败，点击重试</span></span>
+      </button>`).join('');
+    return `<article class="history-checkin-card">
+      <div class="row"><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(record.date)}</small></div>
+        <span class="pill ${record.status === 'approved' ? 'done' : 'pending'}">${escapeHtml(status)}</span></div>
+      <p class="muted">${escapeHtml(formatDate(record.submittedAt))}</p>
+      ${images ? `<div class="drawer-photo-grid compact">${images}</div>` : ''}
+      ${record.note ? `<p>${escapeHtml(record.note)}</p>` : ''}
+      ${record.reviewNote ? `<p class="bad">审核说明：${escapeHtml(record.reviewNote)}</p>` : ''}
+    </article>`;
+  };
+
+  const load = async () => {
+    if (loading) return;
+    loading = true;
+    more.disabled = true;
+    try {
+      const result = await api(`/api/checkins/history?page=${page}&limit=20`);
+      if (page === 1) list.innerHTML = '';
+      list.insertAdjacentHTML('beforeend', result.records.map(renderRecord).join(''));
+      if (!result.records.length && page === 1) {
+        list.innerHTML = '<p class="muted">暂无历史打卡记录</p>';
+      }
+      const loaded = Math.min(result.total, page * result.limit);
+      more.hidden = loaded >= result.total;
+      more.textContent = `加载更多（${loaded}/${result.total}）`;
+      page += 1;
+    } catch (error) {
+      if (page === 1) list.innerHTML = `<p class="bad">${escapeHtml(error.message)}</p>`;
+      more.hidden = false;
+      more.textContent = '读取失败，点击重试';
+    } finally {
+      loading = false;
+      more.disabled = false;
+    }
+  };
+  more.onclick = load;
+  void load();
 }
 
 function memberCheckinForm(task) {
