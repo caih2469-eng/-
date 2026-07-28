@@ -108,7 +108,7 @@ function getDb() {
   return data;
 }
 
-function sendJson(res, statusCode, value) {
+function sendJson(res, statusCode, value, extraHeaders = {}) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -116,7 +116,8 @@ function sendJson(res, statusCode, value) {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'"
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+    ...extraHeaders
   });
   res.end(JSON.stringify(value));
 }
@@ -146,7 +147,13 @@ function tokenFor(user) {
 
 function userFrom(req, data) {
   try {
-    const [encoded, signature] = (req.headers.authorization || '').replace('Bearer ', '').split('.');
+    const cookieToken = String(req.headers.cookie || '')
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith('session_token='))
+      ?.slice('session_token='.length);
+    const token = (req.headers.authorization || '').replace('Bearer ', '') || cookieToken || '';
+    const [encoded, signature] = token.split('.');
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(encoded).digest();
     const supplied = Buffer.from(signature || '', 'base64url');
     if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
@@ -812,11 +819,21 @@ async function handleApi(req, res, url) {
       saveDb(data);
     }
     loginAttempts.delete(`${address}:${studentId}`);
+    const token = tokenFor(user);
     return sendJson(res, 200, {
-      token: tokenFor(user),
-      user: safeUser(user),
-      config: data.config,
-      tracks: data.tracks
+      token,
+      user: safeUser(user)
+    }, {
+      'Set-Cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`
+    });
+  }
+
+  if (route === '/api/session' && req.method === 'POST') {
+    const currentUser = userFrom(req, data);
+    if (!currentUser) return sendJson(res, 401, { error: '请先登录或账号已被禁用' });
+    const token = tokenFor(currentUser);
+    return sendJson(res, 200, { user: safeUser(currentUser) }, {
+      'Set-Cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`
     });
   }
 

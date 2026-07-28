@@ -107,7 +107,8 @@ test('登录、资料、双赛道、管理员权限和 Excel 导入', async (con
   assert.equal(adminLogin.status, 200);
   assert.equal(adminLogin.body.user.role, 'admin');
   assert.equal('password' in adminLogin.body.user, false);
-  assert.deepEqual(adminLogin.body.tracks.map((track) => track.id), ['interaction', 'health']);
+  assert.equal('tracks' in adminLogin.body, false);
+  assert.equal('config' in adminLogin.body, false);
   const adminToken = adminLogin.body.token;
 
   const createUser = await request(baseUrl, '/api/admin/users', {

@@ -34,6 +34,7 @@ test('站内路径统一为单斜杠，媒体地址不会生成 //api', () => {
 test('入口页不加载主应用，登录脚本具备移动端降级、防重复和十秒超时', () => {
   const html = fs.readFileSync('public/entrance.html', 'utf8');
   const index = fs.readFileSync('public/index.html', 'utf8');
+  const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
   const entrance = fs.readFileSync('public/entrance.js', 'utf8');
   const app = fs.readFileSync('public/app.js', 'utf8');
   const worker = fs.readFileSync('cloudflare/worker.js', 'utf8');
@@ -47,8 +48,9 @@ test('入口页不加载主应用，登录脚本具备移动端降级、防重�
   assert.match(entrance, /location\.replace\(['"]\/['"]\)/);
   assert.match(entrance, /MicroMessenger|MQQBrowser/);
   assert.doesNotMatch(index, /<script[^>]+src=["']\/app\.js/i);
-  assert.match(index, /fetch\(['"]\/api\/session['"]/);
-  assert.match(index, /__BOOTSTRAP_AUTHENTICATED__/);
+  assert.match(index, /\bbootstrap\.js\b/);
+  assert.match(bootstrap, /fetch\(['"]\/api\/session['"]/);
+  assert.match(bootstrap, /__BOOTSTRAP_AUTHENTICATED__/);
   assert.match(app, /window\.__BOOTSTRAP_AUTHENTICATED__/);
   assert.match(worker, /studentId:\s*auth\.user\.studentId/);
 });

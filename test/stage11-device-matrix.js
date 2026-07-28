@@ -22,11 +22,43 @@ if (!chrome || !fs.existsSync(chrome)) {
   console.log(JSON.stringify({ skipped: true, reason: 'Chrome executable is unavailable' }));
   process.exit(0);
 }
+const projectRoot = path.join(__dirname, '..');
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-device-fixture-'));
+const fixtureDataDir = path.join(fixtureRoot, 'data');
+const fixtureUploadDir = path.join(fixtureRoot, 'uploads');
+const fixtureMaterialDir = path.join(fixtureRoot, 'materials');
+fs.mkdirSync(fixtureDataDir, { recursive: true });
+const fixture = JSON.parse(fs.readFileSync(path.join(projectRoot, 'data', 'db.json'), 'utf8'));
+fixture.users = (fixture.users || []).filter((user) => user.studentId !== 'demo-health');
+fixture.users.push({
+  id: 'device-matrix-health',
+  studentId: 'demo-health',
+  name: '设备矩阵测试用户',
+  password: 'Demo123!',
+  role: 'student',
+  campus: '测试校区',
+  trackId: 'health',
+  status: 'active',
+  createdAt: new Date().toISOString()
+});
+fs.writeFileSync(path.join(fixtureDataDir, 'db.json'), JSON.stringify(fixture, null, 2), 'utf8');
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'checkin-device-'));
 const port = 9331;
+const appPort = 9332;
 const chromeArgs = [`--headless=new`, `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--disable-gpu', '--no-first-run'];
 if (process.platform !== 'win32') chromeArgs.push('--no-sandbox', '--disable-dev-shm-usage');
 const browser = spawn(chrome, chromeArgs, { stdio: 'ignore' });
+const server = spawn(process.execPath, ['server.js'], {
+  cwd: projectRoot,
+  env: {
+    ...process.env,
+    PORT: String(appPort),
+    CHECKIN_DATA_DIR: fixtureDataDir,
+    CHECKIN_UPLOAD_DIR: fixtureUploadDir,
+    CHECKIN_MATERIAL_FILE_DIR: fixtureMaterialDir
+  },
+  stdio: 'ignore'
+});
 let commandId = 0;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,10 +80,17 @@ const commandClient = (socket) => {
 
 (async () => {
   try {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        if ((await fetch(`http://127.0.0.1:${appPort}/`)).ok) break;
+      } catch {}
+      if (attempt === 49) throw new Error('Local fixture server failed to start');
+      await wait(100);
+    }
     let target;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       try {
-        target = await fetch(`http://127.0.0.1:${port}/json/new?http://127.0.0.1:3000/`, { method: 'PUT' }).then((response) => response.json());
+        target = await fetch(`http://127.0.0.1:${port}/json/new?http://127.0.0.1:${appPort}/`, { method: 'PUT' }).then((response) => response.json());
         break;
       } catch {}
       await wait(100);
@@ -72,17 +111,20 @@ const commandClient = (socket) => {
     for (const device of devices) {
       await send('Emulation.setDeviceMetricsOverride', { width: device.width, height: device.height, deviceScaleFactor: 1, mobile: device.mobile });
       await send('Network.setUserAgentOverride', { userAgent: device.userAgent });
-      await send('Page.navigate', { url: 'http://127.0.0.1:3000/' });
+      await send('Page.navigate', { url: `http://127.0.0.1:${appPort}/` });
       await wait(400);
       const login = await send('Runtime.evaluate', {
         awaitPromise: true,
         returnByValue: true,
         expression: `(async()=>{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({studentId:'demo-health',password:'Demo123!'})});const x=await r.json();if(!r.ok)return {ok:false,status:r.status,error:x.error};localStorage.token=x.token;localStorage.user=JSON.stringify(x.user);location.replace('/');return {ok:true};})()`
       });
-      await wait(1200);
+      await send('Runtime.evaluate', {
+        awaitPromise: true,
+        expression: `new Promise((resolve)=>{const started=Date.now();const poll=()=>{if(document.querySelector('#activityTasks')||Date.now()-started>5000)return resolve();setTimeout(poll,50)};poll()})`
+      });
       const evaluation = await send('Runtime.evaluate', {
         returnByValue: true,
-        expression: `({title:document.title,hasProfile:document.body.innerText.includes('我的资料'),hasCheckin:document.body.innerText.includes('今日打卡'),hasFinalProof:document.body.innerText.includes('最终截图证明'),horizontalOverflow:document.documentElement.scrollWidth>window.innerWidth,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})`
+        expression: `({title:document.title,hasProfile:Boolean(document.querySelector('.profile-card')),hasCheckin:Boolean(document.querySelector('#activityTasks')),hasFinalProof:Boolean(document.querySelector('#activityTasks + section.card')),horizontalOverflow:document.documentElement.scrollWidth>window.innerWidth,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})`
       });
       results.push({ device: device.name, viewport: `${device.width}x${device.height}`, login: login.result?.result?.value, ...evaluation.result?.result?.value });
       await send('Runtime.evaluate', { expression: 'localStorage.clear()' });
@@ -92,7 +134,9 @@ const commandClient = (socket) => {
     socket.close();
   } finally {
     browser.kill();
+    server.kill();
     await wait(500);
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    fs.rmSync(fixtureRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 })();

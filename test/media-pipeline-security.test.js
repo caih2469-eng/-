@@ -115,8 +115,10 @@ test('媒体迁移包含上传意图、对象元数据和回滚脚本', () => {
 test('前端使用固定版本压缩库且新图片流程不发送Base64', () => {
   const fs = require('node:fs');
   const html = fs.readFileSync('public/index.html', 'utf8');
+  const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
   const app = fs.readFileSync('public/app.js', 'utf8');
-  assert.match(html, /browser-image-compression-2\.0\.2\.js/);
+  assert.match(html, /\bbootstrap\.js\b/);
+  assert.match(bootstrap, /browser-image-compression-2\.0\.2\.js/);
   assert.match(app, /useWebWorker:\s*true/);
   assert.match(app, /method:\s*'PUT'/);
   assert.match(app, /mediaIds:/);
