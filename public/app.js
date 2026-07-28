@@ -1,6 +1,12 @@
 const app = document.querySelector('#app');
-let token = localStorage.token;
-let user = JSON.parse(localStorage.user || 'null');
+let token = '';
+let user = window.__BOOTSTRAP_USER__ || null;
+try {
+  token = localStorage.getItem('token') || '';
+  if (!user) user = JSON.parse(localStorage.getItem('user') || 'null');
+} catch {
+  // Restricted WebViews can deny localStorage; the HttpOnly session cookie remains authoritative.
+}
 let config;
 let tracks = [];
 let materialAdminPage = 1;
@@ -2238,5 +2244,6 @@ function reviewCheckin(students, checkinId, date) {
   document.querySelector('#reject').onclick = () => update('rejected');
 }
 
-if (token) api('/api/session', { method: 'POST' }).catch(() => null).then(home).catch(logout);
+if (window.__BOOTSTRAP_AUTHENTICATED__) home().catch(logout);
+else if (token) api('/api/session', { method: 'POST' }).catch(() => null).then(home).catch(logout);
 else login();

@@ -241,7 +241,17 @@ export default {
         const auth = await requireUser(request, env);
         if (auth.error) return auth.error;
         const token = await createToken(auth.user, env.SESSION_SECRET);
-        return json({ ok: true }, 200, {
+        return json({
+          ok: true,
+          user: {
+            id: auth.user.id,
+            studentId: auth.user.studentId,
+            name: auth.user.name,
+            role: auth.user.role,
+            trackId: auth.user.trackId,
+            status: auth.user.status
+          }
+        }, 200, {
           'set-cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`
         });
       }

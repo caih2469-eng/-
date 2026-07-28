@@ -33,7 +33,10 @@ test('站内路径统一为单斜杠，媒体地址不会生成 //api', () => {
 
 test('入口页不加载主应用，登录脚本具备移动端降级、防重复和十秒超时', () => {
   const html = fs.readFileSync('public/entrance.html', 'utf8');
+  const index = fs.readFileSync('public/index.html', 'utf8');
   const entrance = fs.readFileSync('public/entrance.js', 'utf8');
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const worker = fs.readFileSync('cloudflare/worker.js', 'utf8');
   assert.doesNotMatch(html, /\bapp\.js\b/);
   assert.match(html, /\bentrance\.js\b/);
   assert.doesNotMatch(html, /\.ttf(?:[?"'])/i);
@@ -43,6 +46,11 @@ test('入口页不加载主应用，登录脚本具备移动端降级、防重�
   assert.match(entrance, /loginPending/);
   assert.match(entrance, /location\.replace\(['"]\/['"]\)/);
   assert.match(entrance, /MicroMessenger|MQQBrowser/);
+  assert.doesNotMatch(index, /<script[^>]+src=["']\/app\.js/i);
+  assert.match(index, /fetch\(['"]\/api\/session['"]/);
+  assert.match(index, /__BOOTSTRAP_AUTHENTICATED__/);
+  assert.match(app, /window\.__BOOTSTRAP_AUTHENTICATED__/);
+  assert.match(worker, /studentId:\s*auth\.user\.studentId/);
 });
 
 test('图片列表在SQL层分页，首屏不超过20张且管理员每页不超过30人', () => {
