@@ -7,6 +7,8 @@
   "vars": {
     "ENVIRONMENT": "production",
     "PROJECT_NAME": "jinshan20",
+    "R2_ACCOUNT_ID": "feed14549828409989e46cf603bd0909",
+    "R2_BUCKET_NAME": "jinshan20",
     "ALLOW_LOAD_TESTS": "false"
   },
   "d1_databases": [
