@@ -115,40 +115,144 @@ const escapeHtml = (value) =>
     "'": '&#39;'
   })[character]);
 
-const compressImage = (file, options = {}) => new Promise((resolve, reject) => {
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return reject(new Error('仅支持 JPG、PNG、WebP 图片'));
-  if (file.size > 5 * 1024 * 1024) return reject(new Error('图片大小超过5MB，请压缩后重新上传。'));
-  const image = new Image();
-  const url = URL.createObjectURL(file);
-  image.onload = () => {
-    const maxEdge = Math.min(1200, Number(options.maxEdge || 1200));
-    const scale = Math.min(1, maxEdge / Math.max(image.width, image.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.width * scale));
-    canvas.height = Math.max(1, Math.round(image.height * scale));
-    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-    URL.revokeObjectURL(url);
-    let output = canvas.toDataURL('image/webp', Number(options.quality || 0.82));
-    if (output.length > 1_100_000) output = canvas.toDataURL('image/webp', 0.72);
-    if (output.length > 1_100_000 && Math.max(canvas.width, canvas.height) > 960) {
-      const reduced = document.createElement('canvas');
-      const reducedScale = 960 / Math.max(canvas.width, canvas.height);
-      reduced.width = Math.max(1, Math.round(canvas.width * reducedScale));
-      reduced.height = Math.max(1, Math.round(canvas.height * reducedScale));
-      reduced.getContext('2d').drawImage(canvas, 0, 0, reduced.width, reduced.height);
-      output = reduced.toDataURL('image/webp', 0.76);
-    }
-    resolve(output);
-  };
-  image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('图片无法读取')); };
-  image.src = url;
-});
+const MEDIA_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
+const MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const mediaPreviewUrls = new Set();
+let activeMediaController = null;
 
-const readFiles = async (files, options = {}) =>
-  Promise.all([...files].map((file) => compressImage(file, options)));
-const renderPreviews = (container, images) => {
-  container.innerHTML = images.map((src, index) => `<figure><img loading="lazy" decoding="async" src="${src}" alt="待上传图片 ${index + 1}"><figcaption>第 ${index + 1} 张</figcaption></figure>`).join('');
+const bytesMatchMime = (bytes, type) => {
+  if (type === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (type === 'image/png') return [...bytes.slice(0, 8)].map((byte) => byte.toString(16).padStart(2, '0')).join('') === '89504e470d0a1a0a';
+  return new TextDecoder().decode(bytes.slice(0, 4)) === 'RIFF'
+    && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP';
 };
+
+const validateSourceImage = async (file) => {
+  if (file.size > MEDIA_MAX_SOURCE_BYTES) throw new Error('单张图片不能超过5MB，请压缩或重新选择图片。');
+  if (!MEDIA_ALLOWED_TYPES.has(file.type)) {
+    throw new Error(file.type.includes('heic') || /\.heic$/i.test(file.name)
+      ? '当前设备无法稳定处理HEIC，请改用JPG、PNG或WebP。'
+      : '仅支持JPG、PNG、WebP图片。');
+  }
+  const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  if (!bytesMatchMime(header, file.type)) throw new Error('图片真实内容与格式不一致。');
+};
+
+const imageDimensions = async (blob) => {
+  if ('createImageBitmap' in window) {
+    const bitmap = await createImageBitmap(blob);
+    const size = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return size;
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      image.onerror = () => reject(new Error('图片处理失败，请重新选择图片。'));
+      image.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+};
+
+const compressImage = async (file, options = {}) => {
+  await validateSourceImage(file);
+  if (typeof window.imageCompression !== 'function') throw new Error('图片压缩模块加载失败，请刷新后重试。');
+  const common = {
+    maxSizeMB: 1.2,
+    maxWidthOrHeight: 1600,
+    initialQuality: 0.9,
+    useWebWorker: true,
+    libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
+    preserveExif: false,
+    signal: options.signal,
+    onProgress: options.onProgress
+  };
+  let blob = await window.imageCompression(file, { ...common, fileType: 'image/webp' });
+  let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
+    blob = await window.imageCompression(file, { ...common, fileType: 'image/jpeg', initialQuality: 0.9 });
+    header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+    if (blob.type !== 'image/jpeg' || !bytesMatchMime(header, 'image/jpeg')) {
+      throw new Error('当前浏览器无法稳定生成压缩图片，请改用JPG后重试。');
+    }
+  }
+  if (!blob.size || blob.size > 1.5 * 1024 * 1024) throw new Error('压缩后图片仍然过大，请重新选择图片。');
+  const dimensions = await imageDimensions(blob);
+  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > 1600) {
+    throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
+  }
+  const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
+  const finalFile = new File([blob], `${file.name.replace(/\.[^.]+$/, '')}.${extension}`, {
+    type: blob.type,
+    lastModified: Date.now()
+  });
+  const previewUrl = URL.createObjectURL(finalFile);
+  mediaPreviewUrls.add(previewUrl);
+  return { file: finalFile, mimeType: finalFile.type, width: dimensions.width, height: dimensions.height, previewUrl };
+};
+
+const uploadCompressedImage = async (image, context, signal) => {
+  const intent = await api('/api/media/upload-intents', {
+    method: 'POST',
+    body: JSON.stringify({
+      taskId: context.taskId || null,
+      businessType: context.businessType,
+      mimeType: image.mimeType,
+      fileSize: image.file.size,
+      width: image.width,
+      height: image.height
+    })
+  });
+  const uploaded = await fetch(intent.uploadUrl, {
+    method: 'PUT',
+    headers: intent.headers,
+    body: image.file,
+    signal
+  });
+  if (!uploaded.ok) throw new Error(`图片直传失败（${uploaded.status}），请重新选择图片。`);
+  const confirmed = await api(`/api/media/upload-intents/${encodeURIComponent(intent.intentId)}/confirm`, {
+    method: 'POST',
+    body: '{}'
+  });
+  return { ...image, mediaId: confirmed.media.id };
+};
+
+const readFiles = async (files, context = {}) => {
+  const selected = [...files];
+  if (!selected.length) throw new Error('请选择图片。');
+  if (selected.length > Number(context.limit || selected.length)) throw new Error(`最多上传${context.limit}张图片。`);
+  activeMediaController?.abort();
+  activeMediaController = new AbortController();
+  const results = [];
+  const isIOS = /iP(?:hone|ad|od)/.test(navigator.userAgent);
+  const lowMemory = Number(navigator.deviceMemory || 8) <= 4;
+  const concurrency = isIOS || lowMemory ? 1 : 2;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < selected.length) {
+      const index = cursor++;
+      const compressed = await compressImage(selected[index], { signal: activeMediaController.signal });
+      results[index] = await uploadCompressedImage(compressed, context, activeMediaController.signal);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, worker));
+  return results;
+};
+const renderPreviews = (container, images) => {
+  container.innerHTML = images.map((item, index) => {
+    const src = typeof item === 'string' ? item : item.previewUrl || item.imageUrl;
+    return `<figure><img loading="lazy" decoding="async" src="${src}" alt="待上传图片 ${index + 1}"><figcaption>第 ${index + 1} 张</figcaption></figure>`;
+  }).join('');
+};
+window.addEventListener('pagehide', () => {
+  activeMediaController?.abort();
+  mediaPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  mediaPreviewUrls.clear();
+});
 const readRawFile = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(reader.result);
@@ -479,14 +583,26 @@ function memberCheckinForm(task) {
   const form = document.querySelector('#memberSend');
   document.querySelector('#backMember').onclick = home;
   form.images.onchange = async () => {
-    try { form._images = await readFiles(form.images.files); renderPreviews(document.querySelector('#memberPreview'), form._images); }
-    catch (error) { alert(error.message); form.images.value = ''; }
+    try {
+      form._media = await readFiles(form.images.files, {
+        taskId: task.id, businessType: 'member-checkin', limit: 1
+      });
+      renderPreviews(document.querySelector('#memberPreview'), form._media);
+    } catch (error) {
+      await openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
+      form.images.value = '';
+    }
   };
   form.onsubmit = async (event) => {
     event.preventDefault();
     try {
-      const images = form._images || await readFiles(form.images.files);
-      await api(`/api/tasks/${task.id}/member-checkin`, { method: 'PUT', body: JSON.stringify({ occurrenceDate: task.occurrenceDate, images }) });
+      const media = form._media || await readFiles(form.images.files, {
+        taskId: task.id, businessType: 'member-checkin', limit: 1
+      });
+      await api(`/api/tasks/${task.id}/member-checkin`, {
+        method: 'PUT',
+        body: JSON.stringify({ occurrenceDate: task.occurrenceDate, mediaIds: media.map((item) => item.mediaId) })
+      });
       alert('个人打卡成功');
       home();
     } catch (error) { alert(error.message); }
@@ -508,7 +624,9 @@ function materialSubmissionForm(task) {
   materialForm.files.onchange = async () => {
     try {
       if (materialForm.files.files.length > task.fileLimit) throw new Error(`最多上传 ${task.fileLimit} 张图片`);
-      materialForm._images = await readFiles(materialForm.files.files);
+      materialForm._images = await readFiles(materialForm.files.files, {
+        taskId: task.id, businessType: 'material-image', limit: task.fileLimit
+      });
       renderPreviews(document.querySelector('#materialPreview'), materialForm._images);
     } catch (error) { alert(error.message); materialForm.files.value = ''; }
   };
@@ -517,8 +635,10 @@ function materialSubmissionForm(task) {
     try {
       const selected = [...event.target.files.files];
       if (selected.length > task.fileLimit) throw new Error(`最多上传 ${task.fileLimit} 个文件`);
-      const images = event.target._images || await readFiles(selected);
-      const files = images.map((data, index) => ({ name: `${selected[index].name.replace(/\.[^.]+$/, '')}.jpg`, data }));
+      const images = event.target._images || await readFiles(selected, {
+        taskId: task.id, businessType: 'material-image', limit: task.fileLimit
+      });
+      const files = images.map((item, index) => ({ name: selected[index].name, mediaId: item.mediaId }));
       await api(`/api/material-tasks/${task.id}/submission`, { method: 'PUT', body: JSON.stringify({ version: current?.version || 0, files, summary: event.target.summary.value }) });
       alert('材料提交成功');
       home();
@@ -531,7 +651,7 @@ function taskSubmissionForm(task) {
   app.innerHTML = `
     <header class="hero"><h1>${escapeHtml(task.name)}</h1><p>${escapeHtml(task.description)}</p></header>
     <section class="card"><form id="taskSend">
-      <div class="notice">上传前浏览器会自动压缩图片。支持 JPG、PNG、WebP，原图不超过 12MB，最多 ${task.imageLimit} 张。</div>
+      <div class="notice">上传前浏览器会自动压缩图片。支持 JPG、PNG、WebP，原图单张不超过 5MB，最多 ${task.imageLimit} 张。</div>
       <label>活动图片</label><input name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
       <div class="image-preview" id="taskPreview"></div>
       ${user.trackId === 'health' ? `<label>餐次</label><select name="mealType" required><option value="">请选择</option><option value="breakfast" ${current?.mealType === 'breakfast' ? 'selected' : ''}>早餐</option><option value="lunch" ${current?.mealType === 'lunch' ? 'selected' : ''}>午餐</option><option value="dinner" ${current?.mealType === 'dinner' ? 'selected' : ''}>晚餐</option></select>` : ''}
@@ -545,9 +665,14 @@ function taskSubmissionForm(task) {
   form.images.onchange = async () => {
     try {
       if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
-      form._images = await readFiles(form.images.files);
-      renderPreviews(document.querySelector('#taskPreview'), form._images);
-    } catch (error) { alert(error.message); form.images.value = ''; }
+      form._media = await readFiles(form.images.files, {
+        taskId: task.id, businessType: 'task', limit: task.imageLimit
+      });
+      renderPreviews(document.querySelector('#taskPreview'), form._media);
+    } catch (error) {
+      await openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
+      form.images.value = '';
+    }
   };
   if (form.isPublic) form.isPublic.onchange = () => {
     document.querySelector('#plazaCopyField').style.display = form.isPublic.checked ? 'block' : 'none';
@@ -557,14 +682,16 @@ function taskSubmissionForm(task) {
       event.preventDefault();
       try {
         if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
-        const images = form.images.files.length ? (form._images || await readFiles(form.images.files)) : [];
+        const media = form.images.files.length ? (form._media || await readFiles(form.images.files, {
+          taskId: task.id, businessType: 'task', limit: task.imageLimit
+        })) : [];
         const result = await api(`/api/tasks/${task.id}/submission`, {
           method: 'PUT',
           body: JSON.stringify({
             intent: button.dataset.intent,
             version: current?.version || 0,
             occurrenceDate: task.occurrenceDate,
-            images,
+            mediaIds: media.map((item) => item.mediaId),
             copy: form.copy.value,
             plazaCopy: form.plazaCopy?.value || '',
             mealType: form.mealType?.value,
@@ -612,7 +739,7 @@ async function plaza(sort = 'latest', page = 1, month = '') {
     <article class="plaza-card" data-post="${post.id}">
       <div class="image-shell">
         ${post.images[0]
-          ? `<img loading="lazy" decoding="async" src="${escapeHtml(post.images[0].displayUrl)}"
+          ? `<img loading="lazy" decoding="async" src="${escapeHtml(post.images[0].imageUrl)}"
               alt="${escapeHtml(post.teamName)}活动图片"
               onload="this.parentElement.classList.add('loaded')"
               onerror="this.hidden=true;this.parentElement.classList.add('failed')">`
@@ -713,9 +840,9 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
     <div class="row"><div><span class="eyebrow dark">${escapeHtml(post.taskName)}</span><h2>${escapeHtml(post.teamName)}</h2></div><button class="secondary right" id="closePost">关闭</button></div>
     <p class="muted">成员：${post.members.map((member) => `${escapeHtml(member.name)}（${escapeHtml(member.campus)}）`).join('、')}</p>
     <div class="plaza-photos">${post.images.map((image) => `
-      <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.highUrl)}" data-image-alt="活动图片">
+        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.imageUrl)}" data-image-alt="活动图片">
         <div class="image-shell">
-          <img loading="lazy" decoding="async" src="${escapeHtml(image.displayUrl)}" alt="活动图片"
+          <img loading="lazy" decoding="async" src="${escapeHtml(image.imageUrl)}" alt="活动图片"
             onload="this.parentElement.classList.add('loaded')"
             onerror="this.hidden=true;this.parentElement.classList.add('failed')">
           <span class="image-error">图片加载失败</span>
@@ -800,12 +927,20 @@ function checkinForm(slotId) {
     event.preventDefault();
     const form = event.target;
     try {
-      const photos = await readFiles(form.photos.files);
-      const summary = form.summary.files[0] ? (await readFiles(form.summary.files))[0] : null;
+      const photos = await readFiles(form.photos.files, { businessType: 'meal-checkin', limit: 3 });
+      const summary = form.summary.files[0]
+        ? (await readFiles(form.summary.files, { businessType: 'meal-checkin', limit: 1 }))[0]
+        : null;
       const date = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
       await api('/api/checkins', {
         method: 'POST',
-        body: JSON.stringify({ date, slotId, photos, summary, note: form.note.value })
+        body: JSON.stringify({
+          date,
+          slotId,
+          photoMediaIds: photos.map((item) => item.mediaId),
+          summaryMediaId: summary?.mediaId || null,
+          note: form.note.value
+        })
       });
       alert('提交成功');
       home();
@@ -1574,12 +1709,16 @@ function openAdminUserDrawer(studentUser, dashboardUser, teams, date, tasks = []
     event.preventDefault();
     const form = event.target;
     try {
-      const photos = await readFiles(form.photos.files);
+      const photos = await readFiles(form.photos.files, {
+        taskId: isHealth ? null : form.taskId.value,
+        businessType: 'admin-makeup',
+        limit: isHealth ? 3 : 1
+      });
       await api(`/api/admin/users/${studentUser.id}/makeup`, {
         method: 'POST',
         body: JSON.stringify(isHealth
-          ? { date, slotId: form.slotId.value, photos, note: form.note.value }
-          : { date, taskId: form.taskId.value, photos })
+          ? { date, slotId: form.slotId.value, mediaIds: photos.map((item) => item.mediaId), note: form.note.value }
+          : { date, taskId: form.taskId.value, mediaIds: photos.map((item) => item.mediaId) })
       });
       root.innerHTML = '';
       admin(date);

@@ -6,7 +6,8 @@ import {
   parseJson,
   readJson,
   requireUser,
-  shanghaiDate
+  shanghaiDate,
+  claimConfirmedMedia
 } from '../lib/runtime.js';
 import { excelResponse } from '../lib/excel.js';
 
@@ -111,24 +112,26 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
     }
     const summary = cleanText(body.summary, 4000);
     if (task.requireSummary && !summary) return json({ error: '请填写文字总结' }, 400);
+    if (body.files?.some((item) => item?.data)) {
+      return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
+    }
     const inputs = Array.isArray(body.files) ? body.files : [];
     if (!inputs.length || inputs.length > Number(task.fileLimit)) return json({ error: `文件数量必须为 1–${task.fileLimit} 个` }, 400);
     const allowed = parseJson(task.allowedTypesJson, []);
-    const uploaded = [];
+    const mediaIds = inputs.map((item) => item?.mediaId).filter(Boolean);
+    if (mediaIds.length !== inputs.length) return json({ error: '图片上传确认信息不完整' }, 400);
+    const uploaded = await claimConfirmedMedia(
+      env, mediaIds, user, task.id, 'material-image', Number(task.fileLimit)
+    );
     try {
-      for (const input of inputs) {
-        const file = decodeFile(input, allowed);
-        const id = crypto.randomUUID();
-        const key = `materials/${task.id}/${owner.id}/${id}${file.extension}`;
-        await env.UPLOADS.put(key, file.bytes, {
-          httpMetadata: { contentType: file.contentType },
-          customMetadata: { private: 'true', originalName: file.name }
-        });
-        uploaded.push({ id, key, ...file });
+      if (!allowed.some((item) => ['.jpg', '.jpeg', '.png', '.webp'].includes(String(item).toLowerCase()))) {
+        return json({ error: '该材料任务未开放图片格式' }, 415);
       }
       const id = current?.id || crypto.randomUUID();
       const old = current ? await env.DB.prepare(
-        'SELECT object_key AS objectKey FROM material_files WHERE submission_id=?1'
+        `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId
+           FROM material_files f LEFT JOIN media_objects m ON m.id=f.id
+          WHERE f.submission_id=?1`
       ).bind(id).all() : { results: [] };
       if (current) {
         const claimed = await env.DB.prepare(
@@ -147,20 +150,28 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
           ).bind(id, task.id, owner.type, owner.id, summary, nowIso())] : []),
         env.DB.prepare('DELETE FROM material_files WHERE submission_id=?1').bind(id)
       ];
+      for (const file of old.results) {
+        if (file.mediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.mediaId));
+      }
       for (const file of uploaded) {
+        const originalName = cleanText(
+          inputs.find((item) => item.mediaId === file.id)?.name || `image-${file.sortOrder + 1}.webp`,
+          180
+        ).replace(/[\\/:*?"<>|]/g, '_');
         statements.push(env.DB.prepare(
           `INSERT INTO material_files
             (id,submission_id,object_key,original_name,content_type,bytes,created_at)
            VALUES (?1,?2,?3,?4,?5,?6,?7)`
-        ).bind(file.id, id, file.key, file.name, file.contentType, file.bytes.length, nowIso()));
+        ).bind(file.id, id, file.objectKey, originalName, file.contentType, file.bytes, nowIso()));
+        statements.push(env.DB.prepare(
+          `UPDATE media_objects SET business_id=?1,updated_at=?2
+            WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
+        ).bind(id, nowIso(), file.id, user.id));
       }
       await env.DB.batch(statements);
       ctx.waitUntil(Promise.all(old.results.map((file) => env.UPLOADS.delete(file.objectKey))));
       return json({ ok: true, id });
-    } catch (error) {
-      await Promise.all(uploaded.map((file) => env.UPLOADS.delete(file.key)));
-      throw error;
-    }
+    } catch (error) { throw error; }
   }
 
   if (route === '/api/admin/material-tasks' && request.method === 'GET') {

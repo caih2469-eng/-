@@ -16,6 +16,7 @@ import { handleStudentRoutes } from './routes/student.js';
 import { handlePlazaRoutes } from './routes/plaza.js';
 import { handleAdminRoutes } from './routes/admin.js';
 import { canAccessMaterialFile, handleMaterialRoutes } from './routes/materials.js';
+import { handleMediaRoutes } from './routes/media.js';
 
 const login = async (request, env) => {
   const body = await readJson(request, 16 * 1024);
@@ -210,7 +211,9 @@ export default {
           time: shanghaiTime()
         });
       }
-        const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
+      const media = await handleMediaRoutes(request, env, ctx, url);
+      if (media) return media;
+      const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)$/);
         if (fileMatch && request.method === 'GET') return await fileResponse(request, env, decodeURIComponent(fileMatch[1]));
         const publicImageMatch = url.pathname.match(/^\/api\/public-images\/([^/]+)$/);
         if (publicImageMatch && (request.method === 'GET' || request.method === 'HEAD')) {

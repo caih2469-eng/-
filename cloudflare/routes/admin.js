@@ -12,10 +12,11 @@ import {
   requireUser,
   shanghaiDate,
   TRACKS,
-  uploadImages
+  claimConfirmedMedia
 } from '../lib/runtime.js';
 import { calculateRankings } from './plaza.js';
 import { excelResponse, readWorkbookRows } from '../lib/excel.js';
+import { createPrivateMediaUrl } from '../lib/media-signing.js';
 
 const adminUser = async (request, env) => requireUser(request, env, true);
 const safeUserColumns = `id,student_id AS studentId,name,role,campus,track_id AS trackId,
@@ -259,17 +260,33 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     ).bind(date).all();
     const checkins = await env.DB.prepare(
       `SELECT c.id,c.user_id AS userId,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
-              c.submitted_at AS submittedAt,c.review_note AS reviewNote,
-              (SELECT GROUP_CONCAT('/api/files/' || f.id, '|') FROM checkin_files f
-                WHERE f.checkin_id=c.id AND f.kind='photo') AS photoUrls
+              c.submitted_at AS submittedAt,c.review_note AS reviewNote
          FROM checkins c WHERE c.checkin_date=?1 ORDER BY c.submitted_at`
     ).bind(date).all();
+    const checkinFiles = await env.DB.prepare(
+      `SELECT f.id,f.checkin_id AS checkinId,f.object_key AS objectKey,f.kind,m.id AS mediaId
+         FROM checkin_files f JOIN checkins c ON c.id=f.checkin_id
+         LEFT JOIN media_objects m ON m.id=f.id
+        WHERE c.checkin_date=?1 ORDER BY f.sort_order`
+    ).bind(date).all();
+    await Promise.all(checkinFiles.results.map(async (file) => {
+      file.imageUrl = file.mediaId
+        ? await createPrivateMediaUrl(env, file, 'admin', admin.id)
+        : `/api/files/${file.id}`;
+    }));
     const memberCheckins = await env.DB.prepare(
       `SELECT mc.id,mc.user_id AS userId,mc.task_id AS taskId,mc.occurrence_date AS date,
-              mc.status,mc.submitted_at AS submittedAt,t.name AS taskName
+              mc.status,mc.submitted_at AS submittedAt,t.name AS taskName,
+              m.id AS mediaId,m.object_key AS objectKey
          FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+         LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
         WHERE mc.occurrence_date=?1 ORDER BY mc.submitted_at`
     ).bind(date).all();
+    await Promise.all(memberCheckins.results.map(async (item) => {
+      item.imageUrl = item.mediaId
+        ? await createPrivateMediaUrl(env, item, 'admin', admin.id)
+        : `/api/files/${item.id}`;
+    }));
     const config = await readConfig(env);
     return json({
       date,
@@ -278,11 +295,16 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
         const slots = config.slots.map((slot) =>
           (() => {
             const checkin = checkins.results.find((item) => item.userId === student.id && item.slotId === slot.id);
-            return checkin ? { ...checkin, photos: checkin.photoUrls ? checkin.photoUrls.split('|') : [] } : null;
+            return checkin ? {
+              ...checkin,
+              photos: checkinFiles.results
+                .filter((file) => file.checkinId === checkin.id && file.kind === 'photo')
+                .map((file) => file.imageUrl)
+            } : null;
           })());
         const interactionCheckins = memberCheckins.results
           .filter((item) => item.userId === student.id)
-          .map((item) => ({ ...item, photos: [`/api/files/${item.id}`], note: item.taskName }));
+          .map((item) => ({ ...item, photos: [item.imageUrl], note: item.taskName }));
         return {
           ...student,
           totalCompletedDays: Number(student.totalCompletedDays),
@@ -460,13 +482,18 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
       const config = await readConfig(env);
       const slot = config.slots.find((item) => item.id === body.slotId);
       if (!slot) return json({ error: '请选择早餐、午餐或晚餐' }, 400);
-      const uploaded = await uploadImages(env, body.photos || body.images, `admin-makeup/checkins/${userId}/${date}/${slot.id}`, 3);
+      if (body.photos?.length || body.images?.length) {
+        return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
+      }
+      const uploaded = await claimConfirmedMedia(env, body.mediaIds, admin, null, 'admin-makeup', 3);
       const existing = await env.DB.prepare(
         'SELECT id FROM checkins WHERE user_id=?1 AND checkin_date=?2 AND slot_id=?3'
       ).bind(userId, date, slot.id).first();
       const id = existing?.id || crypto.randomUUID();
       const oldFiles = existing ? await env.DB.prepare(
-        'SELECT object_key AS objectKey FROM checkin_files WHERE checkin_id=?1'
+        `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId
+           FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
+          WHERE f.checkin_id=?1`
       ).bind(id).all() : { results: [] };
       const statements = [
         env.DB.prepare(
@@ -480,11 +507,18 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
         ).bind(id, userId, date, slot.id, cleanText(body.note, 300), nowIso(), admin.id),
         env.DB.prepare('DELETE FROM checkin_files WHERE checkin_id=?1').bind(id)
       ];
+      oldFiles.results.forEach((file) => {
+        if (file.mediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.mediaId));
+      });
       uploaded.forEach((file) => statements.push(env.DB.prepare(
         `INSERT INTO checkin_files
           (id,checkin_id,object_key,content_type,bytes,kind,sort_order,created_at)
          VALUES (?1,?2,?3,?4,?5,'photo',?6,?7)`
-      ).bind(file.id, id, file.key, file.contentType, file.bytes, file.sortOrder, nowIso())));
+       ).bind(file.id, id, file.objectKey, file.contentType, file.bytes, file.sortOrder, nowIso())));
+      uploaded.forEach((file) => statements.push(env.DB.prepare(
+        `UPDATE media_objects SET business_id=?1,updated_at=?2
+          WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
+      ).bind(id, nowIso(), file.id, admin.id)));
       statements.push(audit(env, admin, 'makeup', 'checkin', id, { userId, date, slotId: slot.id }));
       await env.DB.batch(statements);
       ctx.waitUntil(Promise.all(oldFiles.results.map((file) => env.UPLOADS.delete(file.objectKey))));
@@ -499,12 +533,17 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     ]);
     if (!task) return json({ error: '请选择廿载同心赛道任务' }, 400);
     if (!team) return json({ error: '该用户尚未分配队伍' }, 409);
-    const uploaded = await uploadImages(env, body.photos || body.images, `admin-makeup/member-checkins/${taskId}/${userId}`, 1);
+    if (body.photos?.length || body.images?.length) {
+      return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
+    }
+    const uploaded = await claimConfirmedMedia(env, body.mediaIds, admin, taskId, 'admin-makeup', 1);
     const existing = await env.DB.prepare(
-      'SELECT id,object_key AS objectKey FROM member_checkins WHERE task_id=?1 AND occurrence_date=?2 AND user_id=?3'
+      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId
+         FROM member_checkins c LEFT JOIN media_objects m ON m.business_id=c.id
+        WHERE c.task_id=?1 AND c.occurrence_date=?2 AND c.user_id=?3`
     ).bind(taskId, date, userId).first();
     const id = existing?.id || crypto.randomUUID();
-    await env.DB.batch([
+    const statements = [
       env.DB.prepare(
         `INSERT INTO member_checkins
           (id,task_id,occurrence_date,user_id,team_id,object_key,content_type,bytes,status,submitted_at)
@@ -513,10 +552,16 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
           team_id=excluded.team_id,object_key=excluded.object_key,
           content_type=excluded.content_type,bytes=excluded.bytes,status='approved',
           submitted_at=excluded.submitted_at`
-      ).bind(id, taskId, date, userId, team.id, uploaded[0].key,
+      ).bind(id, taskId, date, userId, team.id, uploaded[0].objectKey,
         uploaded[0].contentType, uploaded[0].bytes, nowIso()),
+      ...(existing?.mediaId ? [env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(existing.mediaId)] : []),
+      env.DB.prepare(
+        `UPDATE media_objects SET business_id=?1,updated_at=?2
+          WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
+      ).bind(id, nowIso(), uploaded[0].id, admin.id),
       audit(env, admin, 'makeup', 'member_checkin', id, { userId, date, taskId })
-    ]);
+    ];
+    await env.DB.batch(statements);
     if (existing?.objectKey) ctx.waitUntil(env.UPLOADS.delete(existing.objectKey));
     return json({ ok: true, id, trackId: target.trackId });
   }
@@ -815,9 +860,13 @@ export const handleAdminRoutes = async (request, env, ctx, url) => {
     ).all();
     for (const submission of submissions.results) {
       const images = await env.DB.prepare(
-        'SELECT id FROM task_submission_images WHERE submission_id=?1 ORDER BY sort_order'
+        `SELECT i.id,i.object_key AS objectKey,m.id AS mediaId
+           FROM task_submission_images i LEFT JOIN media_objects m ON m.id=i.id
+          WHERE i.submission_id=?1 ORDER BY i.sort_order`
       ).bind(submission.id).all();
-      submission.images = images.results.map((image) => `/api/files/${image.id}`);
+      submission.images = await Promise.all(images.results.map((image) => image.mediaId
+        ? createPrivateMediaUrl(env, image, 'admin', admin.id)
+        : `/api/files/${image.id}`));
     }
     return json({
       tasks: results.map((item) => ({

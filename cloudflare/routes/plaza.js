@@ -3,10 +3,6 @@ import { json, nowIso, requireUser, shanghaiDate } from '../lib/runtime.js';
 let schemaReady;
 const ensureInteractionSchema = (env) => {
   if (!schemaReady) schemaReady = env.DB.batch([
-    env.DB.prepare(`CREATE TABLE IF NOT EXISTS image_variants (
-      source_type TEXT NOT NULL, source_id TEXT NOT NULL, variant TEXT NOT NULL,
-      object_key TEXT NOT NULL, content_type TEXT NOT NULL, bytes INTEGER NOT NULL,
-      created_at TEXT NOT NULL, PRIMARY KEY (source_type,source_id,variant))`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS plaza_comments (
       id TEXT PRIMARY KEY, post_id TEXT NOT NULL, user_id TEXT NOT NULL,
       content TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'visible',
@@ -33,8 +29,10 @@ const postDetails = async (env, post, userId = null) => {
       WHERE tm.team_id=?1 ORDER BY tm.joined_at`
     ).bind(post.teamId).all(),
     env.DB.prepare(
-    `SELECT i.id,i.sort_order AS sortOrder
-       FROM task_submission_images i WHERE i.submission_id=?1 ORDER BY i.sort_order`
+    `SELECT i.id,i.sort_order AS sortOrder,m.id AS mediaId
+       FROM task_submission_images i
+       LEFT JOIN media_objects m ON m.id=i.id
+      WHERE i.submission_id=?1 ORDER BY i.sort_order`
     ).bind(post.submissionId).all(),
     env.DB.prepare(
     `SELECT
@@ -52,11 +50,12 @@ const postDetails = async (env, post, userId = null) => {
     ...post,
     members: members.results,
     publisherName: members.results[0]?.name || post.teamName,
-    images: images.results.map((item) => ({
-      ...item,
-      displayUrl: `/api/public-images/${item.id}`,
-      highUrl: `/api/files/${item.id}`
-    })),
+    images: images.results.map((item) => {
+      const imageUrl = item.mediaId
+        ? `/api/public-media/${encodeURIComponent(item.id)}`
+        : `/api/public-images/${encodeURIComponent(item.id)}`;
+      return { ...item, imageUrl };
+    }),
     likeCount: Number(counts.likes),
     viewCount: Number(counts.views),
     commentCount: Number(counts.comments),

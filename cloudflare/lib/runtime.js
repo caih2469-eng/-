@@ -151,7 +151,7 @@ export const createToken = async (user, secret) => {
   return `${payload}.${await sign(payload, secret)}`;
 };
 
-export const authenticate = async (request, env) => {
+export const verifySessionClaims = async (request, env) => {
   const header = request.headers.get('authorization') || '';
   const cookieToken = (request.headers.get('cookie') || '')
     .split(';')
@@ -165,6 +165,12 @@ export const authenticate = async (request, env) => {
   if (!constantTimeEqual(encoder.encode(supplied), encoder.encode(expected))) return null;
   const decoded = parseJson(new TextDecoder().decode(fromBase64Url(payload)));
   if (!decoded?.sub || decoded.exp < Math.floor(Date.now() / 1000)) return null;
+  return decoded;
+};
+
+export const authenticate = async (request, env) => {
+  const decoded = await verifySessionClaims(request, env);
+  if (!decoded) return null;
   const user = await env.DB.prepare(
     `SELECT id, student_id AS studentId, name, role, campus, track_id AS trackId,
             status, created_at AS createdAt
@@ -248,6 +254,31 @@ export const uploadImages = async (env, dataUrls, prefix, limit) => {
     await Promise.all(uploaded.map((item) => env.UPLOADS.delete(item.key)));
     throw error;
   }
+};
+
+export const claimConfirmedMedia = async (env, mediaIds, user, taskId, businessType, limit) => {
+  if (!Array.isArray(mediaIds) || !mediaIds.length || mediaIds.length > limit) {
+    throw Object.assign(new Error(`图片数量必须为 1–${limit} 张`), { status: 400 });
+  }
+  const uniqueIds = [...new Set(mediaIds.map((value) => cleanText(value, 80)).filter(Boolean))];
+  if (uniqueIds.length !== mediaIds.length) {
+    throw Object.assign(new Error('图片列表包含重复或无效项目'), { status: 400 });
+  }
+  const claimed = [];
+  for (const id of uniqueIds) {
+    const media = await env.DB.prepare(
+      `SELECT m.id,m.object_key AS objectKey,m.mime_type AS contentType,m.file_size AS bytes,
+              m.width,m.height,m.business_id AS businessId,i.status AS intentStatus
+         FROM media_objects m JOIN media_upload_intents i ON i.id=m.id
+        WHERE m.id=?1 AND m.owner_user_id=?2 AND COALESCE(m.task_id,'')=COALESCE(?3,'')
+          AND m.business_type=?4`
+    ).bind(id, user.id, taskId || null, businessType).first();
+    if (!media || media.intentStatus !== 'confirmed' || media.businessId) {
+      throw Object.assign(new Error('图片不存在、无权使用或已被其他提交占用'), { status: 403 });
+    }
+    claimed.push(media);
+  }
+  return claimed.map((media, sortOrder) => ({ ...media, sortOrder }));
 };
 
 export const audit = (env, actor, action, entityType, entityId = null, metadata = {}) =>

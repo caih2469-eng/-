@@ -9,8 +9,10 @@ import {
   requireUser,
   shanghaiDate,
   shanghaiTime,
-  uploadImages
+  uploadImages,
+  claimConfirmedMedia
 } from '../lib/runtime.js';
+import { createPrivateMediaUrl } from '../lib/media-signing.js';
 
 const teamForUser = async (env, userId) => env.DB.prepare(
   `SELECT t.id, t.name, t.invite_code AS inviteCode, t.member_limit AS memberLimit,
@@ -68,12 +70,20 @@ const submissionOwner = async (env, user, task) => {
   return { type: 'user', id: user.id, team: null };
 };
 
-const submissionImages = async (env, submissionId) => {
+const submissionImages = async (env, submissionId, viewer) => {
   const { results } = await env.DB.prepare(
-    `SELECT id, content_type AS contentType, bytes, sort_order AS sortOrder
-       FROM task_submission_images WHERE submission_id = ?1 ORDER BY sort_order`
+    `SELECT i.id,i.object_key AS objectKey,i.content_type AS contentType,i.bytes,
+            i.sort_order AS sortOrder,m.id AS mediaId
+       FROM task_submission_images i
+       LEFT JOIN media_objects m ON m.id=i.id
+      WHERE i.submission_id=?1 ORDER BY i.sort_order`
   ).bind(submissionId).all();
-  return results.map((item) => ({ ...item, url: `/api/files/${item.id}` }));
+  return Promise.all(results.map(async (item) => {
+    const imageUrl = item.mediaId
+      ? await createPrivateMediaUrl(env, item, viewer.role === 'admin' ? 'admin' : 'owner', viewer.id)
+      : `/api/files/${item.id}`;
+    return { ...item, imageUrl, url: imageUrl };
+  }));
 };
 
 export const handleStudentRoutes = async (request, env, ctx, url) => {
@@ -163,7 +173,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
            FROM task_submissions
           WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3 AND occurrence_date=?4 LIMIT 1`
       ).bind(task.id, owner.type, owner.id, occurrenceDate).first() : null;
-      if (submission) submission.images = await submissionImages(env, submission.id);
+      if (submission) submission.images = await submissionImages(env, submission.id, user);
       const schedule = task.scheduleJson ? JSON.parse(task.scheduleJson) : {};
       let teamProgress = null;
       let memberCheckin = null;
@@ -217,7 +227,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
          FROM task_submissions s JOIN tasks t ON t.id=s.task_id
         WHERE s.owner_type='user' AND s.owner_id=?1 ORDER BY s.updated_at DESC LIMIT 200`
     ).bind(user.id).all();
-    for (const item of results) item.images = await submissionImages(env, item.id);
+    for (const item of results) item.images = await submissionImages(env, item.id, user);
     return json({
       submissions: results.map((item) => ({
         ...item,
@@ -240,26 +250,40 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     if (!taskWindowOpen(task, occurrenceDate, makeupAllowed)) return json({ error: '当前不在打卡时间范围内' }, 403);
     const team = await teamForUser(env, user.id);
     if (!team) return json({ error: '尚未分配队伍' }, 403);
-    const uploaded = await uploadImages(env, body.images || body.photos, `member-checkins/${task.id}/${user.id}`, 1);
+    if (body.images?.length || body.photos?.length) {
+      return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
+    }
+    const uploaded = await claimConfirmedMedia(
+      env, body.mediaIds, user, task.id, 'member-checkin', 1
+    );
     const old = await env.DB.prepare(
-      'SELECT object_key AS objectKey FROM member_checkins WHERE task_id=?1 AND occurrence_date=?2 AND user_id=?3'
+      `SELECT c.id,c.object_key AS objectKey,m.id AS mediaId
+         FROM member_checkins c LEFT JOIN media_objects m ON m.business_id=c.id
+        WHERE c.task_id=?1 AND c.occurrence_date=?2 AND c.user_id=?3`
     ).bind(task.id, occurrenceDate, user.id).first();
-    const id = crypto.randomUUID();
+    const id = old?.id || crypto.randomUUID();
     try {
-      await env.DB.prepare(
-        `INSERT INTO member_checkins
+      const statements = [
+        ...(old?.mediaId ? [env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(old.mediaId)] : []),
+        env.DB.prepare(
+          `INSERT INTO member_checkins
           (id,task_id,occurrence_date,user_id,team_id,object_key,content_type,bytes,status,submitted_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'submitted',?9)
          ON CONFLICT(task_id,occurrence_date,user_id) DO UPDATE SET
-           team_id=excluded.team_id,object_key=excluded.object_key,
-           content_type=excluded.content_type,bytes=excluded.bytes,status='submitted',
-           submitted_at=excluded.submitted_at`
-      ).bind(id, task.id, occurrenceDate, user.id, team.id, uploaded[0].key,
-        uploaded[0].contentType, uploaded[0].bytes, nowIso()).run();
+            team_id=excluded.team_id,object_key=excluded.object_key,
+            content_type=excluded.content_type,bytes=excluded.bytes,status='submitted',
+            submitted_at=excluded.submitted_at`
+        ).bind(id, task.id, occurrenceDate, user.id, team.id, uploaded[0].objectKey,
+          uploaded[0].contentType, uploaded[0].bytes, nowIso()),
+        env.DB.prepare(
+          `UPDATE media_objects SET business_id=?1,updated_at=?2
+            WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
+        ).bind(id, nowIso(), uploaded[0].id, user.id)
+      ];
+      await env.DB.batch(statements);
       if (old?.objectKey) ctx.waitUntil(env.UPLOADS.delete(old.objectKey));
       return json({ ok: true, occurrenceDate });
     } catch (error) {
-      await env.UPLOADS.delete(uploaded[0].key);
       throw error;
     }
   }
@@ -293,19 +317,19 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       return json({ error: '该任务已最终提交，不能重复提交' }, 409);
     }
     if (current && Number(body.version) !== Number(current.version)) return json({ error: '内容已被队友更新，请刷新后重试' }, 409);
-    const uploaded = body.images?.length
-      ? await uploadImages(env, body.images, `task-submissions/${task.id}/${owner.id}`, Number(task.imageLimit))
-      : [];
-    const displayUploaded = uploaded.length && Array.isArray(body.displayImages)
-      && body.displayImages.length === uploaded.length
-      ? await uploadImages(env, body.displayImages,
-        `task-submissions/${task.id}/${owner.id}/display`, Number(task.imageLimit))
+    if (body.images?.length || body.displayImages?.length) {
+      return json({ error: '旧版Base64和双图片上传已停用，请重新选择图片' }, 400);
+    }
+    const uploaded = body.mediaIds?.length
+      ? await claimConfirmedMedia(env, body.mediaIds, user, task.id, 'task', Number(task.imageLimit))
       : [];
     if (!uploaded.length && !current) return json({ error: '请至少上传一张图片' }, 400);
     const id = current?.id || crypto.randomUUID();
     const nextVersion = Number(current?.version || 0) + 1;
     const oldImages = current ? await env.DB.prepare(
-      'SELECT object_key AS objectKey FROM task_submission_images WHERE submission_id=?1'
+      `SELECT i.id,i.object_key AS objectKey,m.id AS mediaId
+         FROM task_submission_images i LEFT JOIN media_objects m ON m.id=i.id
+        WHERE i.submission_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [];
     let claimStatement = null;
@@ -327,25 +351,22 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         intent === 'submitted' ? nowIso() : null, nowIso()));
     }
     if (uploaded.length) {
-      await env.DB.prepare(`CREATE TABLE IF NOT EXISTS image_variants (
-        source_type TEXT NOT NULL, source_id TEXT NOT NULL, variant TEXT NOT NULL,
-        object_key TEXT NOT NULL, content_type TEXT NOT NULL, bytes INTEGER NOT NULL,
-        created_at TEXT NOT NULL, PRIMARY KEY (source_type,source_id,variant))`).run();
       statements.push(env.DB.prepare('DELETE FROM task_submission_images WHERE submission_id=?1').bind(id));
+      for (const oldImage of oldImages.results) {
+        if (oldImage.mediaId) {
+          statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(oldImage.mediaId));
+        }
+      }
       for (const image of uploaded) {
         statements.push(env.DB.prepare(
           `INSERT INTO task_submission_images
             (id,submission_id,object_key,content_type,bytes,sort_order,created_at)
            VALUES (?1,?2,?3,?4,?5,?6,?7)`
-        ).bind(image.id, id, image.key, image.contentType, image.bytes, image.sortOrder, nowIso()));
-        const display = displayUploaded[image.sortOrder];
-        if (display) {
-          statements.push(env.DB.prepare(
-            `INSERT OR REPLACE INTO image_variants
-              (source_type,source_id,variant,object_key,content_type,bytes,created_at)
-             VALUES ('task_submission_image',?1,'display',?2,?3,?4,?5)`
-          ).bind(image.id, display.key, display.contentType, display.bytes, nowIso()));
-        }
+        ).bind(image.id, id, image.objectKey, image.contentType, image.bytes, image.sortOrder, nowIso()));
+        statements.push(env.DB.prepare(
+          `UPDATE media_objects SET business_id=?1,visibility=?2,updated_at=?3
+            WHERE id=?4 AND owner_user_id=?5 AND business_id IS NULL`
+        ).bind(id, intent === 'submitted' && isPublic ? 'public' : 'private', nowIso(), image.id, user.id));
       }
     }
     if (intent === 'submitted' && isPublic && owner.team) {
@@ -363,10 +384,17 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         if (!claimed.meta.changes) throw Object.assign(new Error('内容已被更新'), { status: 409 });
       }
       await env.DB.batch(statements);
-      if (uploaded.length) ctx.waitUntil(Promise.all(oldImages.results.map((item) => env.UPLOADS.delete(item.objectKey))));
+      if (uploaded.length) {
+        const origin = new URL(request.url).origin;
+        ctx.waitUntil(Promise.all(oldImages.results.flatMap((item) => [
+          env.UPLOADS.delete(item.objectKey),
+          ...(item.mediaId
+            ? [caches.default.delete(new Request(`${origin}/api/public-media/${encodeURIComponent(item.mediaId)}`))]
+            : [])
+        ])));
+      }
       return json({ ok: true, submission: { id, status: intent, version: nextVersion } });
     } catch (error) {
-      await Promise.all([...uploaded, ...displayUploaded].map((item) => env.UPLOADS.delete(item.key)));
       throw error;
     }
   }
@@ -380,11 +408,17 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     ).bind(user.id, date).all();
     for (const item of results) {
       const files = await env.DB.prepare(
-        'SELECT id,kind,sort_order AS sortOrder FROM checkin_files WHERE checkin_id=?1 ORDER BY kind,sort_order'
+        `SELECT f.id,f.object_key AS objectKey,f.kind,f.sort_order AS sortOrder,m.id AS mediaId
+           FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
+          WHERE f.checkin_id=?1 ORDER BY f.kind,f.sort_order`
       ).bind(item.id).all();
-      item.photos = files.results.filter((file) => file.kind === 'photo').map((file) => `/api/files/${file.id}`);
-      item.summary = files.results.find((file) => file.kind === 'summary')
-        ? `/api/files/${files.results.find((file) => file.kind === 'summary').id}` : null;
+      for (const file of files.results) {
+        file.imageUrl = file.mediaId
+          ? await createPrivateMediaUrl(env, file, user.role === 'admin' ? 'admin' : 'owner', user.id)
+          : `/api/files/${file.id}`;
+      }
+      item.photos = files.results.filter((file) => file.kind === 'photo').map((file) => file.imageUrl);
+      item.summary = files.results.find((file) => file.kind === 'summary')?.imageUrl || null;
     }
     return json({ checkins: results });
   }
@@ -401,14 +435,23 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     if (!slot || (!makeupAllowed && (shanghaiTime() < slot.start || shanghaiTime() > slot.end))) {
       return json({ error: '当前不在该时段' }, 403);
     }
-    const photos = await uploadImages(env, body.photos, `checkins/${user.id}/${date}/${slot.id}`, 3);
-    const summary = body.summary ? (await uploadImages(env, [body.summary], `checkins/${user.id}/${date}/${slot.id}/summary`, 1))[0] : null;
+    if (body.photos?.length || body.summary) {
+      return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
+    }
+    const photos = await claimConfirmedMedia(
+      env, body.photoMediaIds, user, null, 'meal-checkin', 3
+    );
+    const summary = body.summaryMediaId
+      ? (await claimConfirmedMedia(env, [body.summaryMediaId], user, null, 'meal-checkin', 1))[0]
+      : null;
     const existing = await env.DB.prepare(
       'SELECT id,version FROM checkins WHERE user_id=?1 AND checkin_date=?2 AND slot_id=?3'
     ).bind(user.id, date, slot.id).first();
     const id = existing?.id || crypto.randomUUID();
     const old = existing ? await env.DB.prepare(
-      'SELECT object_key AS objectKey FROM checkin_files WHERE checkin_id=?1'
+      `SELECT f.id,f.object_key AS objectKey,m.id AS mediaId
+         FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
+        WHERE f.checkin_id=?1`
     ).bind(id).all() : { results: [] };
     const statements = [
       env.DB.prepare(
@@ -421,19 +464,25 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       ).bind(id, user.id, date, slot.id, cleanText(body.note, 300), nowIso()),
       env.DB.prepare('DELETE FROM checkin_files WHERE checkin_id=?1').bind(id)
     ];
+    for (const file of old.results) {
+      if (file.mediaId) statements.push(env.DB.prepare('DELETE FROM media_objects WHERE id=?1').bind(file.mediaId));
+    }
     for (const file of [...photos, ...(summary ? [{ ...summary, sortOrder: 0, kind: 'summary' }] : [])]) {
       statements.push(env.DB.prepare(
         `INSERT INTO checkin_files
           (id,checkin_id,object_key,content_type,bytes,kind,sort_order,created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)`
-      ).bind(file.id, id, file.key, file.contentType, file.bytes, file.kind || 'photo', file.sortOrder, nowIso()));
+      ).bind(file.id, id, file.objectKey, file.contentType, file.bytes, file.kind || 'photo', file.sortOrder, nowIso()));
+      statements.push(env.DB.prepare(
+        `UPDATE media_objects SET business_id=?1,updated_at=?2
+          WHERE id=?3 AND owner_user_id=?4 AND business_id IS NULL`
+      ).bind(id, nowIso(), file.id, user.id));
     }
     try {
       await env.DB.batch(statements);
       ctx.waitUntil(Promise.all(old.results.map((item) => env.UPLOADS.delete(item.objectKey))));
       return json({ ok: true, id });
     } catch (error) {
-      await Promise.all([...photos, ...(summary ? [summary] : [])].map((item) => env.UPLOADS.delete(item.key)));
       throw error;
     }
   }
