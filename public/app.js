@@ -888,6 +888,8 @@ form.onsubmit = async (event) => {
   }
 };
 
+}
+
 function materialSubmissionForm(task) {
   const current = task.submission;
   app.innerHTML = `<header class="hero"><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description)}</p></header>
