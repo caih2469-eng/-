@@ -36,10 +36,7 @@
       stylesheet.href = '/style.css?v=20260729-uploadfix3';
       document.head.appendChild(stylesheet);
       await loadScript('/site-path.js?v=20260729-uploadfix3');
-      await Promise.all([
-        loadScript('/vendor/browser-image-compression-2.0.2.js'),
-        loadScript('/app.js?v=20260729-uploadfix3')
-      ]);
+      await loadScript('/app.js?v=20260729-uploadfix3');
     } catch {
       showNetworkError();
     } finally {

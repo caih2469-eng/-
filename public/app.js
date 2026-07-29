@@ -16,6 +16,18 @@ let adminUserFilter = sessionStorage.adminUserFilter || 'all';
 let adminUserQuery = sessionStorage.adminUserQuery || '';
 let adminCompletionTrack = sessionStorage.adminCompletionTrack || 'all';
 let scrollSaveTimer;
+let navigationEpoch = 0;
+let midnightRefreshTimer = null;
+let studentDashboardDirty = false;
+const inflightGetRequests = new Map();
+let imageCompressionLibraryPromise = null;
+
+const beginNavigation = () => {
+  navigationEpoch += 1;
+  return navigationEpoch;
+};
+const isCurrentNavigation = (epoch) => epoch === navigationEpoch;
+
 window.addEventListener('scroll', () => {
   if (document.body.dataset.view !== 'admin') return;
   clearTimeout(scrollSaveTimer);
@@ -197,18 +209,165 @@ const askText = (title, message, inputLabel) => openDialog({
   title, message, input: true, inputLabel, cancelText: '取消', confirmText: '确定'
 });
 
-const api = async (path, options = {}) => {
-  const response = await fetch(normalizeSitePath(path), {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {})
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const isJsonString = (value) => {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const parseApiResponse = async (response) => {
+  if (response.status === 204 || response.status === 205) return {};
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+  if (!text) return {};
+  if (contentType.includes('application/json')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('服务器暂时无法响应，请稍后重试。');
     }
+  }
+  if (!response.ok || contentType.includes('text/html')) {
+    throw new Error('服务器暂时无法响应，请稍后重试。');
+  }
+  return text;
+};
+
+const apiRequest = async (url, options, method) => {
+  const { timeoutMs: requestedTimeout, ...fetchOptions } = options;
+  const headers = new Headers(options.headers || {});
+  const body = options.body;
+  if (token && !headers.has('authorization')) headers.set('authorization', `Bearer ${token}`);
+  if (body != null && !headers.has('content-type') && isJsonString(body)) {
+    headers.set('content-type', 'application/json');
+  }
+
+  const timeoutMs = Number(requestedTimeout)
+    || (method === 'GET' || method === 'HEAD' ? 12_000 : 30_000);
+  const controller = new AbortController();
+  let timedOut = false;
+  const forwardAbort = () => controller.abort();
+  options.signal?.addEventListener?.('abort', forwardAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      method,
+      headers,
+      credentials: 'same-origin',
+      signal: controller.signal
+    });
+    return response;
+  } catch (error) {
+    if (timedOut) throw new Error('网络响应超时，请稍后重试。');
+    if (options.signal?.aborted) throw new Error('操作已取消，请重试。');
+    throw new Error('网络连接失败，请检查网络后重试。');
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener?.('abort', forwardAbort);
+  }
+};
+
+const executeApi = async (url, options, method) => {
+  const retryableMethod = method === 'GET' || method === 'HEAD';
+  for (let attempt = 0; attempt < (retryableMethod ? 2 : 1); attempt += 1) {
+    let response;
+    try {
+      response = await apiRequest(url, options, method);
+    } catch (error) {
+      if (!retryableMethod || attempt > 0 || !/网络连接失败/.test(error.message)) throw error;
+      await wait(300 + Math.floor(Math.random() * 301));
+      continue;
+    }
+    if (attempt === 0 && retryableMethod && [502, 503, 504].includes(response.status)) {
+      await wait(300 + Math.floor(Math.random() * 301));
+      continue;
+    }
+    const result = await parseApiResponse(response);
+    if (!response.ok) {
+      const fallback = [502, 503, 504].includes(response.status)
+        ? '服务器暂时无法响应，请稍后重试。'
+        : '操作失败，请稍后重试。';
+      throw new Error(result?.error || fallback);
+    }
+    return result;
+  }
+  throw new Error('服务器暂时无法响应，请稍后重试。');
+};
+
+const api = (path, options = {}) => {
+  const method = String(options.method || 'GET').toUpperCase();
+  const url = normalizeSitePath(path);
+  const requestOptions = { ...options };
+  delete requestOptions.timeoutMs;
+  if (method !== 'GET' && method !== 'HEAD') {
+    return executeApi(url, { ...requestOptions, timeoutMs: options.timeoutMs }, method);
+  }
+
+  const requestKey = `${user?.id || user?.studentId || 'anonymous'}|${method}|${url}`;
+  const existing = inflightGetRequests.get(requestKey);
+  if (existing) return existing;
+  const request = executeApi(url, { ...requestOptions, timeoutMs: options.timeoutMs }, method)
+    .finally(() => inflightGetRequests.delete(requestKey));
+  inflightGetRequests.set(requestKey, request);
+  return request;
+};
+
+const loadImageCompressionLibrary = () => {
+  if (typeof window.imageCompression === 'function') return Promise.resolve(window.imageCompression);
+  if (imageCompressionLibraryPromise) return imageCompressionLibraryPromise;
+  imageCompressionLibraryPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-image-compression-library]');
+    const script = existing || document.createElement('script');
+    const handleLoad = () => {
+      if (typeof window.imageCompression === 'function') resolve(window.imageCompression);
+      else reject(new Error('图片处理组件加载失败，请刷新后重试。'));
+    };
+    const handleError = () => reject(new Error('图片处理组件加载失败，请刷新后重试。'));
+    script.addEventListener('load', handleLoad, { once: true });
+    script.addEventListener('error', handleError, { once: true });
+    if (!existing) {
+      script.src = '/vendor/browser-image-compression-2.0.2.js';
+      script.async = true;
+      script.dataset.imageCompressionLibrary = 'true';
+      document.head.appendChild(script);
+    }
+  }).catch((error) => {
+    imageCompressionLibraryPromise = null;
+    throw error;
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || '操作失败');
-  return result;
+  return imageCompressionLibraryPromise;
+};
+
+const uploadBinary = async (url, options = {}) => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const forwardAbort = () => controller.abort();
+  options.signal?.addEventListener?.('abort', forwardAbort, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 60_000);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch {
+    if (timedOut) throw new Error('图片上传超时，请检查网络后重试。');
+    if (options.signal?.aborted) throw new Error('图片上传已取消，请重新选择图片。');
+    throw new Error('网络连接失败，请检查网络后重试。');
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener?.('abort', forwardAbort);
+  }
 };
 
 const escapeHtml = (value) =>
@@ -296,7 +455,7 @@ const imageDimensions = async (blob) => {
 
 const compressImage = async (file, options = {}) => {
   const sourceFile = await normalizeSourceImage(file);
-  if (typeof window.imageCompression !== 'function') throw new Error('图片压缩模块加载失败，请刷新后重试。');
+  const imageCompression = await loadImageCompressionLibrary();
   const isThumb = options.variant === 'thumb';
   const common = {
     maxSizeMB: isThumb ? MEDIA_THUMB_MAX_SIZE_MB : MEDIA_DISPLAY_MAX_SIZE_MB,
@@ -308,10 +467,10 @@ const compressImage = async (file, options = {}) => {
     signal: options.signal,
     onProgress: options.onProgress
   };
-  let blob = await window.imageCompression(sourceFile, { ...common, fileType: 'image/webp' });
+  let blob = await imageCompression(sourceFile, { ...common, fileType: 'image/webp' });
   let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
   if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
-    blob = await window.imageCompression(sourceFile, {
+    blob = await imageCompression(sourceFile, {
       ...common,
       fileType: 'image/jpeg',
       initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY
@@ -349,7 +508,7 @@ const uploadCompressedImage = async (image, context, signal) => {
       variant: context.variant || 'display'
     })
   });
-  const uploaded = await fetch(intent.uploadUrl, {
+  const uploaded = await uploadBinary(intent.uploadUrl, {
     method: 'PUT',
     headers: intent.headers,
     body: image.file,
@@ -451,6 +610,9 @@ const formatDate = (value) =>
 
 function logout() {
   void fetch('/api/logout', { method: 'POST', keepalive: true });
+  clearTimeout(midnightRefreshTimer);
+  midnightRefreshTimer = null;
+  inflightGetRequests.clear();
   localStorage.clear();
   token = null;
   user = null;
@@ -459,114 +621,25 @@ function logout() {
 
 function login() {
   window.location.replace('/entrance.html');
-  return;
-  delete document.body.dataset.view;
-  document.body.classList.add('poster-mode');
-  app.innerHTML = `
-    <section class="original-entry" id="originalEntry">
-      <div class="fluid-bg">
-        <div class="blob blob-orange"></div>
-        <div class="blob blob-highlight"></div>
-        <div class="blob blob-pink"></div>
-        <div class="blob cursor-blob" id="cursorBlob"></div>
-      </div>
-      <div id="meteor-container"></div>
-      <div class="bg-text-container">
-        <h1 class="bg-main-title">廿载同心·青春同行</h1>
-        <p class="bg-subtitle">设计学院</p>
-      </div>
-      <div class="dark-overlay" id="darkOverlay"></div>
-      <div class="intro-hint" id="hint">点击屏幕进入系统</div>
-      <div class="glass-login" id="loginCard">
-        <h2 class="login-title">系统登录</h2>
-        <form id="login">
-          <div class="input-group">
-            <input name="studentId" type="text" class="glass-input" placeholder="学号/账号 (如: 246731056 李智霖)" autocomplete="username" required>
-          </div>
-          <div class="input-group">
-            <input name="password" type="password" class="glass-input" placeholder="密码" autocomplete="current-password" required>
-          </div>
-          <button type="submit" class="login-btn">登 入</button>
-        </form>
-      </div>
-    </section>`;
-  const cursorBlob = document.querySelector('#cursorBlob');
-  const loginCard = document.querySelector('#loginCard');
-  const hint = document.querySelector('#hint');
-  const darkOverlay = document.querySelector('#darkOverlay');
-  let isLoginVisible = false;
-  document.addEventListener('mousemove', (event) => {
-    cursorBlob.style.transform = `translate(${event.clientX - 225}px, ${event.clientY - 225}px)`;
-  }, { once: false });
-  document.querySelector('#originalEntry').onclick = () => {
-    if (isLoginVisible) return;
-    hint.style.opacity = '0';
-    setTimeout(() => { hint.style.display = 'none'; }, 400);
-    darkOverlay.classList.add('show');
-    loginCard.classList.add('show');
-    isLoginVisible = true;
-  };
-  const meteorContainer = document.querySelector('#meteor-container');
-  const meteorColors = ['#ffea00', '#00f0ff', '#ff1e62', '#ffffff', '#ff9900', '#d884ff'];
-  function createMeteor() {
-    if (!document.body.contains(meteorContainer)) return;
-    const meteor = document.createElement('div');
-    meteor.classList.add('meteor');
-    const thickness = Math.random() * 2 + 1.5;
-    const length = Math.random() * 160 + 60;
-    meteor.style.height = `${thickness}px`;
-    meteor.style.width = `${length}px`;
-    meteor.style.setProperty('--head-size', `${thickness * 2}px`);
-    meteor.style.color = meteorColors[Math.floor(Math.random() * meteorColors.length)];
-    meteor.style.left = `${(Math.random() - 0.5) * window.innerWidth * 1.5}px`;
-    meteor.style.top = `${(Math.random() - 0.5) * window.innerHeight * 1.5}px`;
-    const duration = Math.random() * 2.5 + 1.5;
-    const delay = Math.random() * 3;
-    meteor.style.animationDuration = `${duration}s`;
-    meteor.style.animationDelay = `${delay}s`;
-    meteorContainer.appendChild(meteor);
-    setTimeout(() => {
-      meteor.remove();
-      createMeteor();
-    }, (duration + delay) * 1000);
-  }
-  for (let index = 0; index < 30; index += 1) {
-    setTimeout(createMeteor, Math.random() * 3000);
-  }
-  document.querySelector('#login').onsubmit = async (event) => {
-    event.preventDefault();
-    try {
-      const form = new FormData(event.target);
-      const result = await api('/api/login', {
-        method: 'POST',
-        body: JSON.stringify(Object.fromEntries(form))
-      });
-      token = result.token;
-      user = result.user;
-      config = result.config;
-      tracks = result.tracks;
-      localStorage.token = token;
-      localStorage.user = JSON.stringify(user);
-      document.body.classList.remove('poster-mode');
-      user.role === 'admin' ? admin() : student(result);
-    } catch (error) {
-      alert(error.message);
-    }
-  };
 }
 
-async function home() {
+async function home(options = {}) {
+  const pageEpoch = beginNavigation();
   document.body.classList.remove('poster-mode');
-  app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="card"></section><section class="card"></section></main>';
+  if (options.showShell !== false) {
+    app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="card"></section><section class="card"></section></main>';
+  }
   const result = await api('/api/me');
+  if (!isCurrentNavigation(pageEpoch)) return;
   config = result.config;
   tracks = result.tracks;
   user = result.user;
   localStorage.user = JSON.stringify(user);
-  return user.role === 'admin' ? admin() : student(result);
+  return user.role === 'admin' ? admin(undefined, pageEpoch) : student(result, pageEpoch);
 }
 
-async function student(me) {
+async function student(me, pageEpoch = beginNavigation()) {
+  if (!isCurrentNavigation(pageEpoch)) return;
   delete document.body.dataset.view;
   app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="student-hero"></header><section class="student-user-card"></section><section class="card"></section></main>';
   const isInteraction = user.trackId === 'interaction';
@@ -576,6 +649,7 @@ async function student(me) {
     api('/api/tasks'),
     api('/api/material-tasks')
   ]);
+  if (!isCurrentNavigation(pageEpoch)) return;
   const myTeam = myTeamResult?.team;
   const teamRows = teamListResult?.teams.map((team) => `
     <tr>
@@ -723,10 +797,12 @@ async function student(me) {
   document.querySelectorAll('.material-download').forEach((button) => {
     button.onclick = () => downloadProtectedFile(button.dataset.url, button.dataset.name).catch((error) => alert(error.message));
   });
+  clearTimeout(midnightRefreshTimer);
   const nextMidnight = new Date();
   nextMidnight.setHours(24, 0, 2, 0);
-  setTimeout(() => {
-    if (document.querySelector('#activityTasks')) home();
+  midnightRefreshTimer = setTimeout(() => {
+    studentDashboardDirty = true;
+    if (document.querySelector('#activityTasks')) void home({ showShell: false });
   }, Math.max(1000, nextMidnight.getTime() - Date.now()));
 }
 
@@ -817,6 +893,8 @@ function openStudentCheckinHistory() {
 }
 
 function memberCheckinForm(task) {
+  beginNavigation();
+  void loadImageCompressionLibrary().catch(() => {});
   app.innerHTML = `<header class="hero"><h1>个人打卡</h1><p>${escapeHtml(task.name)}</p></header>
     <section class="card"><form id="memberSend">
       <div class="notice">姓名和学号由账号自动带入，请上传本人当天截图。</div>
@@ -916,6 +994,8 @@ form.onsubmit = async (event) => {
 }
 
 function materialSubmissionForm(task) {
+  beginNavigation();
+  void loadImageCompressionLibrary().catch(() => {});
   const current = task.submission;
   app.innerHTML = `<header class="hero"><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description)}</p></header>
     <section class="card"><form id="materialSend">
@@ -953,6 +1033,8 @@ function materialSubmissionForm(task) {
 }
 
 function taskSubmissionForm(task) {
+  beginNavigation();
+  void loadImageCompressionLibrary().catch(() => {});
   const current = task.submission;
   app.innerHTML = `
     <header class="hero"><h1>${escapeHtml(task.name)}</h1><p>${escapeHtml(task.description)}</p></header>
@@ -1012,7 +1094,9 @@ function taskSubmissionForm(task) {
 }
 
 async function inbox(page = 1) {
+  const pageEpoch = beginNavigation();
   const result = await api(`/api/inbox?page=${page}&limit=20`);
+  if (!isCurrentNavigation(pageEpoch)) return;
   app.innerHTML = `
     <header class="hero"><div class="row"><div><h1>个人信息箱</h1><p>评论提醒、系统通知和管理员通知</p></div><button class="secondary right" id="backInbox">返回</button></div></header>
     <section class="card"><div class="row"><h2>消息</h2><span class="pill ${result.unread ? 'pending' : 'done'}">未读 ${result.unread}</span><button class="secondary right" id="readAll">全部已读</button></div>
@@ -1040,7 +1124,9 @@ async function inbox(page = 1) {
 }
 
 async function plaza(sort = 'latest', page = 1, month = '') {
+  const pageEpoch = beginNavigation();
   const result = await api(`/api/plaza?sort=${sort}&page=${page}&limit=20${month ? `&month=${month}` : ''}`);
+  if (!isCurrentNavigation(pageEpoch)) return;
   const cards = result.posts.map((post) => `
     <article class="plaza-card" data-post="${post.id}">
       <div class="image-shell">
@@ -1097,7 +1183,9 @@ function rankingTable(items, metric, label) {
 }
 
 async function rankings(period = 'day', key = '') {
+  const pageEpoch = beginNavigation();
   const result = await api(`/api/rankings?period=${period}${key ? `&key=${key}` : ''}`);
+  if (!isCurrentNavigation(pageEpoch)) return;
   const currentKey = key || (period === 'month' ? new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).slice(0, 7) : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }));
   const teamTable = `<div class="table-wrap"><table><thead><tr><th>排名</th><th>队伍</th><th>公开次数</th><th>点赞</th><th>浏览</th><th>综合热度</th></tr></thead><tbody>${result.teamRank.map((item) => `<tr><td>${item.rank}</td><td>${escapeHtml(item.teamName)}</td><td>${item.publicCount}</td><td>${item.likeCount}</td><td>${item.viewCount}</td><td>${item.heatScore}</td></tr>`).join('') || '<tr><td colspan="6">暂无数据</td></tr>'}</tbody></table></div>`;
   app.innerHTML = `
@@ -1133,11 +1221,14 @@ async function rankings(period = 'day', key = '') {
 }
 
 async function openPlazaPost(postId, sort, page, month, countView = true) {
+  const pageEpoch = beginNavigation();
   if (countView) await api(`/api/plaza/${postId}/view`, { method: 'POST' });
+  if (!isCurrentNavigation(pageEpoch)) return;
   const [{ post }, commentResult] = await Promise.all([
     api(`/api/plaza/${postId}`),
     api(`/api/plaza/${postId}/comments?page=1&limit=10`)
   ]);
+  if (!isCurrentNavigation(pageEpoch)) return;
   const root = document.querySelector('#modalRoot');
   const commentsHtml = commentResult.comments.map((comment) => `
     <article class="comment-item" data-comment="${comment.id}">
@@ -1224,6 +1315,7 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
 }
 
 function checkinForm(slotId) {
+  beginNavigation();
   const slot = config.slots.find((item) => item.id === slotId);
   app.innerHTML = `
     <header class="hero"><h1>${escapeHtml(slot.label)}打卡</h1><p>${slot.start}–${slot.end}，请上传水印相机截图。</p></header>
@@ -1264,7 +1356,9 @@ function checkinForm(slotId) {
 }
 
 async function adminComments(page = 1) {
+  const pageEpoch = beginNavigation();
   const result = await api(`/api/admin/comments?page=${page}&limit=20`);
+  if (!isCurrentNavigation(pageEpoch)) return;
   app.innerHTML = `
     <header class="hero"><div class="row"><div><h1>评论管理</h1><p>管理员可查看并删除活动广场中的违规评论</p></div><button class="secondary right" id="backComments">返回后台</button></div></header>
     <section class="card"><div class="admin-comment-list">${result.comments.map((comment) => `
@@ -1288,7 +1382,8 @@ async function adminComments(page = 1) {
   });
 }
 
-async function admin(selectedDate) {
+async function admin(selectedDate, pageEpoch = beginNavigation()) {
+  if (!isCurrentNavigation(pageEpoch)) return;
   document.body.dataset.view = 'admin';
   app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="metric-grid"></section><section class="card"></section></main>';
   const date = selectedDate || new Date().toLocaleDateString('en-CA', {
@@ -1304,6 +1399,7 @@ async function admin(selectedDate) {
     api(`/api/admin/material-tasks?page=${materialAdminPage}&limit=30&campus=${encodeURIComponent(materialAdminCampus)}`),
     api('/api/admin/governance')
   ]);
+  if (!isCurrentNavigation(pageEpoch)) return;
   const users = userResult.users;
   const userTiles = users.map((studentUser, index) => `
     <button class="admin-user-tile ${studentUser.completed ? 'completed' : 'missing'}" data-id="${studentUser.id}">

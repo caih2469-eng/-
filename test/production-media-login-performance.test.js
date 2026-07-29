@@ -170,3 +170,34 @@ test('二次提速参数前后端一致，并复用已加载缩略图', () => {
   assert.match(media, /DISPLAY_MAX_EDGE = 960/);
   assert.doesNotMatch(media, /variant === 'thumb' \? 480 : 1280/);
 });
+
+test('阶段A统一请求层具备去重、超时、安全重试和页面竞态保护', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  assert.match(app, /const inflightGetRequests = new Map\(\)/);
+  assert.match(app, /credentials:\s*'same-origin'/);
+  assert.match(app, /method === 'GET' \|\| method === 'HEAD' \? 12_000 : 30_000/);
+  assert.match(app, /\[502,\s*503,\s*504\]\.includes\(response\.status\)/);
+  assert.match(app, /300 \+ Math\.floor\(Math\.random\(\) \* 301\)/);
+  assert.match(app, /const requestKey = `\$\{user\?\.(?:id|studentId)/);
+  assert.match(app, /\.finally\(\(\) => inflightGetRequests\.delete\(requestKey\)\)/);
+  assert.match(app, /let navigationEpoch = 0/);
+  assert.match(app, /if \(!isCurrentNavigation\(pageEpoch\)\) return/);
+  assert.match(app, /let midnightRefreshTimer = null/);
+  assert.match(app, /clearTimeout\(midnightRefreshTimer\)/);
+  assert.match(app, /60_000/);
+  assert.doesNotMatch(app, /headers:\s*\{\s*'Content-Type':\s*'application\/json'/);
+});
+
+test('阶段A删除不可达登录代码并按需加载本地压缩库', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
+  const loginBody = app.match(/function login\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(loginBody, /location\.replace\('\/entrance\.html'\)/);
+  assert.doesNotMatch(loginBody, /meteor|glass-login|mousemove|#login/);
+  assert.doesNotMatch(bootstrap, /browser-image-compression-2\.0\.2\.js/);
+  assert.match(app, /const loadImageCompressionLibrary = \(\) =>/);
+  assert.match(app, /imageCompressionLibraryPromise/);
+  assert.match(app, /script\.src = '\/vendor\/browser-image-compression-2\.0\.2\.js'/);
+  assert.match(app, /imageCompressionLibraryPromise = null/);
+  assert.match(app, /void loadImageCompressionLibrary\(\)\.catch/);
+});

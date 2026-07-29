@@ -28,8 +28,32 @@ const fixtureDataDir = path.join(fixtureRoot, 'data');
 const fixtureUploadDir = path.join(fixtureRoot, 'uploads');
 const fixtureMaterialDir = path.join(fixtureRoot, 'materials');
 fs.mkdirSync(fixtureDataDir, { recursive: true });
-const fixture = JSON.parse(fs.readFileSync(path.join(projectRoot, 'data', 'db.json'), 'utf8'));
-fixture.users = (fixture.users || []).filter((user) => user.studentId !== 'demo-health');
+const fixture = {
+  config: {
+    activityName: '设备矩阵测试',
+    maxTeams: 50,
+    slots: [],
+    activityEnabled: true,
+    trackEnabled: { interaction: true, health: true },
+    allowSelfJoin: false
+  },
+  tracks: [
+    { id: 'interaction', name: '四校区互动赛道' },
+    { id: 'health', name: '自律健康赛道' }
+  ],
+  users: [],
+  teams: [],
+  tasks: [],
+  taskSubmissions: [],
+  memberCheckins: [],
+  checkins: [],
+  plazaPosts: [],
+  plazaLikes: [],
+  plazaViews: [],
+  rankingFreezes: [],
+  materialTasks: [],
+  materialSubmissions: []
+};
 fixture.users.push({
   id: 'device-matrix-health',
   studentId: 'demo-health',
