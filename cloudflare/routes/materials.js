@@ -10,6 +10,7 @@ import {
   claimConfirmedMedia
 } from '../lib/runtime.js';
 import { excelResponse } from '../lib/excel.js';
+import { buildStudentMaterialTasks } from '../services/student-dashboard.js';
 
 const teamForUser = (env, userId) => env.DB.prepare(
   `SELECT t.id,t.name FROM teams t JOIN team_members tm ON tm.team_id=t.id
@@ -61,34 +62,7 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
   const user = auth.user;
 
   if (route === '/api/material-tasks' && request.method === 'GET') {
-    const { results } = await env.DB.prepare(
-      `SELECT id,title,description,deadline,allowed_types_json AS allowedTypesJson,
-              file_limit AS fileLimit,require_summary AS requireSummary,owner_type AS ownerType,status
-         FROM material_tasks WHERE status='published' ORDER BY deadline`
-    ).all();
-    const tasks = [];
-    for (const task of results) {
-      const owner = await ownerForTask(env, user, task).catch(() => null);
-      const submission = owner ? await env.DB.prepare(
-        `SELECT id,summary,status,version,submitted_at AS submittedAt,review_note AS reviewNote,updated_at AS updatedAt
-           FROM material_submissions WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3`
-      ).bind(task.id, owner.type, owner.id).first() : null;
-      if (submission) {
-        const files = await env.DB.prepare(
-          `SELECT id,original_name AS originalName,content_type AS contentType,bytes
-             FROM material_files WHERE submission_id=?1 ORDER BY created_at`
-        ).bind(submission.id).all();
-        submission.files = filePayload(files.results);
-      }
-      tasks.push({
-        ...task,
-        allowedTypes: parseJson(task.allowedTypesJson, []),
-        fileTypes: parseJson(task.allowedTypesJson, []).map((item) => item.replace(/^\./, '')),
-        requireSummary: Boolean(task.requireSummary),
-        submission
-      });
-    }
-    return json({ tasks });
+    return json({ tasks: await buildStudentMaterialTasks(env, user) });
   }
 
   const submitMatch = route.match(/^\/api\/material-tasks\/([^/]+)\/submission$/);

@@ -630,6 +630,88 @@ function materialSubmissionView(submission) {
   };
 }
 
+function buildLocalStudentDashboard(data, currentUser) {
+  const team = currentUser.trackId === 'interaction' ? teamForUser(data, currentUser.id) : null;
+  const teamSummary = currentUser.trackId === 'interaction'
+    ? {
+        maxTeams: data.config.maxTeams,
+        teamCount: data.teams.length,
+        team: team ? teamView(team, data, true) : null
+      }
+    : null;
+  const tasks = data.tasks
+    .filter((task) => task.trackId === currentUser.trackId && task.status === 'published'
+      && (!['weekly', 'activityDays'].includes(task.scheduleType) || taskOccurrenceDate(task)))
+    .map((task) => {
+      const owner = submissionOwner(data, task, currentUser);
+      const occurrenceDate = taskOccurrenceDate(task);
+      const submission = owner
+        ? data.taskSubmissions.find((item) => item.taskId === task.id
+          && item.ownerType === owner.ownerType
+          && item.ownerId === owner.ownerId
+          && (item.occurrenceDate || null) === occurrenceDate)
+        : null;
+      const taskTeam = task.trackId === 'interaction' ? owner?.team : null;
+      const memberCheckin = taskTeam
+        ? data.memberCheckins.find((item) => item.taskId === task.id
+          && item.occurrenceDate === occurrenceDate
+          && item.userId === currentUser.id)
+        : null;
+      const teamProgress = taskTeam ? {
+        completed: taskTeam.memberIds.filter((id) => data.memberCheckins.some((item) =>
+          item.taskId === task.id && item.occurrenceDate === occurrenceDate && item.userId === id)).length,
+        total: taskTeam.memberIds.length,
+        members: taskTeam.memberIds.map((id) => {
+          const member = data.users.find((item) => item.id === id);
+          const checkin = data.memberCheckins.find((item) =>
+            item.taskId === task.id && item.occurrenceDate === occurrenceDate && item.userId === id);
+          return {
+            ...(member ? safeUser(member) : { id }),
+            checked: Boolean(checkin),
+            submittedAt: checkin?.submittedAt || null
+          };
+        })
+      } : null;
+      return {
+        ...taskView(task),
+        occurrenceDate,
+        availabilityError: taskAvailability(task, data, Date.now(), occurrenceDate),
+        submission: submission || null,
+        memberCheckin,
+        teamProgress,
+        isCaptain: Boolean(taskTeam && taskTeam.captainId === currentUser.id)
+      };
+    });
+  const materialTasks = data.materialTasks.filter((task) => task.enabled).map((task) => {
+    const owner = materialOwner(data, task, currentUser);
+    const submission = owner
+      ? data.materialSubmissions.find((item) => item.taskId === task.id
+        && item.ownerType === owner.ownerType
+        && item.ownerId === owner.ownerId)
+      : null;
+    return {
+      ...task,
+      ownerLabel: owner?.label || null,
+      submission: materialSubmissionView(submission)
+    };
+  });
+  return {
+    version: 1,
+    user: safeUser(currentUser),
+    config: data.config,
+    tracks: data.tracks,
+    date: today(),
+    time: nowTime(),
+    teamSummary,
+    tasks,
+    materialTasks,
+    switches: {
+      activityEnabled: data.config.activityEnabled,
+      trackEnabled: data.config.trackEnabled
+    }
+  };
+}
+
 function canAccessMaterialSubmission(data, submission, user) {
   if (user.role === 'admin') return true;
   if (submission.ownerType === 'user') return submission.ownerId === user.id;
@@ -832,7 +914,15 @@ async function handleApi(req, res, url) {
     const currentUser = userFrom(req, data);
     if (!currentUser) return sendJson(res, 401, { error: '请先登录或账号已被禁用' });
     const token = tokenFor(currentUser);
-    return sendJson(res, 200, { user: safeUser(currentUser) }, {
+    const dashboard = currentUser.role === 'student' ? buildLocalStudentDashboard(data, currentUser) : null;
+    return sendJson(res, 200, {
+      user: safeUser(currentUser),
+      config: data.config,
+      tracks: data.tracks,
+      date: today(),
+      time: nowTime(),
+      dashboard
+    }, {
       'Set-Cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`
     });
   }
@@ -848,6 +938,11 @@ async function handleApi(req, res, url) {
       date: today(),
       time: nowTime()
     });
+  }
+
+  if (route === '/api/student-dashboard' && req.method === 'GET') {
+    if (currentUser.role !== 'student') return sendJson(res, 403, { error: 'Students only' });
+    return sendJson(res, 200, buildLocalStudentDashboard(data, currentUser));
   }
 
   const materialFileMatch = route.match(/^\/api\/material-files\/([^/]+)$/);

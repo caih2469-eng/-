@@ -30,7 +30,9 @@
       if (!response.ok) throw new Error('session unavailable');
       const session = await response.json();
       window.__BOOTSTRAP_AUTHENTICATED__ = true;
+      window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
+      window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
       stylesheet.href = '/style.css?v=20260729-uploadfix3';

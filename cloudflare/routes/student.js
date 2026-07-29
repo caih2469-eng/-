@@ -13,6 +13,10 @@ import {
   claimConfirmedMedia
 } from '../lib/runtime.js';
 import { createPrivateMediaUrl } from '../lib/media-signing.js';
+import {
+  buildStudentDashboard,
+  buildStudentTasks
+} from '../services/student-dashboard.js';
 
 const teamForUser = async (env, userId) => env.DB.prepare(
   `SELECT t.id, t.name, t.invite_code AS inviteCode, t.member_limit AS memberLimit,
@@ -103,6 +107,10 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
   const user = auth.user;
   const route = url.pathname;
 
+  if (route === '/api/student-dashboard' && request.method === 'GET') {
+    return json(await buildStudentDashboard(env, user));
+  }
+
   if (route === '/api/teams' && request.method === 'GET') {
     if (user.role !== 'student' || user.trackId !== 'interaction') return json({ error: '仅互动赛道可查看队伍' }, 403);
     const { results } = await env.DB.prepare(
@@ -159,75 +167,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
   }
 
   if (route === '/api/tasks' && request.method === 'GET') {
-    const config = await readConfig(env);
-    if (user.role === 'student' && (!config.activityEnabled || !config.trackEnabled[user.trackId])) {
-      return json({ tasks: [], switches: { activityEnabled: config.activityEnabled, trackEnabled: config.trackEnabled } });
-    }
-    const { results } = await env.DB.prepare(
-      `SELECT id,name,description,track_id AS trackId,starts_at AS startsAt,ends_at AS endsAt,
-              allow_late AS allowLate,image_limit AS imageLimit,copy_requirement AS copyRequirement,
-              submission_type AS submissionType,status,schedule_json AS scheduleJson
-         FROM tasks WHERE status='published' AND (?1='admin' OR track_id=?2)
-        ORDER BY starts_at DESC LIMIT 100`
-    ).bind(user.role, user.trackId || '').all();
-    const tasks = [];
-    const makeupAllowed = user.role === 'student'
-      ? await hasMakeupPermission(env, user.id, shanghaiDate()) : false;
-    for (const task of results) {
-      if (task.scheduleJson && !isTaskOccurrence(task, shanghaiDate())) continue;
-      const owner = user.role === 'admin' ? null : await submissionOwner(env, user, task).catch(() => null);
-      const occurrenceDate = task.scheduleJson ? shanghaiDate() : '';
-      const submission = owner ? await env.DB.prepare(
-        `SELECT id,copy_text AS copy,plaza_copy AS plazaCopy,meal_type AS mealType,
-                is_public AS isPublic,status,version,occurrence_date AS occurrenceDate,
-                submitted_at AS submittedAt,review_note AS reviewNote
-           FROM task_submissions
-          WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3 AND occurrence_date=?4 LIMIT 1`
-      ).bind(task.id, owner.type, owner.id, occurrenceDate).first() : null;
-      if (submission) submission.images = await submissionImages(env, submission.id, user);
-      const schedule = task.scheduleJson ? JSON.parse(task.scheduleJson) : {};
-      let teamProgress = null;
-      let memberCheckin = null;
-      let isCaptain = false;
-      if (owner?.team) {
-        const members = await membersForTeam(env, owner.team.id);
-        const checkins = await env.DB.prepare(
-          `SELECT user_id AS userId,id FROM member_checkins
-            WHERE team_id=?1 AND task_id=?2 AND occurrence_date=?3`
-        ).bind(owner.team.id, task.id, occurrenceDate).all();
-        teamProgress = {
-          total: members.length,
-          completed: checkins.results.length,
-          members: members.map((member) => ({
-            ...member,
-            checked: checkins.results.some((item) => item.userId === member.id)
-          }))
-        };
-        memberCheckin = checkins.results.find((item) => item.userId === user.id) || null;
-        isCaptain = owner.team.captainId === user.id;
-      }
-      tasks.push({
-        ...task,
-        startAt: task.startsAt,
-        endAt: task.endsAt,
-        allowLate: Boolean(task.allowLate),
-        schedule,
-        scheduleType: schedule.scheduleType || 'single',
-        refreshDays: schedule.refreshDays || [],
-        weekdays: schedule.weekdays || [],
-        dailyStart: schedule.dailyStart || '',
-        dailyEnd: schedule.dailyEnd || '',
-        occurrenceDate,
-        canSubmit: user.role === 'student' && taskWindowOpen(task, occurrenceDate, makeupAllowed),
-        availabilityError: user.role === 'student' && !taskWindowOpen(task, occurrenceDate, makeupAllowed) ? '当前不在任务提交时间范围内' : '',
-        makeupAllowed,
-        submission,
-        teamProgress,
-        memberCheckin,
-        isCaptain
-      });
-    }
-    return json({ tasks, switches: { activityEnabled: config.activityEnabled, trackEnabled: config.trackEnabled } });
+    return json(await buildStudentTasks(env, user));
   }
 
   if (route === '/api/submissions/history' && request.method === 'GET') {

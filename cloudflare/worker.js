@@ -17,6 +17,7 @@ import { handlePlazaRoutes } from './routes/plaza.js';
 import { handleAdminRoutes } from './routes/admin.js';
 import { canAccessMaterialFile, handleMaterialRoutes } from './routes/materials.js';
 import { handleMediaRoutes } from './routes/media.js';
+import { buildStudentDashboard } from './services/student-dashboard.js';
 
 const login = async (request, env) => {
   const body = await readJson(request, 16 * 1024);
@@ -241,16 +242,18 @@ export default {
         const auth = await requireUser(request, env);
         if (auth.error) return auth.error;
         const token = await createToken(auth.user, env.SESSION_SECRET);
+        const dashboard = auth.user.role === 'student'
+          ? await buildStudentDashboard(env, auth.user)
+          : null;
+        const config = dashboard?.config || await readConfig(env);
         return json({
           ok: true,
-          user: {
-            id: auth.user.id,
-            studentId: auth.user.studentId,
-            name: auth.user.name,
-            role: auth.user.role,
-            trackId: auth.user.trackId,
-            status: auth.user.status
-          }
+          user: auth.user,
+          config,
+          tracks: TRACKS,
+          date: dashboard?.date || shanghaiDate(),
+          time: dashboard?.time || shanghaiTime(),
+          dashboard
         }, 200, {
           'set-cookie': `session_token=${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`
         });

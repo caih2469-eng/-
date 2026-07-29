@@ -21,8 +21,17 @@ let midnightRefreshTimer = null;
 let studentDashboardDirty = false;
 const inflightGetRequests = new Map();
 let imageCompressionLibraryPromise = null;
+const studentViewState = {
+  userId: null,
+  data: null,
+  renderedAt: 0,
+  scrollY: 0,
+  dirty: true,
+  refreshPromise: null
+};
 
 const beginNavigation = () => {
+  if (document.body.dataset.view === 'student') studentViewState.scrollY = window.scrollY;
   navigationEpoch += 1;
   return navigationEpoch;
 };
@@ -613,6 +622,12 @@ function logout() {
   clearTimeout(midnightRefreshTimer);
   midnightRefreshTimer = null;
   inflightGetRequests.clear();
+  studentViewState.userId = null;
+  studentViewState.data = null;
+  studentViewState.renderedAt = 0;
+  studentViewState.scrollY = 0;
+  studentViewState.dirty = true;
+  studentViewState.refreshPromise = null;
   localStorage.clear();
   token = null;
   user = null;
@@ -623,9 +638,83 @@ function login() {
   window.location.replace('/entrance.html');
 }
 
+const validStudentDashboard = (dashboard) =>
+  dashboard?.version === 1
+  && dashboard.user?.id
+  && Array.isArray(dashboard.tasks)
+  && Array.isArray(dashboard.materialTasks);
+
+const rememberStudentDashboard = (dashboard) => {
+  if (studentViewState.userId && studentViewState.userId !== dashboard.user.id) {
+    studentViewState.data = null;
+    studentViewState.scrollY = 0;
+  }
+  studentViewState.userId = dashboard.user.id;
+  studentViewState.data = dashboard;
+  studentViewState.renderedAt = Date.now();
+  studentViewState.dirty = false;
+  studentDashboardDirty = false;
+};
+
+const refreshStudentDashboard = (pageEpoch, restoreScroll = true) => {
+  if (studentViewState.refreshPromise) {
+    return studentViewState.refreshPromise.then((dashboard) => {
+      if (isCurrentNavigation(pageEpoch)) student(dashboard, pageEpoch, { restoreScroll });
+      return dashboard;
+    });
+  }
+  const expectedUserId = user?.id;
+  studentViewState.refreshPromise = api('/api/student-dashboard')
+    .then((dashboard) => {
+      if (!validStudentDashboard(dashboard) || dashboard.user.id !== expectedUserId) {
+        throw new Error('首页数据版本不兼容，请刷新后重试。');
+      }
+      rememberStudentDashboard(dashboard);
+      if (isCurrentNavigation(pageEpoch)) student(dashboard, pageEpoch, { restoreScroll });
+      return dashboard;
+    })
+    .catch((error) => {
+      if (!studentViewState.data) throw error;
+      return studentViewState.data;
+    })
+    .finally(() => {
+      studentViewState.refreshPromise = null;
+    });
+  return studentViewState.refreshPromise;
+};
+
 async function home(options = {}) {
   const pageEpoch = beginNavigation();
   document.body.classList.remove('poster-mode');
+  const forceRefresh = Boolean(options.forceRefresh);
+  const restoreScroll = options.restoreScroll !== false;
+  if (user?.role === 'student') {
+    if (forceRefresh) studentViewState.dirty = true;
+    if (studentViewState.userId && studentViewState.userId !== user.id) {
+      studentViewState.userId = null;
+      studentViewState.data = null;
+      studentViewState.scrollY = 0;
+      studentViewState.dirty = true;
+    }
+    const bootstrapDashboard = window.__BOOTSTRAP_DASHBOARD__;
+    if (!studentViewState.data && validStudentDashboard(bootstrapDashboard)
+        && bootstrapDashboard.user.id === user.id) {
+      rememberStudentDashboard(bootstrapDashboard);
+      window.__BOOTSTRAP_DASHBOARD__ = null;
+      return student(bootstrapDashboard, pageEpoch, { restoreScroll: false });
+    }
+    if (studentViewState.data && studentViewState.userId === user.id) {
+      student(studentViewState.data, pageEpoch, { restoreScroll });
+      void refreshStudentDashboard(pageEpoch, restoreScroll);
+      return;
+    }
+    if (options.showShell !== false) {
+      app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="student-hero"></header><section class="student-user-card"></section><section class="card"></section></main>';
+    }
+    await refreshStudentDashboard(pageEpoch, restoreScroll);
+    return;
+  }
+
   if (options.showShell !== false) {
     app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="hero"></header><section class="card"></section><section class="card"></section></main>';
   }
@@ -635,28 +724,21 @@ async function home(options = {}) {
   tracks = result.tracks;
   user = result.user;
   localStorage.user = JSON.stringify(user);
-  return user.role === 'admin' ? admin(undefined, pageEpoch) : student(result, pageEpoch);
+  return admin(undefined, pageEpoch);
 }
 
-async function student(me, pageEpoch = beginNavigation()) {
+async function student(dashboard, pageEpoch = beginNavigation(), options = {}) {
   if (!isCurrentNavigation(pageEpoch)) return;
-  delete document.body.dataset.view;
-  app.innerHTML = '<main class="app-shell-placeholder" aria-busy="true"><header class="student-hero"></header><section class="student-user-card"></section><section class="card"></section></main>';
+  document.body.dataset.view = 'student';
+  config = dashboard.config;
+  tracks = dashboard.tracks;
+  user = dashboard.user;
+  try { localStorage.user = JSON.stringify(user); } catch {}
   const isInteraction = user.trackId === 'interaction';
-  const [teamListResult, myTeamResult, taskResult, materialResult] = await Promise.all([
-    isInteraction ? api('/api/teams') : Promise.resolve(null),
-    isInteraction ? api('/api/teams/me') : Promise.resolve(null),
-    api('/api/tasks'),
-    api('/api/material-tasks')
-  ]);
-  if (!isCurrentNavigation(pageEpoch)) return;
-  const myTeam = myTeamResult?.team;
-  const teamRows = teamListResult?.teams.map((team) => `
-    <tr>
-      <td>${escapeHtml(team.name)}</td>
-      <td>${team.memberCount}/${team.memberLimit}</td>
-      <td><span class="pill ${team.isFull ? '' : 'done'}">${team.isFull ? '已满员' : '可加入'}</span></td>
-    </tr>`).join('');
+  const teamListResult = dashboard.teamSummary;
+  const myTeam = dashboard.teamSummary?.team;
+  const taskResult = { tasks: dashboard.tasks };
+  const materialResult = { tasks: dashboard.materialTasks };
   const completedTasks = taskResult.tasks.filter((task) =>
     ['submitted', 'approved'].includes(task.submission?.status) || task.memberCheckin
   ).length;
@@ -802,8 +884,12 @@ async function student(me, pageEpoch = beginNavigation()) {
   nextMidnight.setHours(24, 0, 2, 0);
   midnightRefreshTimer = setTimeout(() => {
     studentDashboardDirty = true;
+    studentViewState.dirty = true;
     if (document.querySelector('#activityTasks')) void home({ showShell: false });
   }, Math.max(1000, nextMidnight.getTime() - Date.now()));
+  if (options.restoreScroll) {
+    requestAnimationFrame(() => window.scrollTo(0, studentViewState.scrollY));
+  }
 }
 
 function openStudentCheckinHistory() {
