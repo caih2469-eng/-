@@ -33,12 +33,12 @@
       window.__BOOTSTRAP_USER__ = session.user || null;
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/style.css?v=20260729-perf2';
+      stylesheet.href = '/style.css?v=20260729-perf3';
       document.head.appendChild(stylesheet);
-      await loadScript('/site-path.js?v=20260729-perf2');
+      await loadScript('/site-path.js?v=20260729-perf3');
       await Promise.all([
         loadScript('/vendor/browser-image-compression-2.0.2.js'),
-        loadScript('/app.js?v=20260729-perf2')
+        loadScript('/app.js?v=20260729-perf3')
       ]);
     } catch {
       showNetworkError();

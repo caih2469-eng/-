@@ -40,7 +40,7 @@ const runOne = async (index) => {
       variant: 'display',
       mimeType: 'image/webp',
       fileSize: fixture.length,
-      width: 480,
+      width: 360,
       height: 322
     })
   });

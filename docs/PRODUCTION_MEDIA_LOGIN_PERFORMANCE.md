@@ -21,7 +21,7 @@
 - 私有图片由受保护接口服务，要求本人或管理员身份；不写共享 Cache API。
 - 公开图片使用 `caches.default.match`、`ctx.waitUntil(cache.put(...))`、稳定版本 URL、ETag 和长缓存。
 - 图片响应包含正确的 `Content-Type`、`Content-Length`、`ETag`、`Content-Disposition:inline`、`nosniff`、`X-Image-Cache` 与 `Server-Timing`，并支持 HEAD。
-- 上传阶段生成 `thumb`（最长边 480）和 `display`（最长边 1280）WebP；列表只用 thumb，全屏只升级到 display。
+- 上传阶段生成 `thumb`（最长边 360）和 `display`（最长边 960）WebP；列表只用 thumb，全屏只升级到 display。
 - 列表 SQL 层分页：广场最多 20 条，管理员用户最多 30 人；API 不返回 Base64。
 - 删除全局 MutationObserver；每个渲染函数只对自己的容器执行一次图片与表格准备。
 - 使用 IntersectionObserver 懒加载；点击图片立即用当前缩略图打开，展示图异步替换；失败仅允许人工重试一次。
@@ -134,3 +134,14 @@ Fast 4G、4 倍 CPU 降速：
 - 尚未在物理 iPhone 微信、物理 Android 微信和 QQ 真机上记录数据。
 - 生产库历史图片当前可能没有 thumb/display 变体，会走兼容回退；新上传图片会生成两种变体。
 - 700 路图片压测受压测机出口带宽影响；边缘缓存已证明命中，但不同地区用户的实际下载时间仍取决于运营商网络。
+
+
+## 8. 2026-07-29 微信图片二次提速
+
+- 新上传图片的 `thumb` 最长边由 480 调整为 360，WebP 初始质量调整为 0.72，目标上限约 0.12MB。
+- 新上传图片的 `display` 最长边由 1280 调整为 960，WebP 初始质量调整为 0.78，目标上限约 0.7MB。
+- 全屏查看器优先复用列表中已经完成解码的缩略图，避免点击后重新等待缩略图。
+- 展示图在内存中加载并完成 `decode()` 后再替换缩略图，减少 iOS WebView 的空白和切换抖动。
+- 服务端上传意图同步限制为 thumb 360 / display 960，避免前后端参数不一致。
+- 本轮不会自动改写历史 R2 对象；历史图片如果没有 thumb/display 变体，仍使用兼容回退。
+- 这项调整主要降低新上传图片的下载量和解码像素量，不能保证所有运营商、所有首次访问节点固定达到某个秒数。

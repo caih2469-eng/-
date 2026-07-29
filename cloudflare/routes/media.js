@@ -8,6 +8,8 @@ const ALLOWED_TYPES = new Map([
   ['image/webp', 'webp']
 ]);
 const MAX_FINAL_BYTES = 1_572_864;
+const THUMB_MAX_EDGE = 360;
+const DISPLAY_MAX_EDGE = 960;
 const INTENT_TTL_SECONDS = 180;
 
 const noLeak = (status = 404) => json({ error: '媒体不可访问' }, status, {
@@ -50,8 +52,8 @@ const createUploadIntent = async (request, env) => {
     return json({ error: '不支持的图片类型或上传用途' }, 415);
   }
   if (!Number.isInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_FINAL_BYTES
-      || !Number.isInteger(width) || width < 1 || width > (variant === 'thumb' ? 480 : 1280)
-      || !Number.isInteger(height) || height < 1 || height > (variant === 'thumb' ? 480 : 1280)) {
+      || !Number.isInteger(width) || width < 1 || width > (variant === 'thumb' ? THUMB_MAX_EDGE : DISPLAY_MAX_EDGE)
+      || !Number.isInteger(height) || height < 1 || height > (variant === 'thumb' ? THUMB_MAX_EDGE : DISPLAY_MAX_EDGE)) {
     return json({ error: '压缩图片的大小或尺寸不符合要求' }, 400);
   }
   if (taskId) {
@@ -150,7 +152,7 @@ const confirmUpload = async (request, env, intentId) => {
           AND business_type=?4 AND business_id IS NULL LIMIT 1`
     ).bind(parentMediaId, intent.userId, intent.taskId || null,
       intent.businessType.replace(/:thumb$/, '')).first() : null;
-    if (!parent || Math.max(Number(intent.width), Number(intent.height)) > 480) {
+    if (!parent || Math.max(Number(intent.width), Number(intent.height)) > THUMB_MAX_EDGE) {
       await env.UPLOADS.delete(intent.objectKey).catch(() => null);
       return json({ error: '缩略图与原图片不匹配' }, 403, { 'cache-control': 'no-store' });
     }

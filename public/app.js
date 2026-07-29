@@ -77,9 +77,12 @@ window.addEventListener('popstate', () => {
   if (activeImageViewer) closeImageViewer(true);
 });
 
-const openImageViewer = (thumbSrc, displaySrc, alt = '查看图片') => {
+const openImageViewer = (thumbSrc, displaySrc, alt = '查看图片', renderedImage = null) => {
   if (activeImageViewer) closeImageViewer(true);
-  const thumb = buildMediaUrl(thumbSrc || displaySrc);
+  const renderedThumb = renderedImage?.complete && renderedImage.naturalWidth
+    ? (renderedImage.currentSrc || renderedImage.src)
+    : '';
+  const thumb = renderedThumb || buildMediaUrl(thumbSrc || displaySrc);
   const display = buildMediaUrl(displaySrc || thumbSrc);
   const viewer = document.createElement('div');
   viewer.className = 'image-viewer';
@@ -110,8 +113,10 @@ const openImageViewer = (thumbSrc, displaySrc, alt = '查看图片') => {
     const displayImage = new Image();
     displayImage.decoding = 'async';
     displayImage.fetchPriority = 'high';
-    displayImage.onload = () => {
-      image.src = display;
+    displayImage.onload = async () => {
+      try { await displayImage.decode(); } catch {}
+      if (!activeImageViewer || !viewer.isConnected) return;
+      image.src = displayImage.currentSrc || display;
       image.dataset.displayLoaded = 'true';
     };
     displayImage.onerror = markFailed;
@@ -154,7 +159,8 @@ app.addEventListener('click', (event) => {
   openImageViewer(
     trigger.dataset.imageThumb || trigger.dataset.imageViewer,
     trigger.dataset.imageDisplay || trigger.dataset.imageViewer,
-    trigger.dataset.imageAlt || '查看图片'
+    trigger.dataset.imageAlt || '查看图片',
+    trigger.querySelector('img')
   );
 });
 
@@ -215,6 +221,12 @@ const escapeHtml = (value) =>
   })[character]);
 
 const MEDIA_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
+const MEDIA_THUMB_MAX_EDGE = 360;
+const MEDIA_DISPLAY_MAX_EDGE = 960;
+const MEDIA_THUMB_MAX_SIZE_MB = 0.12;
+const MEDIA_DISPLAY_MAX_SIZE_MB = 0.7;
+const MEDIA_THUMB_QUALITY = 0.72;
+const MEDIA_DISPLAY_QUALITY = 0.78;
 const MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const mediaPreviewUrls = new Set();
 let activeMediaController = null;
@@ -262,9 +274,9 @@ const compressImage = async (file, options = {}) => {
   if (typeof window.imageCompression !== 'function') throw new Error('图片压缩模块加载失败，请刷新后重试。');
   const isThumb = options.variant === 'thumb';
   const common = {
-    maxSizeMB: isThumb ? 0.18 : 1.2,
-    maxWidthOrHeight: isThumb ? 480 : 1280,
-    initialQuality: isThumb ? 0.82 : 0.88,
+    maxSizeMB: isThumb ? MEDIA_THUMB_MAX_SIZE_MB : MEDIA_DISPLAY_MAX_SIZE_MB,
+    maxWidthOrHeight: isThumb ? MEDIA_THUMB_MAX_EDGE : MEDIA_DISPLAY_MAX_EDGE,
+    initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY,
     useWebWorker: true,
     libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
     preserveExif: false,
@@ -274,7 +286,11 @@ const compressImage = async (file, options = {}) => {
   let blob = await window.imageCompression(file, { ...common, fileType: 'image/webp' });
   let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
   if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
-    blob = await window.imageCompression(file, { ...common, fileType: 'image/jpeg', initialQuality: isThumb ? 0.82 : 0.88 });
+    blob = await window.imageCompression(file, {
+      ...common,
+      fileType: 'image/jpeg',
+      initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY
+    });
     header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
     if (blob.type !== 'image/jpeg' || !bytesMatchMime(header, 'image/jpeg')) {
       throw new Error('当前浏览器无法稳定生成压缩图片，请改用JPG后重试。');
@@ -282,7 +298,7 @@ const compressImage = async (file, options = {}) => {
   }
   if (!blob.size || blob.size > 1.5 * 1024 * 1024) throw new Error('压缩后图片仍然过大，请重新选择图片。');
   const dimensions = await imageDimensions(blob);
-  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > (isThumb ? 480 : 1280)) {
+  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > (isThumb ? MEDIA_THUMB_MAX_EDGE : MEDIA_DISPLAY_MAX_EDGE)) {
     throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
   }
   const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
