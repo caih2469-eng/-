@@ -27,7 +27,31 @@ const studentViewState = {
   renderedAt: 0,
   scrollY: 0,
   dirty: true,
-  refreshPromise: null
+  refreshPromise: null,
+  refreshError: null
+};
+const VIEW_CACHE_TTL_MS = 20_000;
+const plazaViewCache = new Map();
+const rankingViewCache = new Map();
+const countedPlazaViews = new Set();
+let plazaModalEpoch = 0;
+
+const scopedCacheKey = (...parts) => [
+  user?.id || user?.studentId || 'anonymous',
+  ...parts.map((part) => String(part ?? ''))
+].join('|');
+const readViewCache = (cache, key) => cache.get(key) || null;
+const writeViewCache = (cache, key, data) => {
+  cache.set(key, { data, savedAt: Date.now() });
+  return data;
+};
+const cacheIsFresh = (entry) => Boolean(
+  entry && Date.now() - entry.savedAt <= VIEW_CACHE_TTL_MS
+);
+const clearUserViewCaches = () => {
+  plazaViewCache.clear();
+  rankingViewCache.clear();
+  countedPlazaViews.clear();
 };
 
 const beginNavigation = () => {
@@ -217,6 +241,39 @@ const askConfirm = (title, message, options = {}) => openDialog({ title, message
 const askText = (title, message, inputLabel) => openDialog({
   title, message, input: true, inputLabel, cancelText: '取消', confirmText: '确定'
 });
+const showToast = (message, tone = 'success', duration = 3000) => {
+  let region = document.querySelector('#appToastRegion');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'appToastRegion';
+    region.className = 'toast-region';
+    region.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+    region.setAttribute('aria-atomic', 'true');
+    document.body.appendChild(region);
+  }
+  const toast = document.createElement('div');
+  toast.className = `app-toast ${tone}`;
+  toast.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  toast.textContent = String(message);
+  region.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('visible'));
+  setTimeout(() => {
+    toast.classList.remove('visible');
+    setTimeout(() => toast.remove(), 180);
+  }, Math.min(4000, Math.max(2000, duration)));
+};
+const beginButtonLoading = (button, text = '处理中…') => {
+  if (!button || button.dataset.loading === 'true') return () => {};
+  const originalText = button.textContent;
+  button.dataset.loading = 'true';
+  button.disabled = true;
+  button.textContent = text;
+  return () => {
+    button.dataset.loading = 'false';
+    button.disabled = false;
+    button.textContent = originalText;
+  };
+};
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -749,6 +806,8 @@ function logout() {
   studentViewState.scrollY = 0;
   studentViewState.dirty = true;
   studentViewState.refreshPromise = null;
+  studentViewState.refreshError = null;
+  clearUserViewCaches();
   localStorage.clear();
   token = null;
   user = null;
@@ -774,7 +833,42 @@ const rememberStudentDashboard = (dashboard) => {
   studentViewState.data = dashboard;
   studentViewState.renderedAt = Date.now();
   studentViewState.dirty = false;
+  studentViewState.refreshError = null;
   studentDashboardDirty = false;
+};
+
+const patchStudentTask = (taskId, updater) => {
+  if (!studentViewState.data?.tasks) return;
+  studentViewState.data.tasks = studentViewState.data.tasks.map(
+    (task) => (task.id === taskId ? updater({ ...task }) : task)
+  );
+  studentViewState.renderedAt = Date.now();
+};
+
+const patchStudentMaterialTask = (taskId, updater) => {
+  if (!studentViewState.data?.materialTasks) return;
+  studentViewState.data.materialTasks = studentViewState.data.materialTasks.map(
+    (task) => (task.id === taskId ? updater({ ...task }) : task)
+  );
+  studentViewState.renderedAt = Date.now();
+};
+
+const returnToCachedStudentHome = (successMessage, options = {}) => {
+  if (!studentViewState.data || user?.role !== 'student') {
+    showToast(successMessage);
+    void home({ forceRefresh: true });
+    return;
+  }
+  studentViewState.refreshError = null;
+  studentViewState.scrollY = Math.max(0, Number(options.scrollY || 0));
+  const pageEpoch = beginNavigation();
+  void student(studentViewState.data, pageEpoch, { restoreScroll: true });
+  showToast(successMessage);
+  void refreshStudentDashboard(pageEpoch, true).then(() => {
+    if (studentViewState.refreshError && isCurrentNavigation(pageEpoch)) {
+      showToast('提交成功，但最新数据刷新失败，可稍后重新进入查看。', 'warning', 4000);
+    }
+  });
 };
 
 const refreshStudentDashboard = (pageEpoch, restoreScroll = true) => {
@@ -795,6 +889,7 @@ const refreshStudentDashboard = (pageEpoch, restoreScroll = true) => {
       return dashboard;
     })
     .catch((error) => {
+      studentViewState.refreshError = error;
       if (!studentViewState.data) throw error;
       return studentViewState.data;
     })
@@ -1224,28 +1319,51 @@ function memberCheckinForm(task) {
 
   form.onsubmit = async (event) => {
     event.preventDefault();
+    const restoreButton = beginButtonLoading(submitButton, '正在提交…');
     if (session?.uploadPromise) {
       status.textContent = '图片上传中，请稍候…';
       await session.uploadPromise.catch(() => null);
     }
     if (!session?.mediaId) {
       status.textContent = '图片尚未就绪，请重新选择或点击重试上传。';
+      restoreButton();
+      updateReadyState();
       return;
     }
-    submitButton.disabled = true;
     try {
-      await api(`/api/tasks/${task.id}/member-checkin`, {
+      const result = await api(`/api/tasks/${task.id}/member-checkin`, {
         method: 'PUT',
         body: JSON.stringify({
           occurrenceDate: task.occurrenceDate,
           mediaIds: [session.mediaId]
         })
       });
-      alert('个人打卡成功');
+      patchStudentTask(task.id, (cachedTask) => {
+        const memberAlreadyCompleted = Boolean(cachedTask.memberCheckin);
+        const members = cachedTask.teamProgress?.members?.map((member) => (
+          member.id === user.id ? { ...member, checked: true } : member
+        )) || [];
+        return {
+          ...cachedTask,
+          memberCheckin: {
+            id: cachedTask.memberCheckin?.id || `confirmed:${session.mediaId}`,
+            userId: user.id,
+            occurrenceDate: result.occurrenceDate || task.occurrenceDate
+          },
+          teamProgress: cachedTask.teamProgress ? {
+            ...cachedTask.teamProgress,
+            completed: memberAlreadyCompleted
+              ? cachedTask.teamProgress.completed
+              : Math.min(cachedTask.teamProgress.total, cachedTask.teamProgress.completed + 1),
+            members
+          } : null
+        };
+      });
       releaseSession();
-      home({ forceRefresh: true });
+      returnToCachedStudentHome('个人打卡成功');
     } catch (error) {
       alert(error?.message || '打卡提交失败，请稍后重试。');
+      restoreButton();
     } finally {
       if (session) submitButton.disabled = !session.mediaId;
     }
@@ -1277,6 +1395,8 @@ function materialSubmissionForm(task) {
   };
   document.querySelector('#materialSend').onsubmit = async (event) => {
     event.preventDefault();
+    const submitButton = event.submitter || event.target.querySelector('button:not([type="button"])');
+    const restoreButton = beginButtonLoading(submitButton, '正在提交…');
     try {
       const selected = [...event.target.files.files];
       if (selected.length > task.fileLimit) throw new Error(`最多上传 ${task.fileLimit} 个文件`);
@@ -1284,10 +1404,37 @@ function materialSubmissionForm(task) {
         taskId: task.id, businessType: 'material-image', limit: task.fileLimit
       });
       const files = images.map((item, index) => ({ name: selected[index].name, mediaId: item.mediaId }));
-      await api(`/api/material-tasks/${task.id}/submission`, { method: 'PUT', body: JSON.stringify({ version: current?.version || 0, files, summary: event.target.summary.value }) });
-      alert('材料提交成功');
-      home();
-    } catch (error) { alert(error.message); }
+      const result = await api(`/api/material-tasks/${task.id}/submission`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          version: current?.version || 0,
+          files,
+          summary: event.target.summary.value
+        })
+      });
+      patchStudentMaterialTask(task.id, (cachedTask) => ({
+        ...cachedTask,
+        submission: {
+          ...(cachedTask.submission || {}),
+          id: result.id,
+          status: 'submitted',
+          version: Number(cachedTask.submission?.version || 0) + 1,
+          summary: event.target.summary.value,
+          submittedAt: new Date().toISOString(),
+          files: files.map((file) => ({
+            id: file.mediaId,
+            name: file.name,
+            originalName: file.name,
+            url: `/api/material-files/${file.mediaId}`,
+            downloadUrl: `/api/material-files/${file.mediaId}`
+          }))
+        }
+      }));
+      returnToCachedStudentHome('材料提交成功');
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
   };
 }
 
@@ -1327,6 +1474,14 @@ function taskSubmissionForm(task) {
   form.querySelectorAll('[data-intent]').forEach((button) => {
     button.onclick = async (event) => {
       event.preventDefault();
+      if (form.dataset.submitting === 'true') return;
+      form.dataset.submitting = 'true';
+      const restoreButton = beginButtonLoading(
+        button,
+        button.dataset.intent === 'draft' ? '正在保存…' : '正在提交…'
+      );
+      const siblingButtons = [...form.querySelectorAll('[data-intent]')].filter((item) => item !== button);
+      siblingButtons.forEach((item) => { item.disabled = true; });
       try {
         if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
         const media = form.images.files.length ? (form._media || await readFiles(form.images.files, {
@@ -1345,9 +1500,34 @@ function taskSubmissionForm(task) {
             isPublic: Boolean(form.isPublic?.checked)
           })
         });
-        alert(result.submission.status === 'draft' ? '草稿已保存' : '最终提交成功');
-        home();
-      } catch (error) { alert(error.message); }
+        patchStudentTask(task.id, (cachedTask) => ({
+          ...cachedTask,
+          submission: {
+            ...(cachedTask.submission || {}),
+            ...result.submission,
+            copy: form.copy.value,
+            plazaCopy: form.plazaCopy?.value || '',
+            mealType: form.mealType?.value || '',
+            isPublic: Boolean(form.isPublic?.checked),
+            occurrenceDate: task.occurrenceDate,
+            submittedAt: result.submission.status === 'draft'
+              ? cachedTask.submission?.submittedAt || null
+              : new Date().toISOString()
+          }
+        }));
+        if (result.submission.status !== 'draft' && form.isPublic?.checked) {
+          plazaViewCache.clear();
+          rankingViewCache.clear();
+        }
+        returnToCachedStudentHome(
+          result.submission.status === 'draft' ? '草稿已保存' : '最终提交成功'
+        );
+      } catch (error) {
+        restoreButton();
+        siblingButtons.forEach((item) => { item.disabled = false; });
+        form.dataset.submitting = 'false';
+        alert(error.message);
+      }
     };
   });
 }
@@ -1382,10 +1562,28 @@ async function inbox(page = 1) {
   });
 }
 
-async function plaza(sort = 'latest', page = 1, month = '') {
-  const pageEpoch = beginNavigation();
-  const result = await api(`/api/plaza?sort=${sort}&page=${page}&limit=20${month ? `&month=${month}` : ''}`);
+const updatePlazaCachePost = (postId, updates) => {
+  for (const entry of plazaViewCache.values()) {
+    if (!entry?.data?.posts) continue;
+    const post = entry.data.posts.find((item) => item.id === postId);
+    if (post) Object.assign(post, updates);
+  }
+};
+
+const updateVisiblePlazaCard = (postId, updates) => {
+  const card = [...app.querySelectorAll('[data-post]')].find(
+    (item) => item.dataset.post === postId
+  );
+  if (!card) return;
+  if (updates.viewCount != null) card.querySelector('[data-plaza-views]').textContent = updates.viewCount;
+  if (updates.likeCount != null) card.querySelector('[data-plaza-likes]').textContent = updates.likeCount;
+  if (updates.commentCount != null) card.querySelector('[data-plaza-comments]').textContent = updates.commentCount;
+};
+
+const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => {
   if (!isCurrentNavigation(pageEpoch)) return;
+  document.body.dataset.view = 'plaza';
+  const preservedScroll = options.preserveScroll ? window.scrollY : 0;
   const cards = result.posts.map((post) => `
     <article class="plaza-card" data-post="${post.id}">
       <div class="image-shell">
@@ -1404,7 +1602,11 @@ async function plaza(sort = 'latest', page = 1, month = '') {
         <p class="muted">发布人：${escapeHtml(post.publisherName)}</p>
         <p class="muted">${post.members.map((member) => escapeHtml(member.name)).join('、')}</p>
         <p>${escapeHtml(post.copy)}</p>
-        <div class="row muted"><span>${formatDate(post.publishedAt)}</span><span class="right">浏览 ${post.viewCount}　点赞 ${post.likeCount}　评论 ${post.commentCount}</span></div>
+        <div class="row muted"><span>${formatDate(post.publishedAt)}</span><span class="right">
+          浏览 <span data-plaza-views>${post.viewCount}</span>　
+          点赞 <span data-plaza-likes>${post.likeCount}</span>　
+          评论 <span data-plaza-comments>${post.commentCount}</span>
+        </span></div>
       </div>
     </article>`).join('');
   app.innerHTML = `
@@ -1423,6 +1625,7 @@ async function plaza(sort = 'latest', page = 1, month = '') {
       <span>第 ${page} 页 · 共 ${result.total} 条</span>
       <button class="secondary" id="nextPage" ${!result.hasMore ? 'disabled' : ''}>下一页</button>
     </div>
+    <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>
     <div id="modalRoot"></div>`;
   prepareDynamicContent(app);
   document.querySelector('#backHome').onclick = home;
@@ -1435,16 +1638,48 @@ async function plaza(sort = 'latest', page = 1, month = '') {
   document.querySelectorAll('[data-post]').forEach((card) => {
     card.onclick = () => openPlazaPost(card.dataset.post, sort, page, result.month);
   });
+  if (options.preserveScroll) requestAnimationFrame(() => window.scrollTo(0, preservedScroll));
+};
+
+async function plaza(sort = 'latest', page = 1, month = '') {
+  const pageEpoch = beginNavigation();
+  const cacheKey = scopedCacheKey('plaza', sort, page, month);
+  const cached = readViewCache(plazaViewCache, cacheKey);
+  const path = `/api/plaza?sort=${sort}&page=${page}&limit=20${month ? `&month=${month}` : ''}`;
+  if (cached) {
+    renderPlazaPage(cached.data, sort, page, month, pageEpoch);
+    const refresh = async () => {
+      try {
+        const result = await api(path);
+        writeViewCache(plazaViewCache, cacheKey, result);
+        if (!isCurrentNavigation(pageEpoch) || document.body.dataset.view !== 'plaza') return;
+        renderPlazaPage(result, sort, page, month, pageEpoch, { preserveScroll: true });
+      } catch {
+        if (!isCurrentNavigation(pageEpoch)) return;
+        const status = document.querySelector('#viewCacheStatus');
+        if (status) {
+          status.hidden = false;
+          status.textContent = '当前显示的是已缓存内容，最新数据刷新失败。';
+        }
+      }
+    };
+    if (cacheIsFresh(cached)) queueMicrotask(() => { void refresh(); });
+    else void refresh();
+    return;
+  }
+  const result = await api(path);
+  writeViewCache(plazaViewCache, cacheKey, result);
+  renderPlazaPage(result, sort, page, month, pageEpoch);
 }
 
 function rankingTable(items, metric, label) {
   return `<div class="table-wrap"><table><thead><tr><th>排名</th><th>队伍</th><th>${label}</th></tr></thead><tbody>${items.map((item) => `<tr><td>${item.rank}</td><td>${escapeHtml(item.teamName)}</td><td>${item[metric]}</td></tr>`).join('') || '<tr><td colspan="3">暂无数据</td></tr>'}</tbody></table></div>`;
 }
 
-async function rankings(period = 'day', key = '') {
-  const pageEpoch = beginNavigation();
-  const result = await api(`/api/rankings?period=${period}${key ? `&key=${key}` : ''}`);
+const renderRankingsPage = (result, period, key, pageEpoch, options = {}) => {
   if (!isCurrentNavigation(pageEpoch)) return;
+  document.body.dataset.view = 'ranking';
+  const preservedScroll = options.preserveScroll ? window.scrollY : 0;
   const currentKey = key || (period === 'month' ? new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).slice(0, 7) : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }));
   const teamTable = `<div class="table-wrap"><table><thead><tr><th>排名</th><th>队伍</th><th>公开次数</th><th>点赞</th><th>浏览</th><th>综合热度</th></tr></thead><tbody>${result.teamRank.map((item) => `<tr><td>${item.rank}</td><td>${escapeHtml(item.teamName)}</td><td>${item.publicCount}</td><td>${item.likeCount}</td><td>${item.viewCount}</td><td>${item.heatScore}</td></tr>`).join('') || '<tr><td colspan="6">暂无数据</td></tr>'}</tbody></table></div>`;
   app.innerHTML = `
@@ -1462,7 +1697,8 @@ async function rankings(period = 'day', key = '') {
         <div class="card"><h2>浏览榜</h2>${rankingTable(result.viewRank, 'viewCount', '浏览')}</div>
         <div class="card"><h2>综合热度榜</h2>${rankingTable(result.heatRank, 'heatScore', '热度')}</div>
       </section>`}
-    ${period === 'month' && user.role === 'admin' ? `<section class="card"><div class="row"><button id="freezeRanking" ${result.frozen ? 'disabled' : ''}>冻结最终排名</button><button class="secondary" id="exportRanking">导出 Excel</button></div></section>` : ''}`;
+    ${period === 'month' && user.role === 'admin' ? `<section class="card"><div class="row"><button id="freezeRanking" ${result.frozen ? 'disabled' : ''}>冻结最终排名</button><button class="secondary" id="exportRanking">导出 Excel</button></div></section>` : ''}
+    <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>`;
   prepareDynamicContent(app);
   document.querySelector('#backRanking').onclick = home;
   document.querySelectorAll('[data-period]').forEach((button) => { button.onclick = () => rankings(button.dataset.period); });
@@ -1470,25 +1706,120 @@ async function rankings(period = 'day', key = '') {
   const freeze = document.querySelector('#freezeRanking');
   if (freeze) freeze.onclick = async () => {
     if (!await askConfirm('是否冻结最终排名？', `冻结 ${currentKey} 最终排名后将不会随数据变化。`)) return;
-    await api('/api/admin/rankings/freeze', { method: 'POST', body: JSON.stringify({ month: currentKey }) });
-    rankings('month', currentKey);
+    const restoreButton = beginButtonLoading(freeze, '正在冻结…');
+    try {
+      await api('/api/admin/rankings/freeze', { method: 'POST', body: JSON.stringify({ month: currentKey }) });
+      rankingViewCache.clear();
+      await rankings('month', currentKey);
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
   };
   const exportButton = document.querySelector('#exportRanking');
   if (exportButton) exportButton.onclick = async () => {
     await downloadApiFile(`/api/admin/rankings/export?month=${currentKey}`);
   };
+  if (options.preserveScroll) requestAnimationFrame(() => window.scrollTo(0, preservedScroll));
+};
+
+async function rankings(period = 'day', key = '') {
+  const pageEpoch = beginNavigation();
+  const currentKey = key || (period === 'month'
+    ? new Date().toLocaleDateString('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit'
+    }).slice(0, 7)
+    : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }));
+  const cacheKey = scopedCacheKey('ranking', period, currentKey);
+  const cached = readViewCache(rankingViewCache, cacheKey);
+  const path = `/api/rankings?period=${period}&key=${encodeURIComponent(currentKey)}`;
+  if (cached) {
+    renderRankingsPage(cached.data, period, currentKey, pageEpoch);
+    const refresh = async () => {
+      try {
+        const result = await api(path);
+        writeViewCache(rankingViewCache, cacheKey, result);
+        if (!isCurrentNavigation(pageEpoch) || document.body.dataset.view !== 'ranking') return;
+        renderRankingsPage(result, period, currentKey, pageEpoch, { preserveScroll: true });
+      } catch {
+        if (!isCurrentNavigation(pageEpoch)) return;
+        const status = document.querySelector('#viewCacheStatus');
+        if (status) {
+          status.hidden = false;
+          status.textContent = '当前显示的是已缓存榜单，最新数据刷新失败。';
+        }
+      }
+    };
+    if (cacheIsFresh(cached)) queueMicrotask(() => { void refresh(); });
+    else void refresh();
+    return;
+  }
+  const result = await api(path);
+  writeViewCache(rankingViewCache, cacheKey, result);
+  renderRankingsPage(result, period, currentKey, pageEpoch);
 }
 
 async function openPlazaPost(postId, sort, page, month, countView = true) {
-  const pageEpoch = beginNavigation();
-  if (countView) await api(`/api/plaza/${postId}/view`, { method: 'POST' });
-  if (!isCurrentNavigation(pageEpoch)) return;
-  const [{ post }, commentResult] = await Promise.all([
-    api(`/api/plaza/${postId}`),
-    api(`/api/plaza/${postId}/comments?page=1&limit=10`)
-  ]);
-  if (!isCurrentNavigation(pageEpoch)) return;
   const root = document.querySelector('#modalRoot');
+  if (!root) return;
+  const modalEpoch = ++plazaModalEpoch;
+  const plazaScrollY = window.scrollY;
+  let post = null;
+  let pendingViewIncrement = false;
+  root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail" aria-busy="true">
+    <div class="row"><h2>正在读取作品…</h2><button class="secondary right" id="closePost">关闭</button></div>
+    <div class="plaza-detail-placeholder"></div>
+  </section></div>`;
+  const closePost = () => {
+    if (modalEpoch !== plazaModalEpoch) return;
+    plazaModalEpoch += 1;
+    root.innerHTML = '';
+    requestAnimationFrame(() => window.scrollTo(0, plazaScrollY));
+  };
+  root.querySelector('#closePost').onclick = closePost;
+
+  const detailPromise = api(`/api/plaza/${postId}`);
+  const commentsPromise = api(`/api/plaza/${postId}/comments?page=1&limit=10`);
+  const viewKey = scopedCacheKey('plaza-view', postId);
+  if (countView && !countedPlazaViews.has(viewKey)) {
+    countedPlazaViews.add(viewKey);
+    void api(`/api/plaza/${postId}/view`, { method: 'POST' })
+      .then((result) => {
+        if (!result.counted) return;
+        if (!post) {
+          pendingViewIncrement = true;
+          return;
+        }
+        const nextViewCount = Number(post?.viewCount || 0) + 1;
+        if (post) post.viewCount = nextViewCount;
+        updatePlazaCachePost(postId, { viewCount: nextViewCount });
+        updateVisiblePlazaCard(postId, { viewCount: nextViewCount });
+        const detailCount = root.querySelector('[data-detail-views]');
+        if (detailCount) detailCount.textContent = nextViewCount;
+        rankingViewCache.clear();
+      })
+      .catch(() => {});
+  }
+
+  let commentResult;
+  try {
+    [{ post }, commentResult] = await Promise.all([detailPromise, commentsPromise]);
+  } catch (error) {
+    if (modalEpoch !== plazaModalEpoch) return;
+    root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail">
+      <div class="row"><h2>作品读取失败</h2><button class="secondary right" id="closePost">关闭</button></div>
+      <p class="bad">${escapeHtml(error.message)}</p>
+    </section></div>`;
+    root.querySelector('#closePost').onclick = closePost;
+    return;
+  }
+  if (modalEpoch !== plazaModalEpoch) return;
+  if (pendingViewIncrement) {
+    post.viewCount = Number(post.viewCount || 0) + 1;
+    updatePlazaCachePost(postId, { viewCount: post.viewCount });
+    updateVisiblePlazaCard(postId, { viewCount: post.viewCount });
+    rankingViewCache.clear();
+  }
   const commentsHtml = commentResult.comments.map((comment) => `
     <article class="comment-item" data-comment="${comment.id}">
       <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
@@ -1511,7 +1842,7 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
         </div>
       </button>`).join('')}</div>
     <p>${escapeHtml(post.copy)}</p>
-    <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 ${post.viewCount} · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span></button></div>
+    <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 <span data-detail-views>${post.viewCount}</span> · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span></button></div>
     <section class="comments-panel">
       <h3>评论 <span id="commentCount">${post.commentCount}</span></h3>
       <form id="commentForm"><textarea name="content" maxlength="500" required placeholder="写下你的评论（最多500字）"></textarea><button>发布评论</button></form>
@@ -1520,56 +1851,97 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
     </section>
   </section></div>`;
   prepareDynamicContent(root);
-  document.querySelector('#closePost').onclick = () => plaza(sort, page, month);
-  document.querySelector('#likePost').onclick = async () => {
-    const result = await api(`/api/plaza/${postId}/like`, { method: 'POST', body: JSON.stringify({ liked: !post.liked }) });
-    post.liked = result.liked;
-    post.likeCount += result.liked ? 1 : -1;
-    document.querySelector('#likeCount').textContent = post.likeCount;
-    document.querySelector('#likePost').classList.toggle('secondary', !post.liked);
-    document.querySelector('#likePost').childNodes[0].textContent = post.liked ? '取消点赞 ' : '点赞 ';
+  root.querySelector('#closePost').onclick = closePost;
+  root.querySelector('#likePost').onclick = async (event) => {
+    const button = event.currentTarget;
+    const restoreButton = beginButtonLoading(button, post.liked ? '正在取消…' : '正在点赞…');
+    const previousLiked = post.liked;
+    try {
+      const result = await api(`/api/plaza/${postId}/like`, {
+        method: 'POST',
+        body: JSON.stringify({ liked: !post.liked })
+      });
+      post.liked = result.liked;
+      if (post.liked !== previousLiked) post.likeCount += post.liked ? 1 : -1;
+      button.dataset.loading = 'false';
+      button.disabled = false;
+      button.innerHTML = `${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span>`;
+      button.classList.toggle('secondary', !post.liked);
+      updatePlazaCachePost(postId, { likeCount: post.likeCount, liked: post.liked });
+      updateVisiblePlazaCard(postId, { likeCount: post.likeCount });
+      rankingViewCache.clear();
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
   };
-  const bindDeleteComments = () => document.querySelectorAll('.delete-comment').forEach((button) => {
-    button.onclick = async () => {
+  const bindDeleteComments = () => root.querySelectorAll('.delete-comment').forEach((button) => {
+    button.onclick = async (event) => {
       const item = button.closest('[data-comment]');
-      await api(`/api/plaza/${postId}/comments/${item.dataset.comment}`, { method: 'DELETE' });
-      item.remove();
-      post.commentCount = Math.max(0, post.commentCount - 1);
-      document.querySelector('#commentCount').textContent = post.commentCount;
+      const restoreButton = beginButtonLoading(event.currentTarget, '删除中…');
+      try {
+        await api(`/api/plaza/${postId}/comments/${item.dataset.comment}`, { method: 'DELETE' });
+        item.remove();
+        post.commentCount = Math.max(0, post.commentCount - 1);
+        root.querySelector('#commentCount').textContent = post.commentCount;
+        updatePlazaCachePost(postId, { commentCount: post.commentCount });
+        updateVisiblePlazaCard(postId, { commentCount: post.commentCount });
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
     };
   });
   bindDeleteComments();
-  document.querySelector('#commentForm').onsubmit = async (event) => {
+  root.querySelector('#commentForm').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.target;
-    const result = await api(`/api/plaza/${postId}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ content: form.content.value })
-    });
-    document.querySelector('.empty-comments')?.remove();
-    document.querySelector('#commentList').insertAdjacentHTML('afterbegin', `
-      <article class="comment-item" data-comment="${result.comment.id}">
-        <div><strong>${escapeHtml(result.comment.name)}</strong><span class="muted">${formatDate(result.comment.createdAt)}</span></div>
-        <p>${escapeHtml(result.comment.content)}</p><button class="link-button delete-comment">删除</button>
-      </article>`);
-    document.querySelector('#commentCount').textContent = result.commentCount;
-    post.commentCount = result.commentCount;
-    form.reset();
-    bindDeleteComments();
+    const submitButton = event.submitter || form.querySelector('button');
+    const restoreButton = beginButtonLoading(submitButton, '发布中…');
+    try {
+      const result = await api(`/api/plaza/${postId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ content: form.content.value })
+      });
+      root.querySelector('.empty-comments')?.remove();
+      root.querySelector('#commentList').insertAdjacentHTML('afterbegin', `
+        <article class="comment-item" data-comment="${result.comment.id}">
+          <div><strong>${escapeHtml(result.comment.name)}</strong><span class="muted">${formatDate(result.comment.createdAt)}</span></div>
+          <p>${escapeHtml(result.comment.content)}</p><button class="link-button delete-comment">删除</button>
+        </article>`);
+      root.querySelector('#commentCount').textContent = result.commentCount;
+      post.commentCount = result.commentCount;
+      updatePlazaCachePost(postId, { commentCount: post.commentCount });
+      updateVisiblePlazaCard(postId, { commentCount: post.commentCount });
+      form.reset();
+      restoreButton();
+      bindDeleteComments();
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
   };
   let commentPage = 1;
-  const moreComments = document.querySelector('#moreComments');
-  if (moreComments) moreComments.onclick = async () => {
-    commentPage += 1;
-    const next = await api(`/api/plaza/${postId}/comments?page=${commentPage}&limit=10`);
-    document.querySelector('#commentList').insertAdjacentHTML('beforeend', next.comments.map((comment) => `
-      <article class="comment-item" data-comment="${comment.id}">
-        <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
-        <p>${escapeHtml(comment.content)}</p>
-        ${comment.canDelete ? '<button class="link-button delete-comment">删除</button>' : ''}
-      </article>`).join(''));
-    moreComments.hidden = !next.hasMore;
-    bindDeleteComments();
+  const moreComments = root.querySelector('#moreComments');
+  if (moreComments) moreComments.onclick = async (event) => {
+    const restoreButton = beginButtonLoading(event.currentTarget, '加载中…');
+    try {
+      commentPage += 1;
+      const next = await api(`/api/plaza/${postId}/comments?page=${commentPage}&limit=10`);
+      root.querySelector('#commentList').insertAdjacentHTML('beforeend', next.comments.map((comment) => `
+        <article class="comment-item" data-comment="${comment.id}">
+          <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
+          <p>${escapeHtml(comment.content)}</p>
+          ${comment.canDelete ? '<button class="link-button delete-comment">删除</button>' : ''}
+        </article>`).join(''));
+      restoreButton();
+      moreComments.hidden = !next.hasMore;
+      bindDeleteComments();
+    } catch (error) {
+      commentPage = Math.max(1, commentPage - 1);
+      restoreButton();
+      alert(error.message);
+    }
   };
 }
 
@@ -1590,6 +1962,8 @@ function checkinForm(slotId) {
   document.querySelector('#send').onsubmit = async (event) => {
     event.preventDefault();
     const form = event.target;
+    const submitButton = event.submitter || form.querySelector('button:not([type="button"])');
+    const restoreButton = beginButtonLoading(submitButton, '正在提交…');
     try {
       const photos = await readFiles(form.photos.files, { businessType: 'meal-checkin', limit: 3 });
       const summary = form.summary.files[0]
@@ -1606,9 +1980,9 @@ function checkinForm(slotId) {
           note: form.note.value
         })
       });
-      alert('提交成功');
-      home();
+      returnToCachedStudentHome('个人打卡成功');
     } catch (error) {
+      restoreButton();
       alert(error.message);
     }
   };
@@ -1621,7 +1995,7 @@ async function adminComments(page = 1) {
   app.innerHTML = `
     <header class="hero"><div class="row"><div><h1>评论管理</h1><p>管理员可查看并删除活动广场中的违规评论</p></div><button class="secondary right" id="backComments">返回后台</button></div></header>
     <section class="card"><div class="admin-comment-list">${result.comments.map((comment) => `
-      <article class="comment-item" data-comment="${comment.id}">
+      <article class="comment-item" data-comment="${comment.id}" data-post="${comment.postId || ''}">
         <div class="row"><strong>${escapeHtml(comment.userName)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
         <p>${escapeHtml(comment.content)}</p>
         <div class="row"><span class="muted">所属队伍：${escapeHtml(comment.teamName)}</span><button class="danger right delete-admin-comment">删除评论</button></div>
@@ -1632,11 +2006,18 @@ async function adminComments(page = 1) {
   document.querySelector('#prevAdminComments').onclick = () => adminComments(page - 1);
   document.querySelector('#nextAdminComments').onclick = () => adminComments(page + 1);
   document.querySelectorAll('.delete-admin-comment').forEach((button) => {
-    button.onclick = async () => {
+    button.onclick = async (event) => {
       const item = button.closest('[data-comment]');
       if (!await askConfirm('是否删除该评论？', '删除后活动广场会立即同步，且无法恢复。')) return;
-      await api(`/api/admin/comments/${item.dataset.comment}`, { method: 'DELETE' });
-      item.remove();
+      const restoreButton = beginButtonLoading(event.currentTarget, '删除中…');
+      try {
+        await api(`/api/admin/comments/${item.dataset.comment}`, { method: 'DELETE' });
+        plazaViewCache.clear();
+        item.remove();
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
     };
   });
 }
@@ -2203,22 +2584,46 @@ async function admin(selectedDate, pageEpoch = beginNavigation()) {
     };
   });
   document.querySelectorAll('.toggle-post').forEach((button) => {
-    button.onclick = async () => {
-      await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: button.dataset.status }) });
-      admin(date);
+    button.onclick = async (event) => {
+      const restoreButton = beginButtonLoading(event.currentTarget, '处理中…');
+      try {
+        await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: button.dataset.status }) });
+        plazaViewCache.clear();
+        rankingViewCache.clear();
+        admin(date);
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
     };
   });
   document.querySelectorAll('.delete-post').forEach((button) => {
-    button.onclick = async () => {
+    button.onclick = async (event) => {
       if (!await askConfirm('是否永久删除该广场帖子？', '任务提交记录不会删除，此操作不可恢复。')) return;
-      await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'DELETE' });
-      admin(date);
+      const restoreButton = beginButtonLoading(event.currentTarget, '删除中…');
+      try {
+        await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'DELETE' });
+        plazaViewCache.clear();
+        rankingViewCache.clear();
+        admin(date);
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
     };
   });
   document.querySelectorAll('.exclude-post').forEach((button) => {
-    button.onclick = async () => {
-      await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ excludedFromRanking: button.dataset.excluded === 'true' }) });
-      admin(date);
+    button.onclick = async (event) => {
+      const restoreButton = beginButtonLoading(event.currentTarget, '处理中…');
+      try {
+        await api(`/api/admin/plaza/${button.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ excludedFromRanking: button.dataset.excluded === 'true' }) });
+        plazaViewCache.clear();
+        rankingViewCache.clear();
+        admin(date);
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
     };
   });
   document.querySelectorAll('.export-data').forEach((button) => {
