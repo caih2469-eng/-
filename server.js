@@ -139,6 +139,33 @@ function readJson(req) {
   });
 }
 
+function readBinary(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    req.on('data', (chunk) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        settled = true;
+        reject(Object.assign(new Error('图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。'), {
+          statusCode: 413
+        }));
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (!settled) resolve(Buffer.concat(chunks));
+    });
+    req.on('error', (error) => {
+      if (!settled) reject(error);
+    });
+  });
+}
+
 function tokenFor(user) {
   const payload = Buffer.from(JSON.stringify({ id: user.id, exp: Date.now() + 12 * 60 * 60 * 1000 })).toString('base64url');
   const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
@@ -930,6 +957,88 @@ async function handleApi(req, res, url) {
   const currentUser = userFrom(req, data);
   if (!currentUser) return sendJson(res, 401, { error: '请先登录或账号已被禁用' });
 
+  if (route === '/api/media/member-checkin-fast' && req.method === 'POST') {
+    if (currentUser.role !== 'student' || currentUser.trackId !== 'interaction') {
+      return sendJson(res, 403, { error: '仅四校区互动赛道学生可以上传个人打卡图片' });
+    }
+    const taskId = cleanText(req.headers['x-task-id'], 80);
+    const idempotencyKey = cleanText(req.headers['x-idempotency-key'], 80);
+    const contentType = cleanText(req.headers['content-type'], 80).toLowerCase().split(';')[0];
+    const width = Number(req.headers['x-image-width']);
+    const height = Number(req.headers['x-image-height']);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+      return sendJson(res, 400, { error: '上传幂等编号格式无效' });
+    }
+    if (!['image/webp', 'image/jpeg'].includes(contentType)) {
+      return sendJson(res, 415, { error: '个人打卡成品仅支持 WebP 或 JPEG' });
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height)
+        || width < 1 || height < 1 || Math.max(width, height) > 960) {
+      return sendJson(res, 400, { error: '图片尺寸无效，最长边不能超过960像素' });
+    }
+    const task = data.tasks.find((item) => item.id === taskId && item.trackId === 'interaction');
+    if (!task || task.status !== 'published') return sendJson(res, 404, { error: '任务不存在或已关闭' });
+    const team = teamForUser(data, currentUser.id);
+    if (!team) return sendJson(res, 403, { error: '尚未分配队伍，不能上传队伍打卡图片' });
+    const occurrenceDate = taskOccurrenceDate(task);
+    if (taskAvailability(task, data, Date.now(), occurrenceDate)) {
+      return sendJson(res, 403, { error: '当前不在该任务的打卡时间范围内' });
+    }
+    const buffer = await readBinary(req, 307200);
+    if (!buffer.length) return sendJson(res, 400, { error: '图片内容不能为空' });
+    const signatureValid = contentType === 'image/jpeg'
+      ? buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+      : buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP';
+    if (!signatureValid) return sendJson(res, 415, { error: '图片真实格式校验失败' });
+    data.mediaObjects ||= [];
+    const digest = crypto.createHash('sha256').update(buffer).digest('hex');
+    const existing = data.mediaObjects.find((item) => item.id === idempotencyKey);
+    if (existing) {
+      if (existing.ownerUserId !== currentUser.id) return sendJson(res, 403, { error: '无权使用该上传编号' });
+      if (existing.taskId !== task.id || existing.digest !== digest || existing.contentType !== contentType
+          || existing.bytes !== buffer.length || existing.width !== width || existing.height !== height) {
+        return sendJson(res, 409, { error: '相同上传编号对应的图片内容不一致' });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        repeated: true,
+        media: { id: existing.id, mimeType: existing.contentType, fileSize: existing.bytes, width, height }
+      });
+    }
+    const extension = contentType === 'image/webp' ? 'webp' : 'jpg';
+    const storedName = `member-fast-${currentUser.id}-${idempotencyKey}-${digest}.${extension}`;
+    const filePath = path.join(UPLOAD_DIR, storedName);
+    fs.writeFileSync(filePath, buffer);
+    const media = {
+      id: idempotencyKey,
+      ownerUserId: currentUser.id,
+      taskId: task.id,
+      businessType: 'member-checkin',
+      url: `/uploads/${storedName}`,
+      storedName,
+      digest,
+      contentType,
+      bytes: buffer.length,
+      width,
+      height,
+      businessId: null,
+      createdAt: new Date().toISOString()
+    };
+    data.mediaObjects.push(media);
+    try {
+      saveDb(data);
+    } catch (error) {
+      data.mediaObjects = data.mediaObjects.filter((item) => item.id !== media.id);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      throw error;
+    }
+    return sendJson(res, 201, {
+      ok: true,
+      repeated: false,
+      media: { id: media.id, mimeType: media.contentType, fileSize: media.bytes, width, height }
+    });
+  }
+
   if (route === '/api/me') {
     return sendJson(res, 200, {
       user: safeUser(currentUser),
@@ -1209,13 +1318,36 @@ async function handleApi(req, res, url) {
     if (!team) return sendJson(res, 409, { error: '请先由管理员编入队伍' });
     const body = await readJson(req);
     if (body.occurrenceDate && body.occurrenceDate !== occurrenceDate) return sendJson(res, 409, { error: '只能提交当天生成的任务' });
-    const imageData = Array.isArray(body.images) ? body.images : [];
-    if (imageData.length !== 1) return sendJson(res, 400, { error: '个人打卡需要上传 1 张截图' });
     const current = data.memberCheckins.find((item) => item.taskId === task.id && item.occurrenceDate === occurrenceDate && item.userId === currentUser.id);
-    const image = saveImage(imageData[0], `member-${task.id}-${currentUser.id}`);
+    const mediaIds = Array.isArray(body.mediaIds) ? body.mediaIds : [];
+    let media = null;
+    let image = null;
+    if (mediaIds.length) {
+      if (mediaIds.length !== 1) return sendJson(res, 400, { error: '个人打卡需要且只能使用 1 张图片' });
+      media = (data.mediaObjects || []).find((item) =>
+        item.id === mediaIds[0] && item.ownerUserId === currentUser.id
+        && item.taskId === task.id && item.businessType === 'member-checkin' && !item.businessId);
+      if (!media) return sendJson(res, 403, { error: '图片不存在、无权使用或已被其他提交占用' });
+      image = media.url;
+    } else {
+      // 仅保留给旧本地测试数据；正式前端不会再发送Base64。
+      const imageData = Array.isArray(body.images) ? body.images : [];
+      if (imageData.length !== 1) return sendJson(res, 400, { error: '个人打卡需要上传 1 张截图' });
+      image = saveImage(imageData[0], `member-${task.id}-${currentUser.id}`);
+    }
     const now = new Date().toISOString();
     const next = { id: current?.id || crypto.randomUUID(), taskId: task.id, occurrenceDate, teamId: team.id, userId: currentUser.id, image, submittedAt: now, version: (current?.version || 0) + 1 };
+    if (current && media) {
+      const previousMedia = (data.mediaObjects || []).find((item) =>
+        item.businessType === 'member-checkin' && item.businessId === current.id);
+      if (previousMedia && previousMedia.id !== media.id) {
+        const previousPath = path.join(UPLOAD_DIR, previousMedia.storedName || '');
+        if (previousMedia.storedName && fs.existsSync(previousPath)) fs.unlinkSync(previousPath);
+        data.mediaObjects = data.mediaObjects.filter((item) => item.id !== previousMedia.id);
+      }
+    }
     if (current) Object.assign(current, next); else data.memberCheckins.push(next);
+    if (media) media.businessId = next.id;
     saveDb(data);
     return sendJson(res, current ? 200 : 201, { ok: true, checkin: next });
   }

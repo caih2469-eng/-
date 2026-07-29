@@ -395,6 +395,8 @@ const MEDIA_THUMB_MAX_SIZE_MB = 0.12;
 const MEDIA_DISPLAY_MAX_SIZE_MB = 0.7;
 const MEDIA_THUMB_QUALITY = 0.72;
 const MEDIA_DISPLAY_QUALITY = 0.78;
+const MEMBER_FAST_MAX_BYTES = 307_200;
+const MEMBER_FAST_MAX_EDGE = 960;
 const MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const mediaPreviewUrls = new Set();
 let activeMediaController = null;
@@ -502,6 +504,125 @@ const compressImage = async (file, options = {}) => {
   const previewUrl = URL.createObjectURL(finalFile);
   mediaPreviewUrls.add(previewUrl);
   return { file: finalFile, mimeType: finalFile.type, width: dimensions.width, height: dimensions.height, previewUrl };
+};
+
+const compressMemberCheckinImage = async (file, options = {}) => {
+  const sourceFile = await normalizeSourceImage(file);
+  const imageCompression = await loadImageCompressionLibrary();
+  const webpRounds = [
+    { maxWidthOrHeight: 960, initialQuality: 0.76, maxSizeMB: 0.25 },
+    { maxWidthOrHeight: 960, initialQuality: 0.70, maxSizeMB: 0.30 },
+    { maxWidthOrHeight: 800, initialQuality: 0.68, maxSizeMB: 0.30 }
+  ];
+  let blob = null;
+  let webpEncodingFailed = false;
+  for (let index = 0; index < webpRounds.length; index += 1) {
+    if (index > 0 && blob?.size <= MEMBER_FAST_MAX_BYTES) break;
+    try {
+      blob = await imageCompression(sourceFile, {
+        ...webpRounds[index],
+        maxIteration: 1,
+        useWebWorker: true,
+        libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
+        preserveExif: false,
+        fileType: 'image/webp',
+        signal: options.signal,
+        onProgress: options.onProgress
+      });
+      const header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+      if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
+        webpEncodingFailed = true;
+        break;
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      webpEncodingFailed = true;
+      break;
+    }
+  }
+
+  if (webpEncodingFailed) {
+    if (sourceFile.type === 'image/png') {
+      throw new Error('当前浏览器无法稳定生成WebP，请将图片另存为JPG或重新截图后上传。');
+    }
+    blob = await imageCompression(sourceFile, {
+      maxWidthOrHeight: MEMBER_FAST_MAX_EDGE,
+      initialQuality: 0.76,
+      maxSizeMB: 0.30,
+      maxIteration: 1,
+      useWebWorker: true,
+      libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
+      preserveExif: false,
+      fileType: 'image/jpeg',
+      signal: options.signal,
+      onProgress: options.onProgress
+    });
+    const header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+    if (blob.type !== 'image/jpeg' || !bytesMatchMime(header, 'image/jpeg')) {
+      throw new Error('当前浏览器无法稳定处理图片，请将图片另存为JPG或重新截图后上传。');
+    }
+  }
+
+  if (!blob?.size || blob.size > MEMBER_FAST_MAX_BYTES) {
+    throw new Error('图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。');
+  }
+  const dimensions = await imageDimensions(blob);
+  if (!dimensions.width || !dimensions.height
+      || Math.max(dimensions.width, dimensions.height) > MEMBER_FAST_MAX_EDGE) {
+    throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
+  }
+  const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
+  const finalFile = new File([blob], `${sourceFile.name.replace(/\.[^.]+$/, '')}.${extension}`, {
+    type: blob.type,
+    lastModified: Date.now()
+  });
+  return {
+    file: finalFile,
+    mimeType: finalFile.type,
+    width: dimensions.width,
+    height: dimensions.height
+  };
+};
+
+const createIdempotencyKey = () => {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+const uploadMemberCheckinFast = async (image, taskId, idempotencyKey, signal) => {
+  let response;
+  try {
+    response = await uploadBinary('/api/media/member-checkin-fast', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': image.mimeType,
+        'X-Task-Id': taskId,
+        'X-Image-Width': String(image.width),
+        'X-Image-Height': String(image.height),
+        'X-Idempotency-Key': idempotencyKey
+      },
+      body: image.file,
+      signal
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error('图片上传失败，请检查网络后点击重试。');
+  }
+  const payload = await parseApiResponse(response);
+  if (!response.ok) {
+    if ([500, 501, 502, 503, 504].includes(response.status)) {
+      throw new Error('上传服务暂时不可用，请稍后重试。');
+    }
+    throw new Error(payload?.error || '图片上传失败，请点击重试。');
+  }
+  if (!payload?.media?.id) throw new Error('上传服务返回的数据无效，请点击重试。');
+  return { ...image, mediaId: payload.media.id, repeated: Boolean(payload.repeated) };
 };
 
 const uploadCompressedImage = async (image, context, signal) => {
@@ -989,94 +1110,146 @@ function memberCheckinForm(task) {
       <label>校区</label><input value="${escapeHtml(user.campus)}" readonly>
       <label>图片</label><input name="images" type="file" accept="image/jpeg,image/png,image/webp" required>
       <div class="image-preview" id="memberPreview"></div>
+      <p class="muted" id="memberUploadStatus">选择图片后会立即压缩并上传，图片就绪后才能确定打卡。</p>
+      <button type="button" class="secondary" id="retryMemberUpload" hidden>重试上传</button>
       <div class="row"><button type="button" class="secondary" id="backMember">返回</button><button>确定打卡</button></div>
     </form></section>`;
- const form = document.querySelector('#memberSend');
-const submitButton = form.querySelector('button:not([type="button"])');
-let mediaPromise = null;
+  const form = document.querySelector('#memberSend');
+  const submitButton = form.querySelector('button:not([type="button"])');
+  const retryButton = document.querySelector('#retryMemberUpload');
+  const status = document.querySelector('#memberUploadStatus');
+  const preview = document.querySelector('#memberPreview');
+  let session = null;
 
-document.querySelector('#backMember').onclick = home;
-
-form.images.onchange = () => {
-  form._media = null;
-  submitButton.disabled = true;
-
-  const currentPromise = readFiles(form.images.files, {
-    taskId: task.id,
-    businessType: 'member-checkin',
-    limit: 1
-  });
-
-  mediaPromise = currentPromise;
-
-  currentPromise
-    .then((media) => {
-      form._media = media;
-      renderPreviews(document.querySelector('#memberPreview'), media);
-    })
-    .catch(async (error) => {
-      const aborted =
-        error?.name === 'AbortError'
-        || /aborted/i.test(String(error?.message || ''));
-
-      // 用户重新选择图片或页面离开造成的主动取消，不显示英文错误。
-      if (aborted) return;
-
-      await openDialog({
-        title: '图片处理失败',
-        message: error?.message || '图片处理失败，请重新选择。',
-        confirmText: '重新选择'
-      });
-
-      form.images.value = '';
-    })
-    .finally(() => {
-      // 防止旧任务结束时误解除新任务的按钮禁用状态。
-      if (mediaPromise === currentPromise) {
-        mediaPromise = null;
-        submitButton.disabled = false;
-      }
-    });
-};
-
-form.onsubmit = async (event) => {
-  event.preventDefault();
-  submitButton.disabled = true;
-
-  try {
-    // 如果选择图片后的处理仍在进行，直接等待同一个任务，
-    // 不再启动第二次 readFiles，也就不会取消第一次。
-    const media =
-      form._media
-      || (mediaPromise ? await mediaPromise : await readFiles(form.images.files, {
-        taskId: task.id,
-        businessType: 'member-checkin',
-        limit: 1
-      }));
-
-    await api(`/api/tasks/${task.id}/member-checkin`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        occurrenceDate: task.occurrenceDate,
-        mediaIds: media.map((item) => item.mediaId)
-      })
-    });
-
-    alert('个人打卡成功');
-    home();
-  } catch (error) {
-    const aborted =
-      error?.name === 'AbortError'
-      || /aborted/i.test(String(error?.message || ''));
-
-    if (!aborted) {
-      alert(error?.message || '打卡提交失败，请稍后重试。');
+  const releaseSession = () => {
+    session?.controller?.abort();
+    if (session?.previewUrl) {
+      URL.revokeObjectURL(session.previewUrl);
+      mediaPreviewUrls.delete(session.previewUrl);
     }
-  } finally {
-    submitButton.disabled = false;
-  }
-};
+    session = null;
+    form._media = null;
+  };
+  const updateReadyState = () => {
+    submitButton.disabled = !session?.compressed && !session?.mediaId;
+    submitButton.textContent = session?.uploadPromise ? '图片上传中' : '确定打卡';
+    retryButton.hidden = !session?.compressed || Boolean(session?.mediaId) || Boolean(session?.uploadPromise);
+  };
+  const uploadCurrentSession = async (current) => {
+    if (!current?.compressed || current !== session) return null;
+    status.textContent = '正在上传图片…';
+    retryButton.hidden = true;
+    const uploadPromise = uploadMemberCheckinFast(
+      current.compressed,
+      task.id,
+      current.idempotencyKey,
+      current.controller.signal
+    );
+    current.uploadPromise = uploadPromise;
+    updateReadyState();
+    try {
+      const uploaded = await uploadPromise;
+      if (current !== session) return null;
+      current.mediaId = uploaded.mediaId;
+      form._media = uploaded;
+      status.textContent = '图片已就绪';
+      return uploaded;
+    } catch (error) {
+      if (current !== session || current.controller.signal.aborted) return null;
+      current.error = error;
+      status.textContent = error.message || '图片上传失败，请检查网络后点击重试。';
+      return null;
+    } finally {
+      if (current === session) {
+        current.uploadPromise = null;
+        updateReadyState();
+      }
+    }
+  };
 
+  document.querySelector('#backMember').onclick = () => {
+    releaseSession();
+    home();
+  };
+  retryButton.onclick = () => {
+    if (session?.compressed && !session.uploadPromise && !session.mediaId) {
+      void uploadCurrentSession(session);
+    }
+  };
+  form.images.onchange = async () => {
+    releaseSession();
+    submitButton.disabled = true;
+    retryButton.hidden = true;
+    preview.innerHTML = '';
+    const file = form.images.files?.[0];
+    if (!file) {
+      status.textContent = '请选择图片。';
+      return;
+    }
+    const current = {
+      idempotencyKey: createIdempotencyKey(),
+      controller: new AbortController(),
+      compressed: null,
+      mediaId: null,
+      uploadPromise: null,
+      previewUrl: null
+    };
+    session = current;
+    try {
+      const sourceFile = await normalizeSourceImage(file);
+      if (current !== session) return;
+      current.previewUrl = URL.createObjectURL(sourceFile);
+      mediaPreviewUrls.add(current.previewUrl);
+      renderPreviews(preview, [{ previewUrl: current.previewUrl }]);
+      status.textContent = '正在压缩图片…';
+      current.compressed = await compressMemberCheckinImage(sourceFile, {
+        signal: current.controller.signal
+      });
+      if (current !== session) return;
+      await uploadCurrentSession(current);
+    } catch (error) {
+      if (current !== session || current.controller.signal.aborted) return;
+      current.error = error;
+      status.textContent = error.message || '图片处理失败，请重新选择图片。';
+      if (!current.compressed) {
+        await openDialog({
+          title: '图片处理失败',
+          message: status.textContent,
+          confirmText: '重新选择'
+        });
+      }
+      updateReadyState();
+    }
+  };
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (session?.uploadPromise) {
+      status.textContent = '图片上传中，请稍候…';
+      await session.uploadPromise.catch(() => null);
+    }
+    if (!session?.mediaId) {
+      status.textContent = '图片尚未就绪，请重新选择或点击重试上传。';
+      return;
+    }
+    submitButton.disabled = true;
+    try {
+      await api(`/api/tasks/${task.id}/member-checkin`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          occurrenceDate: task.occurrenceDate,
+          mediaIds: [session.mediaId]
+        })
+      });
+      alert('个人打卡成功');
+      releaseSession();
+      home({ forceRefresh: true });
+    } catch (error) {
+      alert(error?.message || '打卡提交失败，请稍后重试。');
+    } finally {
+      if (session) submitButton.disabled = !session.mediaId;
+    }
+  };
 }
 
 function materialSubmissionForm(task) {

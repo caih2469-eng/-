@@ -256,7 +256,15 @@ export const uploadImages = async (env, dataUrls, prefix, limit) => {
   }
 };
 
-export const claimConfirmedMedia = async (env, mediaIds, user, taskId, businessType, limit) => {
+export const claimConfirmedMedia = async (
+  env,
+  mediaIds,
+  user,
+  taskId,
+  businessType,
+  limit,
+  options = {}
+) => {
   if (!Array.isArray(mediaIds) || !mediaIds.length || mediaIds.length > limit) {
     throw Object.assign(new Error(`图片数量必须为 1–${limit} 张`), { status: 400 });
   }
@@ -276,7 +284,7 @@ export const claimConfirmedMedia = async (env, mediaIds, user, taskId, businessT
     if (!media || media.intentStatus !== 'confirmed' || media.businessId) {
       throw Object.assign(new Error('图片不存在、无权使用或已被其他提交占用'), { status: 403 });
     }
-    const thumb = await env.DB.prepare(
+    const thumb = options.loadThumb === false ? null : await env.DB.prepare(
       `SELECT id,object_key AS objectKey,mime_type AS contentType,file_size AS bytes,
               width,height,etag
          FROM media_objects

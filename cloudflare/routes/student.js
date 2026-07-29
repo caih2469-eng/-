@@ -300,7 +300,7 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
       return json({ error: '旧版Base64图片上传已停用，请重新选择图片' }, 400);
     }
     const uploaded = await claimConfirmedMedia(
-      env, body.mediaIds, user, task.id, 'member-checkin', 1
+      env, body.mediaIds, user, task.id, 'member-checkin', 1, { loadThumb: false }
     );
     const old = await env.DB.prepare(
       `SELECT c.id,COALESCE(m.object_key,c.object_key) AS objectKey,m.id AS mediaId,
