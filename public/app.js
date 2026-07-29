@@ -231,22 +231,47 @@ const MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const mediaPreviewUrls = new Set();
 let activeMediaController = null;
 
-const bytesMatchMime = (bytes, type) => {
-  if (type === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  if (type === 'image/png') return [...bytes.slice(0, 8)].map((byte) => byte.toString(16).padStart(2, '0')).join('') === '89504e470d0a1a0a';
-  return new TextDecoder().decode(bytes.slice(0, 4)) === 'RIFF'
-    && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP';
+const detectImageMime = (bytes) => {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+
+  const pngSignature = [...bytes.slice(0, 8)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+  if (pngSignature === '89504e470d0a1a0a') return 'image/png';
+
+  const prefix = new TextDecoder().decode(bytes.slice(0, 4));
+  const webp = new TextDecoder().decode(bytes.slice(8, 12));
+  if (prefix === 'RIFF' && webp === 'WEBP') return 'image/webp';
+
+  return '';
 };
 
-const validateSourceImage = async (file) => {
-  if (file.size > MEDIA_MAX_SOURCE_BYTES) throw new Error('单张图片不能超过5MB，请压缩或重新选择图片。');
-  if (!MEDIA_ALLOWED_TYPES.has(file.type)) {
-    throw new Error(file.type.includes('heic') || /\.heic$/i.test(file.name)
-      ? '当前设备无法稳定处理HEIC，请改用JPG、PNG或WebP。'
-      : '仅支持JPG、PNG、WebP图片。');
+const bytesMatchMime = (bytes, type) => detectImageMime(bytes) === type;
+
+const normalizeSourceImage = async (file) => {
+  if (file.size > MEDIA_MAX_SOURCE_BYTES) {
+    throw new Error('单张图片不能超过5MB，请压缩或重新选择图片。');
   }
+
   const header = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-  if (!bytesMatchMime(header, file.type)) throw new Error('图片真实内容与格式不一致。');
+  const detectedType = detectImageMime(header);
+  if (!detectedType || !MEDIA_ALLOWED_TYPES.has(detectedType)) {
+    const reportedType = String(file.type || '').toLowerCase();
+    const heicLike = reportedType.includes('heic') || reportedType.includes('heif')
+      || /\.(heic|heif)$/i.test(file.name);
+    throw new Error(heicLike
+      ? '当前设备无法稳定处理HEIC，请改用JPG、PNG或WebP。'
+      : '无法识别图片真实格式，请重新截图或另存为JPG后上传。');
+  }
+
+  if (file.type === detectedType) return file;
+
+  // 微信/QQ可能把PNG或WebP文件错误标记成JPG。按真实文件头修正MIME，
+  // 后续压缩仍统一输出WebP或JPEG，服务端校验规则保持不变。
+  return new File([file], file.name, {
+    type: detectedType,
+    lastModified: file.lastModified || Date.now()
+  });
 };
 
 const imageDimensions = async (blob) => {
@@ -270,7 +295,7 @@ const imageDimensions = async (blob) => {
 };
 
 const compressImage = async (file, options = {}) => {
-  await validateSourceImage(file);
+  const sourceFile = await normalizeSourceImage(file);
   if (typeof window.imageCompression !== 'function') throw new Error('图片压缩模块加载失败，请刷新后重试。');
   const isThumb = options.variant === 'thumb';
   const common = {
@@ -283,10 +308,10 @@ const compressImage = async (file, options = {}) => {
     signal: options.signal,
     onProgress: options.onProgress
   };
-  let blob = await window.imageCompression(file, { ...common, fileType: 'image/webp' });
+  let blob = await window.imageCompression(sourceFile, { ...common, fileType: 'image/webp' });
   let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
   if (blob.type !== 'image/webp' || !bytesMatchMime(header, 'image/webp')) {
-    blob = await window.imageCompression(file, {
+    blob = await window.imageCompression(sourceFile, {
       ...common,
       fileType: 'image/jpeg',
       initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY
@@ -302,7 +327,7 @@ const compressImage = async (file, options = {}) => {
     throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
   }
   const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
-  const finalFile = new File([blob], `${file.name.replace(/\.[^.]+$/, '')}.${extension}`, {
+  const finalFile = new File([blob], `${sourceFile.name.replace(/\.[^.]+$/, '')}.${extension}`, {
     type: blob.type,
     lastModified: Date.now()
   });
