@@ -1,4 +1,5 @@
 import {
+  beginRequestMetrics,
   cleanText,
   createToken,
   errorResponse,
@@ -6,6 +7,8 @@ import {
   passwordMatches,
   readConfig,
   readJson,
+  readRequestTimings,
+  recordRequestTiming,
   requireUser,
   sha256,
   shanghaiDate,
@@ -78,6 +81,7 @@ const fileResponse = async (request, env, id) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
   const user = auth.user;
+  const d1StartedAt = performance.now();
 
   const checkin = await env.DB.prepare(
     `SELECT f.object_key AS objectKey,f.content_type AS contentType,c.user_id AS ownerId
@@ -116,8 +120,11 @@ const fileResponse = async (request, env, id) => {
     }
   }
 
+  recordRequestTiming(request, 'd1', performance.now() - d1StartedAt);
   if (!file) return json({ error: '文件不存在或无权访问' }, 403);
+  const r2StartedAt = performance.now();
   const object = await env.UPLOADS.get(file.objectKey);
+  recordRequestTiming(request, 'r2', performance.now() - r2StartedAt);
   if (!object) return json({ error: '文件不存在' }, 404);
   return new Response(object.body, {
     headers: {
@@ -156,6 +163,7 @@ const publicImageResponse = async (request, env, ctx, url, id) => {
       WHERE i.id=?1 AND s.is_public=1 AND p.status='visible' LIMIT 1`
   ).bind(id, variant).first();
   const d1Duration = performance.now() - d1Started;
+  recordRequestTiming(request, 'd1', d1Duration);
   if (!file) {
     return json({ error: '图片不存在' }, 404, {
       'cache-control': 'no-store',
@@ -176,6 +184,7 @@ const publicImageResponse = async (request, env, ctx, url, id) => {
   const r2Started = performance.now();
   const object = await env.UPLOADS.get(file.objectKey);
   const r2Duration = performance.now() - r2Started;
+  recordRequestTiming(request, 'r2', r2Duration);
   if (!object) {
     return json({ error: '图片文件不存在' }, 404, {
       'cache-control': 'no-store',
@@ -206,9 +215,13 @@ const publicImageResponse = async (request, env, ctx, url, id) => {
 const materialFileResponse = async (request, env, id) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
+  const d1StartedAt = performance.now();
   const file = await canAccessMaterialFile(env, id, auth.user);
+  recordRequestTiming(request, 'd1', performance.now() - d1StartedAt);
   if (!file) return json({ error: '文件不存在或无权访问' }, 403);
+  const r2StartedAt = performance.now();
   const object = await env.UPLOADS.get(file.objectKey);
+  recordRequestTiming(request, 'r2', performance.now() - r2StartedAt);
   if (!object) return json({ error: '文件不存在' }, 404);
   const disposition = `attachment; filename*=UTF-8''${encodeURIComponent(file.originalName)}`;
   return new Response(object.body, {
@@ -222,9 +235,8 @@ const materialFileResponse = async (request, env, id) => {
   });
 };
 
-export default {
-  async fetch(request, env, ctx) {
-    try {
+const routeRequest = async (request, env, ctx) => {
+  try {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
         return json({
@@ -295,9 +307,42 @@ export default {
       if (plaza) return plaza;
       const student = await handleStudentRoutes(request, env, ctx, url);
       if (student) return student;
-      return json({ error: '接口不存在' }, 404);
-    } catch (error) {
-      return errorResponse(error);
-    }
+    return json({ error: '接口不存在' }, 404);
+  } catch (error) {
+    return errorResponse(error);
+  }
+};
+
+const requestId = () => {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+};
+
+const withRequestTelemetry = (response, request, id, totalDuration) => {
+  const headers = new Headers(response.headers);
+  headers.set('x-request-id', id);
+  const existingTiming = headers.get('server-timing') || '';
+  const existingNames = new Set(
+    existingTiming.split(',').map((entry) => entry.trim().split(';')[0]).filter(Boolean)
+  );
+  const additions = [...readRequestTimings(request), ['total', totalDuration]]
+    .filter(([name, duration]) => !existingNames.has(name) && Number.isFinite(duration))
+    .map(([name, duration]) => `${name};dur=${Number(duration).toFixed(1)}`);
+  const combinedTiming = [existingTiming, ...additions].filter(Boolean).join(', ');
+  if (combinedTiming) headers.set('server-timing', combinedTiming);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+};
+
+export default {
+  async fetch(request, env, ctx) {
+    beginRequestMetrics(request);
+    const startedAt = performance.now();
+    const id = requestId();
+    const response = await routeRequest(request, env, ctx);
+    return withRequestTelemetry(response, request, id, performance.now() - startedAt);
   }
 };

@@ -1,4 +1,25 @@
 (() => {
+  const perfEnabled = (() => {
+    try {
+      return new URLSearchParams(location.search).get('debugPerf') === '1'
+        || localStorage.getItem('debugPerf') === '1';
+    } catch {
+      return false;
+    }
+  })();
+  window.__PERF_METRICS__ = Array.isArray(window.__PERF_METRICS__) ? window.__PERF_METRICS__ : [];
+  window.__RECORD_PERF__ = (type, details = {}) => {
+    if (!perfEnabled) return;
+    const metric = {
+      type,
+      at: Math.round(performance.now() * 10) / 10,
+      ...details
+    };
+    window.__PERF_METRICS__.push(metric);
+    if (window.__PERF_METRICS__.length > 500) window.__PERF_METRICS__.shift();
+    console.debug('[perf]', metric);
+  };
+  const bootstrapStarted = performance.now();
   const loadScript = (src) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = src;
@@ -29,16 +50,24 @@
       }
       if (!response.ok) throw new Error('session unavailable');
       const session = await response.json();
+      window.__RECORD_PERF__('bootstrap-session', {
+        requestId: response.headers.get('x-request-id') || '',
+        status: response.status,
+        duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
+      });
       window.__BOOTSTRAP_AUTHENTICATED__ = true;
       window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/style.css?v=20260729-uploadfix3';
+      stylesheet.href = '/style.css?v=20260730-perf-final1';
       document.head.appendChild(stylesheet);
-      await loadScript('/site-path.js?v=20260729-uploadfix3');
-      await loadScript('/app.js?v=20260729-uploadfix3');
+      await loadScript('/site-path.js?v=20260730-perf-final1');
+      await loadScript('/app.js?v=20260730-perf-final1');
+      window.__RECORD_PERF__('bootstrap-complete', {
+        duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
+      });
     } catch {
       showNetworkError();
     } finally {

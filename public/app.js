@@ -35,6 +35,18 @@ const plazaViewCache = new Map();
 const rankingViewCache = new Map();
 const countedPlazaViews = new Set();
 let plazaModalEpoch = 0;
+const recordPerf = (type, details = {}) => {
+  window.__RECORD_PERF__?.(type, details);
+};
+const metricPath = (value) => {
+  try {
+    const parsed = new URL(value, location.origin);
+    return parsed.origin === location.origin ? parsed.pathname : 'r2-presigned-put';
+  } catch {
+    return 'unknown';
+  }
+};
+const roundedDuration = (startedAt) => Math.round((performance.now() - startedAt) * 10) / 10;
 
 const scopedCacheKey = (...parts) => [
   user?.id || user?.studentId || 'anonymous',
@@ -346,29 +358,48 @@ const apiRequest = async (url, options, method) => {
 
 const executeApi = async (url, options, method) => {
   const retryableMethod = method === 'GET' || method === 'HEAD';
-  for (let attempt = 0; attempt < (retryableMethod ? 2 : 1); attempt += 1) {
-    let response;
-    try {
-      response = await apiRequest(url, options, method);
-    } catch (error) {
-      if (!retryableMethod || attempt > 0 || !/网络连接失败/.test(error.message)) throw error;
-      await wait(300 + Math.floor(Math.random() * 301));
-      continue;
+  const startedAt = performance.now();
+  let retryCount = 0;
+  let status = 0;
+  let requestId = '';
+  try {
+    for (let attempt = 0; attempt < (retryableMethod ? 2 : 1); attempt += 1) {
+      retryCount = attempt;
+      let response;
+      try {
+        response = await apiRequest(url, options, method);
+      } catch (error) {
+        if (!retryableMethod || attempt > 0 || !/网络连接失败/.test(error.message)) throw error;
+        await wait(300 + Math.floor(Math.random() * 301));
+        continue;
+      }
+      status = response.status;
+      requestId = response.headers.get('x-request-id') || '';
+      if (attempt === 0 && retryableMethod && [502, 503, 504].includes(response.status)) {
+        await wait(300 + Math.floor(Math.random() * 301));
+        continue;
+      }
+      const result = await parseApiResponse(response);
+      if (!response.ok) {
+        const fallback = [502, 503, 504].includes(response.status)
+          ? '服务器暂时无法响应，请稍后重试。'
+          : '操作失败，请稍后重试。';
+        throw new Error(result?.error || fallback);
+      }
+      return result;
     }
-    if (attempt === 0 && retryableMethod && [502, 503, 504].includes(response.status)) {
-      await wait(300 + Math.floor(Math.random() * 301));
-      continue;
-    }
-    const result = await parseApiResponse(response);
-    if (!response.ok) {
-      const fallback = [502, 503, 504].includes(response.status)
-        ? '服务器暂时无法响应，请稍后重试。'
-        : '操作失败，请稍后重试。';
-      throw new Error(result?.error || fallback);
-    }
-    return result;
+    throw new Error('服务器暂时无法响应，请稍后重试。');
+  } finally {
+    recordPerf('request', {
+      requestId,
+      method,
+      path: metricPath(url),
+      status,
+      retryCount,
+      duration: roundedDuration(startedAt),
+      navigationEpoch
+    });
   }
-  throw new Error('服务器暂时无法响应，请稍后重试。');
 };
 
 const api = (path, options = {}) => {
@@ -416,8 +447,11 @@ const loadImageCompressionLibrary = () => {
 };
 
 const uploadBinary = async (url, options = {}) => {
+  const startedAt = performance.now();
   const controller = new AbortController();
   let timedOut = false;
+  let status = 0;
+  let requestId = '';
   const forwardAbort = () => controller.abort();
   options.signal?.addEventListener?.('abort', forwardAbort, { once: true });
   const timeout = setTimeout(() => {
@@ -425,7 +459,10 @@ const uploadBinary = async (url, options = {}) => {
     controller.abort();
   }, 60_000);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    status = response.status;
+    requestId = response.headers.get('x-request-id') || '';
+    return response;
   } catch {
     if (timedOut) throw new Error('图片上传超时，请检查网络后重试。');
     if (options.signal?.aborted) throw new Error('图片上传已取消，请重新选择图片。');
@@ -433,6 +470,15 @@ const uploadBinary = async (url, options = {}) => {
   } finally {
     clearTimeout(timeout);
     options.signal?.removeEventListener?.('abort', forwardAbort);
+    recordPerf('upload', {
+      requestId,
+      method: String(options.method || 'GET').toUpperCase(),
+      path: metricPath(url),
+      status,
+      retryCount: 0,
+      duration: roundedDuration(startedAt),
+      navigationEpoch
+    });
   }
 };
 
@@ -561,6 +607,23 @@ const compressImage = async (file, options = {}) => {
   const previewUrl = URL.createObjectURL(finalFile);
   mediaPreviewUrls.add(previewUrl);
   return { file: finalFile, mimeType: finalFile.type, width: dimensions.width, height: dimensions.height, previewUrl };
+};
+
+const compressImageMeasured = async (file, options = {}) => {
+  const startedAt = performance.now();
+  let output = null;
+  try {
+    output = await compressImage(file, options);
+    return output;
+  } finally {
+    recordPerf('compress', {
+      variant: options.variant || 'display',
+      sourceBytes: Number(file?.size || 0),
+      outputBytes: Number(output?.file?.size || 0),
+      duration: roundedDuration(startedAt),
+      navigationEpoch
+    });
+  }
 };
 
 const compressMemberCheckinImage = async (file, options = {}) => {
@@ -720,6 +783,7 @@ const uploadConcurrency = () => {
 };
 
 const createMediaUploadSession = (files, context = {}, ui = {}) => {
+  const previewStartedAt = performance.now();
   const selected = [...files];
   if (!selected.length) throw new Error('请选择图片。');
   if (selected.length > Number(context.limit || selected.length)) throw new Error(`最多上传${context.limit}张图片。`);
@@ -736,6 +800,11 @@ const createMediaUploadSession = (files, context = {}, ui = {}) => {
   }) : [];
   if (ui.previewContainer) {
     renderPreviews(ui.previewContainer, rawPreviewUrls.map((previewUrl) => ({ previewUrl })));
+    recordPerf('preview', {
+      imageCount: selected.length,
+      duration: roundedDuration(previewStartedAt),
+      navigationEpoch
+    });
   }
   const setStatus = (message) => {
     if (ui.statusElement) ui.statusElement.textContent = message;
@@ -761,7 +830,7 @@ const createMediaUploadSession = (files, context = {}, ui = {}) => {
       let display = session.partial[index]?.display;
       if (!display) {
         setStatus(`${position}：正在压缩 0%`);
-        const compressed = await compressImage(selected[index], {
+        const compressed = await compressImageMeasured(selected[index], {
           signal: controller.signal,
           variant: 'display',
           onProgress: (progress) => {
@@ -779,7 +848,7 @@ const createMediaUploadSession = (files, context = {}, ui = {}) => {
         session.partial[index] = { display };
       }
       setStatus(`${position}：正在生成列表图片…`);
-      const thumbCompressed = await compressImage(display.file, {
+      const thumbCompressed = await compressImageMeasured(display.file, {
         signal: controller.signal,
         variant: 'thumb'
       });
@@ -956,6 +1025,7 @@ const patchStudentMaterialTask = (taskId, updater) => {
 };
 
 const returnToCachedStudentHome = (successMessage, options = {}) => {
+  const restoreStartedAt = performance.now();
   if (!studentViewState.data || user?.role !== 'student') {
     showToast(successMessage);
     void home({ forceRefresh: true });
@@ -965,6 +1035,11 @@ const returnToCachedStudentHome = (successMessage, options = {}) => {
   studentViewState.scrollY = Math.max(0, Number(options.scrollY || 0));
   const pageEpoch = beginNavigation();
   void student(studentViewState.data, pageEpoch, { restoreScroll: true });
+  recordPerf('home-restore', {
+    cached: true,
+    duration: roundedDuration(restoreStartedAt),
+    navigationEpoch: pageEpoch
+  });
   showToast(successMessage);
   void refreshStudentDashboard(pageEpoch, true).then(() => {
     if (studentViewState.refreshError && isCurrentNavigation(pageEpoch)) {
@@ -1046,6 +1121,7 @@ async function home(options = {}) {
 }
 
 async function student(dashboard, pageEpoch = beginNavigation(), options = {}) {
+  const renderStartedAt = performance.now();
   if (!isCurrentNavigation(pageEpoch)) return;
   document.body.dataset.view = 'student';
   config = dashboard.config;
@@ -1153,6 +1229,11 @@ async function student(dashboard, pageEpoch = beginNavigation(), options = {}) {
       <button data-material="${task.id}" ${task.submission?.status === 'submitted' ? 'disabled' : ''}>${task.submission?.status === 'returned' ? '修改并重新提交' : '提交材料'}</button>
     </article>`).join('') || '<p class="muted">暂无材料任务</p>'}</div></section>`);
   prepareDynamicContent(app);
+  recordPerf('page-render', {
+    page: 'student-home',
+    duration: roundedDuration(renderStartedAt),
+    navigationEpoch: pageEpoch
+  });
   document.querySelector('#out').onclick = logout;
   document.querySelector('#historyCheckins').onclick = () => openStudentCheckinHistory();
   document.querySelector('#ranking').onclick = () => rankings();
@@ -1374,6 +1455,7 @@ function memberCheckinForm(task) {
     }
   };
   form.images.onchange = async () => {
+    const previewStartedAt = performance.now();
     releaseSession();
     submitButton.disabled = true;
     retryButton.hidden = true;
@@ -1398,10 +1480,26 @@ function memberCheckinForm(task) {
       current.previewUrl = URL.createObjectURL(sourceFile);
       mediaPreviewUrls.add(current.previewUrl);
       renderPreviews(preview, [{ previewUrl: current.previewUrl }]);
-      status.textContent = '正在压缩图片…';
-      current.compressed = await compressMemberCheckinImage(sourceFile, {
-        signal: current.controller.signal
+      recordPerf('preview', {
+        imageCount: 1,
+        duration: roundedDuration(previewStartedAt),
+        navigationEpoch
       });
+      status.textContent = '正在压缩图片…';
+      const compressStartedAt = performance.now();
+      try {
+        current.compressed = await compressMemberCheckinImage(sourceFile, {
+          signal: current.controller.signal
+        });
+      } finally {
+        recordPerf('compress', {
+          variant: 'member-checkin-fast',
+          sourceBytes: Number(sourceFile.size || 0),
+          outputBytes: Number(current.compressed?.file?.size || 0),
+          duration: roundedDuration(compressStartedAt),
+          navigationEpoch
+        });
+      }
       if (current !== session) return;
       await uploadCurrentSession(current);
     } catch (error) {
@@ -1421,6 +1519,8 @@ function memberCheckinForm(task) {
 
   form.onsubmit = async (event) => {
     event.preventDefault();
+    const submitStartedAt = performance.now();
+    let submitSucceeded = false;
     const restoreButton = beginButtonLoading(submitButton, '正在提交…');
     if (session?.uploadPromise) {
       status.textContent = '图片上传中，请稍候…';
@@ -1462,12 +1562,19 @@ function memberCheckinForm(task) {
         };
       });
       releaseSession();
+      submitSucceeded = true;
       returnToCachedStudentHome('个人打卡成功');
     } catch (error) {
       alert(error?.message || '打卡提交失败，请稍后重试。');
       restoreButton();
     } finally {
       if (session) submitButton.disabled = !session.mediaId;
+      recordPerf('submit', {
+        action: 'member-checkin',
+        success: submitSucceeded,
+        duration: roundedDuration(submitStartedAt),
+        navigationEpoch
+      });
     }
   };
 }
@@ -1748,6 +1855,7 @@ const updateVisiblePlazaCard = (postId, updates) => {
 };
 
 const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => {
+  const renderStartedAt = performance.now();
   if (!isCurrentNavigation(pageEpoch)) return;
   document.body.dataset.view = 'plaza';
   const preservedScroll = options.preserveScroll ? window.scrollY : 0;
@@ -1795,6 +1903,11 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
     <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>
     <div id="modalRoot"></div>`;
   prepareDynamicContent(app);
+  recordPerf('page-render', {
+    page: 'plaza',
+    duration: roundedDuration(renderStartedAt),
+    navigationEpoch: pageEpoch
+  });
   document.querySelector('#backHome').onclick = home;
   document.querySelectorAll('[data-sort]').forEach((button) => {
     button.onclick = () => plaza(button.dataset.sort, 1, document.querySelector('#plazaMonth').value);
@@ -1844,6 +1957,7 @@ function rankingTable(items, metric, label) {
 }
 
 const renderRankingsPage = (result, period, key, pageEpoch, options = {}) => {
+  const renderStartedAt = performance.now();
   if (!isCurrentNavigation(pageEpoch)) return;
   document.body.dataset.view = 'ranking';
   const preservedScroll = options.preserveScroll ? window.scrollY : 0;
@@ -1867,6 +1981,11 @@ const renderRankingsPage = (result, period, key, pageEpoch, options = {}) => {
     ${period === 'month' && user.role === 'admin' ? `<section class="card"><div class="row"><button id="freezeRanking" ${result.frozen ? 'disabled' : ''}>冻结最终排名</button><button class="secondary" id="exportRanking">导出 Excel</button></div></section>` : ''}
     <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>`;
   prepareDynamicContent(app);
+  recordPerf('page-render', {
+    page: 'rankings',
+    duration: roundedDuration(renderStartedAt),
+    navigationEpoch: pageEpoch
+  });
   document.querySelector('#backRanking').onclick = home;
   document.querySelectorAll('[data-period]').forEach((button) => { button.onclick = () => rankings(button.dataset.period); });
   document.querySelector('#rankingKey').onchange = (event) => rankings(period, event.target.value);

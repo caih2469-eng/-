@@ -1,4 +1,21 @@
 const encoder = new TextEncoder();
+const requestPerformanceMetrics = new WeakMap();
+
+export const beginRequestMetrics = (request) => {
+  requestPerformanceMetrics.set(request, new Map());
+};
+
+export const recordRequestTiming = (request, name, duration) => {
+  const metrics = requestPerformanceMetrics.get(request);
+  const measured = Number(duration);
+  if (!metrics || !/^[a-z][a-z0-9_-]*$/i.test(name) || !Number.isFinite(measured) || measured < 0) return;
+  metrics.set(name, (metrics.get(name) || 0) + measured);
+};
+
+export const readRequestTimings = (request) => {
+  const metrics = requestPerformanceMetrics.get(request);
+  return metrics ? [...metrics.entries()] : [];
+};
 
 export const TRACKS = [
   { id: 'interaction', name: '四校区互动赛道' },
@@ -180,10 +197,15 @@ export const authenticate = async (request, env) => {
 };
 
 export const requireUser = async (request, env, admin = false) => {
-  const user = await authenticate(request, env);
-  if (!user) return { error: json({ error: '请先登录或会话已过期' }, 401) };
-  if (admin && user.role !== 'admin') return { error: json({ error: '需要管理员权限' }, 403) };
-  return { user };
+  const startedAt = performance.now();
+  try {
+    const user = await authenticate(request, env);
+    if (!user) return { error: json({ error: '请先登录或会话已过期' }, 401) };
+    if (admin && user.role !== 'admin') return { error: json({ error: '需要管理员权限' }, 403) };
+    return { user };
+  } finally {
+    recordRequestTiming(request, 'auth', performance.now() - startedAt);
+  }
 };
 
 export const readConfig = async (env) => {
