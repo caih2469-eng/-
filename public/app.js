@@ -802,34 +802,91 @@ function memberCheckinForm(task) {
       <div class="image-preview" id="memberPreview"></div>
       <div class="row"><button type="button" class="secondary" id="backMember">返回</button><button>确定打卡</button></div>
     </form></section>`;
-  const form = document.querySelector('#memberSend');
-  document.querySelector('#backMember').onclick = home;
-  form.images.onchange = async () => {
-    try {
-      form._media = await readFiles(form.images.files, {
-        taskId: task.id, businessType: 'member-checkin', limit: 1
+ const form = document.querySelector('#memberSend');
+const submitButton = form.querySelector('button:not([type="button"])');
+let mediaPromise = null;
+
+document.querySelector('#backMember').onclick = home;
+
+form.images.onchange = () => {
+  form._media = null;
+  submitButton.disabled = true;
+
+  const currentPromise = readFiles(form.images.files, {
+    taskId: task.id,
+    businessType: 'member-checkin',
+    limit: 1
+  });
+
+  mediaPromise = currentPromise;
+
+  currentPromise
+    .then((media) => {
+      form._media = media;
+      renderPreviews(document.querySelector('#memberPreview'), media);
+    })
+    .catch(async (error) => {
+      const aborted =
+        error?.name === 'AbortError'
+        || /aborted/i.test(String(error?.message || ''));
+
+      // 用户重新选择图片或页面离开造成的主动取消，不显示英文错误。
+      if (aborted) return;
+
+      await openDialog({
+        title: '图片处理失败',
+        message: error?.message || '图片处理失败，请重新选择。',
+        confirmText: '重新选择'
       });
-      renderPreviews(document.querySelector('#memberPreview'), form._media);
-    } catch (error) {
-      await openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
+
       form.images.value = '';
+    })
+    .finally(() => {
+      // 防止旧任务结束时误解除新任务的按钮禁用状态。
+      if (mediaPromise === currentPromise) {
+        mediaPromise = null;
+        submitButton.disabled = false;
+      }
+    });
+};
+
+form.onsubmit = async (event) => {
+  event.preventDefault();
+  submitButton.disabled = true;
+
+  try {
+    // 如果选择图片后的处理仍在进行，直接等待同一个任务，
+    // 不再启动第二次 readFiles，也就不会取消第一次。
+    const media =
+      form._media
+      || (mediaPromise ? await mediaPromise : await readFiles(form.images.files, {
+        taskId: task.id,
+        businessType: 'member-checkin',
+        limit: 1
+      }));
+
+    await api(`/api/tasks/${task.id}/member-checkin`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        occurrenceDate: task.occurrenceDate,
+        mediaIds: media.map((item) => item.mediaId)
+      })
+    });
+
+    alert('个人打卡成功');
+    home();
+  } catch (error) {
+    const aborted =
+      error?.name === 'AbortError'
+      || /aborted/i.test(String(error?.message || ''));
+
+    if (!aborted) {
+      alert(error?.message || '打卡提交失败，请稍后重试。');
     }
-  };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    try {
-      const media = form._media || await readFiles(form.images.files, {
-        taskId: task.id, businessType: 'member-checkin', limit: 1
-      });
-      await api(`/api/tasks/${task.id}/member-checkin`, {
-        method: 'PUT',
-        body: JSON.stringify({ occurrenceDate: task.occurrenceDate, mediaIds: media.map((item) => item.mediaId) })
-      });
-      alert('个人打卡成功');
-      home();
-    } catch (error) { alert(error.message); }
-  };
-}
+  } finally {
+    submitButton.disabled = false;
+  }
+};
 
 function materialSubmissionForm(task) {
   const current = task.submission;
