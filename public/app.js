@@ -456,7 +456,7 @@ const MEMBER_FAST_MAX_BYTES = 307_200;
 const MEMBER_FAST_MAX_EDGE = 960;
 const MEDIA_ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const mediaPreviewUrls = new Set();
-let activeMediaController = null;
+const mediaUploadSessions = new Set();
 
 const detectImageMime = (bytes) => {
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
@@ -683,6 +683,7 @@ const uploadMemberCheckinFast = async (image, taskId, idempotencyKey, signal) =>
 };
 
 const uploadCompressedImage = async (image, context, signal) => {
+  context.onStage?.('正在申请上传地址…');
   const intent = await api('/api/media/upload-intents', {
     method: 'POST',
     body: JSON.stringify({
@@ -695,6 +696,7 @@ const uploadCompressedImage = async (image, context, signal) => {
       variant: context.variant || 'display'
     })
   });
+  context.onStage?.('正在上传图片…');
   const uploaded = await uploadBinary(intent.uploadUrl, {
     method: 'PUT',
     headers: intent.headers,
@@ -702,6 +704,7 @@ const uploadCompressedImage = async (image, context, signal) => {
     signal
   });
   if (!uploaded.ok) throw new Error(`图片直传失败（${uploaded.status}），请重新选择图片。`);
+  context.onStage?.('正在确认图片…');
   const confirmed = await api(`/api/media/upload-intents/${encodeURIComponent(intent.intentId)}/confirm`, {
     method: 'POST',
     body: JSON.stringify({ parentMediaId: context.parentMediaId || null })
@@ -709,42 +712,141 @@ const uploadCompressedImage = async (image, context, signal) => {
   return { ...image, mediaId: confirmed.media.id };
 };
 
-const readFiles = async (files, context = {}) => {
+const uploadConcurrency = () => {
+  const isIOS = /iP(?:hone|ad|od)/.test(navigator.userAgent);
+  const embeddedBrowser = /MicroMessenger|QQ\//i.test(navigator.userAgent);
+  const lowMemory = Number(navigator.deviceMemory || 8) <= 4;
+  return isIOS || embeddedBrowser || lowMemory ? 1 : 2;
+};
+
+const createMediaUploadSession = (files, context = {}, ui = {}) => {
   const selected = [...files];
   if (!selected.length) throw new Error('请选择图片。');
   if (selected.length > Number(context.limit || selected.length)) throw new Error(`最多上传${context.limit}张图片。`);
-  activeMediaController?.abort();
-  activeMediaController = new AbortController();
-  const results = [];
-  const isIOS = /iP(?:hone|ad|od)/.test(navigator.userAgent);
-  const lowMemory = Number(navigator.deviceMemory || 8) <= 4;
-  const concurrency = isIOS || lowMemory ? 1 : 2;
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < selected.length) {
-      const index = cursor++;
-      const compressed = await compressImage(selected[index], {
-        signal: activeMediaController.signal,
-        variant: 'display'
-      });
-      const display = await uploadCompressedImage(compressed, {
-        ...context,
-        variant: 'display'
-      }, activeMediaController.signal);
-      const thumbCompressed = await compressImage(compressed.file, {
-        signal: activeMediaController.signal,
+  selected.forEach((file, index) => {
+    if (file.size > MEDIA_MAX_SOURCE_BYTES) {
+      throw new Error(`第 ${index + 1} 张图片超过5MB，请压缩或重新选择。`);
+    }
+  });
+  const controller = new AbortController();
+  const rawPreviewUrls = ui.previewContainer ? selected.map((file) => {
+    const previewUrl = URL.createObjectURL(file);
+    mediaPreviewUrls.add(previewUrl);
+    return previewUrl;
+  }) : [];
+  if (ui.previewContainer) {
+    renderPreviews(ui.previewContainer, rawPreviewUrls.map((previewUrl) => ({ previewUrl })));
+  }
+  const setStatus = (message) => {
+    if (ui.statusElement) ui.statusElement.textContent = message;
+    context.onStatus?.(message);
+  };
+  const session = {
+    controller,
+    selected,
+    results: new Array(selected.length),
+    partial: new Array(selected.length),
+    errors: new Map(),
+    promise: null,
+    released: false,
+    retryFailed: null,
+    release: null
+  };
+  mediaUploadSessions.add(session);
+
+  const processOne = async (index) => {
+    if (session.results[index]) return;
+    const position = `第 ${index + 1}/${selected.length} 张`;
+    try {
+      let display = session.partial[index]?.display;
+      if (!display) {
+        setStatus(`${position}：正在压缩 0%`);
+        const compressed = await compressImage(selected[index], {
+          signal: controller.signal,
+          variant: 'display',
+          onProgress: (progress) => {
+            const percent = Number(progress);
+            if (Number.isFinite(percent)) {
+              setStatus(`${position}：正在压缩 ${Math.max(0, Math.min(100, Math.round(percent)))}%`);
+            }
+          }
+        });
+        display = await uploadCompressedImage(compressed, {
+          ...context,
+          variant: 'display',
+          onStage: (stage) => setStatus(`${position}：${stage}`)
+        }, controller.signal);
+        session.partial[index] = { display };
+      }
+      setStatus(`${position}：正在生成列表图片…`);
+      const thumbCompressed = await compressImage(display.file, {
+        signal: controller.signal,
         variant: 'thumb'
       });
       const thumb = await uploadCompressedImage(thumbCompressed, {
         ...context,
         variant: 'thumb',
-        parentMediaId: display.mediaId
-      }, activeMediaController.signal);
-      results[index] = { ...display, thumbMediaId: thumb.mediaId };
+        parentMediaId: display.mediaId,
+        onStage: (stage) => setStatus(`${position}：${stage}`)
+      }, controller.signal);
+      session.results[index] = { ...display, thumbMediaId: thumb.mediaId };
+      session.errors.delete(index);
+    } catch (error) {
+      if (!controller.signal.aborted) session.errors.set(index, error);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, worker));
-  return results;
+
+  const runIndexes = async (indexes) => {
+    setStatus('正在读取图片…');
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < indexes.length && !controller.signal.aborted) {
+        const index = indexes[cursor++];
+        await processOne(index);
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(uploadConcurrency(), indexes.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
+    if (controller.signal.aborted) throw new Error('图片上传已取消，请重新选择图片。');
+    if (session.errors.size) {
+      const failed = [...session.errors.keys()].map((index) => index + 1).join('、');
+      throw new Error(`第 ${failed} 张图片处理失败，可单独重试失败图片。`);
+    }
+    setStatus('图片已就绪');
+    return session.results;
+  };
+
+  session.retryFailed = () => {
+    if (!session.errors.size || session.released) return session.promise;
+    const indexes = [...session.errors.keys()];
+    session.errors.clear();
+    session.promise = runIndexes(indexes);
+    return session.promise;
+  };
+  session.release = () => {
+    if (session.released) return;
+    session.released = true;
+    controller.abort();
+    rawPreviewUrls.forEach((url) => {
+      URL.revokeObjectURL(url);
+      mediaPreviewUrls.delete(url);
+    });
+    mediaUploadSessions.delete(session);
+  };
+  session.promise = runIndexes(selected.map((_, index) => index));
+  return session;
+};
+
+const readFiles = async (files, context = {}) => {
+  const session = createMediaUploadSession(files, context);
+  try {
+    return await session.promise;
+  } finally {
+    mediaUploadSessions.delete(session);
+  }
 };
 const renderPreviews = (container, images) => {
   container.innerHTML = images.map((item, index) => {
@@ -753,7 +855,7 @@ const renderPreviews = (container, images) => {
   }).join('');
 };
 window.addEventListener('pagehide', () => {
-  activeMediaController?.abort();
+  mediaUploadSessions.forEach((session) => session.release());
   mediaPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
   mediaPreviewUrls.clear();
 });
@@ -1379,19 +1481,50 @@ function materialSubmissionForm(task) {
       <div class="notice">浏览器会自动压缩图片，最多 ${task.fileLimit} 张，压缩后单张最大 5MB。</div>
       <label>上传最终截图</label><input name="files" type="file" multiple accept="image/jpeg,image/png,image/webp">
       <div class="image-preview" id="materialPreview"></div>
+      <div class="row"><p class="muted upload-status" id="materialUploadStatus" aria-live="polite">选择图片后会立即预览并在后台上传。</p>
+        <button type="button" class="secondary" id="retryMaterialUpload" hidden>重试失败图片</button></div>
       <label>文字总结${task.summaryRequired ? '（必填）' : '（选填）'}</label><textarea name="summary">${escapeHtml(current?.summary || '')}</textarea>
       <div class="row"><button type="button" class="secondary" id="backMaterial">返回</button><button>提交材料</button></div>
     </form></section>`;
-  document.querySelector('#backMaterial').onclick = home;
   const materialForm = document.querySelector('#materialSend');
-  materialForm.files.onchange = async () => {
+  const materialStatus = document.querySelector('#materialUploadStatus');
+  const materialRetry = document.querySelector('#retryMaterialUpload');
+  let mediaSession = null;
+  document.querySelector('#backMaterial').onclick = () => {
+    mediaSession?.release();
+    home();
+  };
+  materialRetry.onclick = () => {
+    if (!mediaSession?.errors.size) return;
+    materialRetry.hidden = true;
+    void mediaSession.retryFailed().catch((error) => {
+      materialStatus.textContent = error.message;
+      materialRetry.hidden = false;
+    });
+  };
+  materialForm.files.onchange = () => {
+    mediaSession?.release();
+    mediaSession = null;
+    materialRetry.hidden = true;
     try {
       if (materialForm.files.files.length > task.fileLimit) throw new Error(`最多上传 ${task.fileLimit} 张图片`);
-      materialForm._images = await readFiles(materialForm.files.files, {
+      mediaSession = createMediaUploadSession(materialForm.files.files, {
         taskId: task.id, businessType: 'material-image', limit: task.fileLimit
+      }, {
+        previewContainer: document.querySelector('#materialPreview'),
+        statusElement: materialStatus
       });
-      renderPreviews(document.querySelector('#materialPreview'), materialForm._images);
-    } catch (error) { alert(error.message); materialForm.files.value = ''; }
+      const currentSession = mediaSession;
+      void currentSession.promise.catch((error) => {
+        if (currentSession !== mediaSession) return;
+        materialStatus.textContent = error.message;
+        materialRetry.hidden = !currentSession.errors.size;
+      });
+    } catch (error) {
+      void openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
+      materialForm.files.value = '';
+      materialStatus.textContent = error.message;
+    }
   };
   document.querySelector('#materialSend').onsubmit = async (event) => {
     event.preventDefault();
@@ -1400,9 +1533,10 @@ function materialSubmissionForm(task) {
     try {
       const selected = [...event.target.files.files];
       if (selected.length > task.fileLimit) throw new Error(`最多上传 ${task.fileLimit} 个文件`);
-      const images = event.target._images || await readFiles(selected, {
-        taskId: task.id, businessType: 'material-image', limit: task.fileLimit
-      });
+      const images = selected.length ? await mediaSession?.promise : [];
+      if (selected.length && (!images || images.length !== selected.length)) {
+        throw new Error('图片尚未全部就绪，请重试失败图片。');
+      }
       const files = images.map((item, index) => ({ name: selected[index].name, mediaId: item.mediaId }));
       const result = await api(`/api/material-tasks/${task.id}/submission`, {
         method: 'PUT',
@@ -1430,6 +1564,8 @@ function materialSubmissionForm(task) {
           }))
         }
       }));
+      mediaSession?.release();
+      mediaSession = null;
       returnToCachedStudentHome('材料提交成功');
     } catch (error) {
       restoreButton();
@@ -1448,24 +1584,52 @@ function taskSubmissionForm(task) {
       <div class="notice">上传前浏览器会自动压缩图片。支持 JPG、PNG、WebP，原图单张不超过 5MB，最多 ${task.imageLimit} 张。</div>
       <label>活动图片</label><input name="images" type="file" accept="image/jpeg,image/png,image/webp" multiple>
       <div class="image-preview" id="taskPreview"></div>
+      <div class="row"><p class="muted upload-status" id="taskUploadStatus" aria-live="polite">选择图片后会立即预览并在后台上传。</p>
+        <button type="button" class="secondary" id="retryTaskUpload" hidden>重试失败图片</button></div>
       ${user.trackId === 'health' ? `<label>餐次</label><select name="mealType" required><option value="">请选择</option><option value="breakfast" ${current?.mealType === 'breakfast' ? 'selected' : ''}>早餐</option><option value="lunch" ${current?.mealType === 'lunch' ? 'selected' : ''}>午餐</option><option value="dinner" ${current?.mealType === 'dinner' ? 'selected' : ''}>晚餐</option></select>` : ''}
       <label>活动文案${task.copyRequirement ? '（必填）' : '（选填）'}</label><textarea name="copy">${escapeHtml(current?.copy || '')}</textarea>
       ${user.trackId === 'interaction' ? `<label class="check-label"><input name="isPublic" type="checkbox" ${current?.isPublic ? 'checked' : ''}> 同意发布至活动广场</label>
       <div id="plazaCopyField" style="display:${current?.isPublic ? 'block' : 'none'}"><label>广场作品文案（发布时必填）</label><textarea name="plazaCopy">${escapeHtml(current?.plazaCopy || '')}</textarea></div>` : ''}
       <div class="row"><button type="button" class="secondary" id="back">返回</button><button type="button" class="secondary" data-intent="draft">保存草稿</button><button data-intent="submit">最终提交</button></div>
     </form></section>`;
-  document.querySelector('#back').onclick = home;
   const form = document.querySelector('#taskSend');
-  form.images.onchange = async () => {
+  const taskStatus = document.querySelector('#taskUploadStatus');
+  const taskRetry = document.querySelector('#retryTaskUpload');
+  let mediaSession = null;
+  document.querySelector('#back').onclick = () => {
+    mediaSession?.release();
+    home();
+  };
+  taskRetry.onclick = () => {
+    if (!mediaSession?.errors.size) return;
+    taskRetry.hidden = true;
+    void mediaSession.retryFailed().catch((error) => {
+      taskStatus.textContent = error.message;
+      taskRetry.hidden = false;
+    });
+  };
+  form.images.onchange = () => {
+    mediaSession?.release();
+    mediaSession = null;
+    taskRetry.hidden = true;
     try {
       if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
-      form._media = await readFiles(form.images.files, {
+      mediaSession = createMediaUploadSession(form.images.files, {
         taskId: task.id, businessType: 'task', limit: task.imageLimit
+      }, {
+        previewContainer: document.querySelector('#taskPreview'),
+        statusElement: taskStatus
       });
-      renderPreviews(document.querySelector('#taskPreview'), form._media);
+      const currentSession = mediaSession;
+      void currentSession.promise.catch((error) => {
+        if (currentSession !== mediaSession) return;
+        taskStatus.textContent = error.message;
+        taskRetry.hidden = !currentSession.errors.size;
+      });
     } catch (error) {
-      await openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
+      void openDialog({ title: '图片处理失败', message: error.message, confirmText: '重新选择' });
       form.images.value = '';
+      taskStatus.textContent = error.message;
     }
   };
   if (form.isPublic) form.isPublic.onchange = () => {
@@ -1484,9 +1648,10 @@ function taskSubmissionForm(task) {
       siblingButtons.forEach((item) => { item.disabled = true; });
       try {
         if (form.images.files.length > task.imageLimit) throw new Error(`最多上传 ${task.imageLimit} 张图片`);
-        const media = form.images.files.length ? (form._media || await readFiles(form.images.files, {
-          taskId: task.id, businessType: 'task', limit: task.imageLimit
-        })) : [];
+        const media = form.images.files.length ? await mediaSession?.promise : [];
+        if (form.images.files.length && (!media || media.length !== form.images.files.length)) {
+          throw new Error('图片尚未全部就绪，请重试失败图片。');
+        }
         const result = await api(`/api/tasks/${task.id}/submission`, {
           method: 'PUT',
           body: JSON.stringify({
@@ -1519,6 +1684,8 @@ function taskSubmissionForm(task) {
           plazaViewCache.clear();
           rankingViewCache.clear();
         }
+        mediaSession?.release();
+        mediaSession = null;
         returnToCachedStudentHome(
           result.submission.status === 'draft' ? '草稿已保存' : '最终提交成功'
         );

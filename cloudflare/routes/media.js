@@ -224,6 +224,25 @@ const rejectIntent = async (env, intent, reason) => {
   throw Object.assign(new Error(reason), { status: 415 });
 };
 
+export const inspectUploadedObject = async (env, objectKey) => {
+  const ranged = await env.UPLOADS.get(objectKey, { range: { offset: 0, length: 16 } });
+  if (!ranged) return null;
+  const bytes = new Uint8Array(await new Response(ranged.body).arrayBuffer());
+  let size = Number(ranged.size);
+  let contentType = ranged.httpMetadata?.contentType || '';
+  let etag = ranged.httpEtag || '';
+  let usedHeadFallback = false;
+  if (!Number.isFinite(size) || size < 1 || !contentType || !etag) {
+    const metadata = await env.UPLOADS.head(objectKey);
+    if (!metadata) return null;
+    usedHeadFallback = true;
+    size = Number(metadata.size);
+    contentType = metadata.httpMetadata?.contentType || '';
+    etag = metadata.httpEtag || '';
+  }
+  return { bytes, size, contentType, etag, usedHeadFallback };
+};
+
 const createUploadIntent = async (request, env) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
@@ -320,16 +339,14 @@ const confirmUpload = async (request, env, intentId) => {
       await rejectIntent(env, intent, '任务已关闭，图片不能继续确认');
     }
   }
-  const object = await env.UPLOADS.head(intent.objectKey);
+  const object = await inspectUploadedObject(env, intent.objectKey);
   if (!object) return json({ error: 'R2尚未收到图片，请重新上传' }, 409);
-  const actualType = object.httpMetadata?.contentType || '';
+  const actualType = object.contentType;
   if (object.size < 1 || object.size > MAX_FINAL_BYTES || object.size !== Number(intent.expectedSize)
       || actualType !== intent.mimeType || !ALLOWED_TYPES.has(actualType)) {
     return rejectIntent(env, intent, '上传图片的大小或类型与申请信息不一致');
   }
-  const head = await env.UPLOADS.get(intent.objectKey, { range: { offset: 0, length: 16 } });
-  const bytes = new Uint8Array(await new Response(head.body).arrayBuffer());
-  if (!signatureMatches(bytes, actualType)) return rejectIntent(env, intent, '图片真实格式校验失败');
+  if (!signatureMatches(object.bytes, actualType)) return rejectIntent(env, intent, '图片真实格式校验失败');
   const now = nowIso();
   const mediaId = intent.id;
   const isThumb = intent.businessType.endsWith(':thumb');
@@ -353,7 +370,7 @@ const confirmUpload = async (request, env, intentId) => {
           visibility,business_id,created_at,updated_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'private',?11,?12,?12)`
     ).bind(mediaId, intent.userId, intent.taskId, intent.businessType, intent.objectKey,
-      actualType, object.size, intent.width, intent.height, object.httpEtag || '', parentMediaId, now),
+       actualType, object.size, intent.width, intent.height, object.etag, parentMediaId, now),
     env.DB.prepare(
       "UPDATE media_upload_intents SET status='confirmed',confirmed_at=?1,updated_at=?1 WHERE id=?2 AND status='pending'"
     ).bind(now, intent.id)

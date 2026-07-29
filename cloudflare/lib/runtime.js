@@ -272,29 +272,39 @@ export const claimConfirmedMedia = async (
   if (uniqueIds.length !== mediaIds.length) {
     throw Object.assign(new Error('图片列表包含重复或无效项目'), { status: 400 });
   }
-  const claimed = [];
-  for (const id of uniqueIds) {
-    const media = await env.DB.prepare(
-      `SELECT m.id,m.object_key AS objectKey,m.mime_type AS contentType,m.file_size AS bytes,
-              m.width,m.height,m.business_id AS businessId,i.status AS intentStatus
-         FROM media_objects m JOIN media_upload_intents i ON i.id=m.id
-        WHERE m.id=?1 AND m.owner_user_id=?2 AND COALESCE(m.task_id,'')=COALESCE(?3,'')
-          AND m.business_type=?4`
-    ).bind(id, user.id, taskId || null, businessType).first();
-    if (!media || media.intentStatus !== 'confirmed' || media.businessId) {
+  const placeholders = uniqueIds.map((_, index) => `?${index + 4}`).join(',');
+  const { results: mediaRows } = await env.DB.prepare(
+    `SELECT m.id,m.object_key AS objectKey,m.mime_type AS contentType,m.file_size AS bytes,
+            m.width,m.height,m.business_id AS businessId,i.status AS intentStatus
+       FROM media_objects m JOIN media_upload_intents i ON i.id=m.id
+      WHERE m.owner_user_id=?1 AND COALESCE(m.task_id,'')=COALESCE(?2,'')
+        AND m.business_type=?3 AND m.id IN (${placeholders})`
+  ).bind(user.id, taskId || null, businessType, ...uniqueIds).all();
+  const mediaById = new Map(mediaRows.map((media) => [media.id, media]));
+  const orderedMedia = uniqueIds.map((id) => {
+    const media = mediaById.get(id);
+    if (!media || media.intentStatus !== 'confirmed' || media.businessId != null) {
       throw Object.assign(new Error('图片不存在、无权使用或已被其他提交占用'), { status: 403 });
     }
-    const thumb = options.loadThumb === false ? null : await env.DB.prepare(
-      `SELECT id,object_key AS objectKey,mime_type AS contentType,file_size AS bytes,
-              width,height,etag
-         FROM media_objects
-        WHERE owner_user_id=?1 AND COALESCE(task_id,'')=COALESCE(?2,'')
-          AND business_type=?3 AND business_id=?4 LIMIT 1`
-    ).bind(user.id, taskId || null, `${businessType}:thumb`, media.id).first();
-    media.thumb = thumb || null;
-    claimed.push(media);
+    return media;
+  });
+  if (options.loadThumb === false) {
+    return orderedMedia.map((media, sortOrder) => ({ ...media, thumb: null, sortOrder }));
   }
-  return claimed.map((media, sortOrder) => ({ ...media, sortOrder }));
+  const thumbPlaceholders = uniqueIds.map((_, index) => `?${index + 4}`).join(',');
+  const { results: thumbRows } = await env.DB.prepare(
+    `SELECT id,object_key AS objectKey,mime_type AS contentType,file_size AS bytes,
+            width,height,etag,business_id AS businessId
+       FROM media_objects
+      WHERE owner_user_id=?1 AND COALESCE(task_id,'')=COALESCE(?2,'')
+        AND business_type=?3 AND business_id IN (${thumbPlaceholders})`
+  ).bind(user.id, taskId || null, `${businessType}:thumb`, ...uniqueIds).all();
+  const thumbByParent = new Map(thumbRows.map((thumb) => [thumb.businessId, thumb]));
+  return orderedMedia.map((media, sortOrder) => ({
+    ...media,
+    thumb: thumbByParent.get(media.id) || null,
+    sortOrder
+  }));
 };
 
 export const audit = (env, actor, action, entityType, entityId = null, metadata = {}) =>
