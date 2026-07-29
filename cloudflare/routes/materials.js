@@ -253,24 +253,36 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
     const campuses = await env.DB.prepare(
       "SELECT DISTINCT campus FROM users WHERE role='student' AND campus<>'' ORDER BY campus"
     ).all();
-    const campusProgress = [];
-    for (const task of taskPayloads.filter((item) => item.ownerType === 'user')) {
-      const progress = await env.DB.prepare(
-        `SELECT u.campus,COUNT(*) AS total,
-          SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END) AS completed
-         FROM users u LEFT JOIN material_submissions s
-          ON s.owner_id=u.id AND s.owner_type='user' AND s.task_id=?1
-         WHERE u.role='student' GROUP BY u.campus ORDER BY u.campus`
-      ).bind(task.id).all();
-      campusProgress.push({
+    const progress = await env.DB.prepare(
+      `SELECT mt.id AS taskId,u.campus,COUNT(*) AS total,
+              SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END) AS completed
+         FROM material_tasks mt
+         JOIN users u ON u.role='student'
+         LEFT JOIN material_submissions s
+           ON s.owner_id=u.id AND s.owner_type='user' AND s.task_id=mt.id
+        WHERE mt.owner_type='user'
+        GROUP BY mt.id,u.campus
+        ORDER BY mt.id,u.campus`
+    ).all();
+    const progressByTask = new Map();
+    for (const item of progress.results) {
+      if (!progressByTask.has(item.taskId)) progressByTask.set(item.taskId, []);
+      progressByTask.get(item.taskId).push({
+        campus: item.campus,
+        total: Number(item.total),
+        completed: Number(item.completed)
+      });
+    }
+    const campusProgress = taskPayloads
+      .filter((item) => item.ownerType === 'user')
+      .map((task) => ({
         taskId: task.id,
-        campuses: progress.results.map((item) => ({
+        campuses: (progressByTask.get(task.id) || []).map((item) => ({
           campus: item.campus,
           total: Number(item.total),
           completed: Number(item.completed)
         }))
-      });
-    }
+      }));
     return json({
       tasks: taskPayloads,
       submissions: submissions.results,

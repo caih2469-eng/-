@@ -15,7 +15,9 @@ import {
 import { createPrivateMediaUrl } from '../lib/media-signing.js';
 import {
   buildStudentDashboard,
-  buildStudentTasks
+  buildStudentTasks,
+  mapWithConcurrency,
+  submissionImagesForIds
 } from '../services/student-dashboard.js';
 
 const teamForUser = async (env, userId) => env.DB.prepare(
@@ -72,33 +74,6 @@ const submissionOwner = async (env, user, task) => {
     return { type: 'team', id: team.id, team };
   }
   return { type: 'user', id: user.id, team: null };
-};
-
-const submissionImages = async (env, submissionId, viewer) => {
-  const { results } = await env.DB.prepare(
-    `SELECT i.id,COALESCE(m.object_key,i.object_key) AS objectKey,
-            i.content_type AS contentType,i.bytes,
-            i.sort_order AS sortOrder,m.id AS mediaId,
-            tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey,
-            tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
-       FROM task_submission_images i
-       LEFT JOIN media_objects m ON m.id=i.id
-       LEFT JOIN media_objects tm ON tm.business_id=m.id
-        AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
-      WHERE i.submission_id=?1 ORDER BY i.sort_order`
-  ).bind(submissionId).all();
-  return Promise.all(results.map(async (item) => {
-    const displayUrl = item.mediaId
-      ? await createPrivateMediaUrl(env, item, viewer.role === 'admin' ? 'admin' : 'owner', viewer.id)
-      : `/api/files/${item.id}`;
-    const thumbUrl = item.thumbMediaId
-      ? await createPrivateMediaUrl(env, {
-        id: item.thumbMediaId,
-        objectKey: item.thumbObjectKey
-      }, viewer.role === 'admin' ? 'admin' : 'owner', viewer.id)
-      : displayUrl;
-    return { ...item, thumbUrl, displayUrl, imageUrl: thumbUrl, url: thumbUrl };
-  }));
 };
 
 export const handleStudentRoutes = async (request, env, ctx, url) => {
@@ -174,17 +149,26 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
     const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit') || 20)));
     const offset = (page - 1) * limit;
-    const count = await env.DB.prepare(
-      "SELECT COUNT(*) AS total FROM task_submissions WHERE owner_type='user' AND owner_id=?1"
-    ).bind(user.id).first();
-    const { results } = await env.DB.prepare(
-      `SELECT s.id,s.task_id AS taskId,t.name AS taskName,s.occurrence_date AS occurrenceDate,
-              s.meal_type AS mealType,s.copy_text AS copy,s.status,s.submitted_at AS submittedAt,
-              s.review_note AS reviewNote,s.version
-         FROM task_submissions s JOIN tasks t ON t.id=s.task_id
-        WHERE s.owner_type='user' AND s.owner_id=?1 ORDER BY s.updated_at DESC LIMIT ?2 OFFSET ?3`
-    ).bind(user.id, limit, offset).all();
-    for (const item of results) item.images = await submissionImages(env, item.id, user);
+    const [count, pageResult] = await Promise.all([
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM task_submissions WHERE owner_type='user' AND owner_id=?1"
+      ).bind(user.id).first(),
+      env.DB.prepare(
+        `SELECT s.id,s.task_id AS taskId,t.name AS taskName,s.occurrence_date AS occurrenceDate,
+                s.meal_type AS mealType,s.copy_text AS copy,s.status,s.submitted_at AS submittedAt,
+                s.review_note AS reviewNote,s.version
+           FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+          WHERE s.owner_type='user' AND s.owner_id=?1
+          ORDER BY s.updated_at DESC LIMIT ?2 OFFSET ?3`
+      ).bind(user.id, limit, offset).all()
+    ]);
+    const results = pageResult.results;
+    const imagesBySubmission = await submissionImagesForIds(
+      env,
+      results.map((item) => item.id),
+      user
+    );
+    for (const item of results) item.images = imagesBySubmission.get(item.id) || [];
     return json({
       page,
       limit,
@@ -203,27 +187,36 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
     const offset = (page - 1) * limit;
 
     if (user.trackId === 'health') {
-      const count = await env.DB.prepare(
-        'SELECT COUNT(*) AS total FROM checkins WHERE user_id=?1'
-      ).bind(user.id).first();
-      const records = await env.DB.prepare(
-        `SELECT c.id,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
-                c.submitted_at AS submittedAt,c.review_note AS reviewNote
-           FROM checkins c WHERE c.user_id=?1
-          ORDER BY c.checkin_date DESC,c.submitted_at DESC LIMIT ?2 OFFSET ?3`
-      ).bind(user.id, limit, offset).all();
-      for (const record of records.results) {
+      const [count, records] = await Promise.all([
+        env.DB.prepare(
+          'SELECT COUNT(*) AS total FROM checkins WHERE user_id=?1'
+        ).bind(user.id).first(),
+        env.DB.prepare(
+          `SELECT c.id,c.checkin_date AS date,c.slot_id AS slotId,c.note,c.status,
+                  c.submitted_at AS submittedAt,c.review_note AS reviewNote
+             FROM checkins c WHERE c.user_id=?1
+            ORDER BY c.checkin_date DESC,c.submitted_at DESC LIMIT ?2 OFFSET ?3`
+        ).bind(user.id, limit, offset).all()
+      ]);
+      const recordIds = records.results.map((record) => record.id);
+      let fileRows = [];
+      if (recordIds.length) {
+        const recordPlaceholders = recordIds.map((_, index) => `?${index + 1}`).join(',');
         const files = await env.DB.prepare(
-          `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,f.kind,m.id AS mediaId,
+          `SELECT f.id,f.checkin_id AS checkinId,
+                  COALESCE(m.object_key,f.object_key) AS objectKey,
+                  f.kind,f.sort_order AS sortOrder,m.id AS mediaId,
                   tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
              FROM checkin_files f
              LEFT JOIN media_objects m ON m.id=f.id
              LEFT JOIN media_objects tm ON tm.business_id=m.id
               AND tm.business_type IN ('meal-checkin:thumb','admin-makeup:thumb')
-             WHERE f.checkin_id=?1 ORDER BY f.sort_order`
-        ).bind(record.id).all();
-        record.images = [];
-        for (const file of files.results.filter((item) => item.kind === 'photo')) {
+            WHERE f.checkin_id IN (${recordPlaceholders})
+            ORDER BY f.checkin_id,f.sort_order`
+        ).bind(...recordIds).all();
+        fileRows = files.results.filter((item) => item.kind === 'photo');
+      }
+      const signedFiles = await mapWithConcurrency(fileRows, 6, async (file) => {
           const displayUrl = file.mediaId
             ? await createPrivateMediaUrl(env, file, 'owner', user.id)
             : `/api/files/${file.id}`;
@@ -233,33 +226,42 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
               objectKey: file.thumbObjectKey
             }, 'owner', user.id)
             : displayUrl;
-          record.images.push({ thumbUrl, displayUrl, imageUrl: thumbUrl });
-        }
+          return { ...file, thumbUrl, displayUrl, imageUrl: thumbUrl };
+      });
+      const imagesByCheckin = new Map();
+      for (const image of signedFiles) {
+        if (!imagesByCheckin.has(image.checkinId)) imagesByCheckin.set(image.checkinId, []);
+        imagesByCheckin.get(image.checkinId).push(image);
       }
+      for (const record of records.results) record.images = imagesByCheckin.get(record.id) || [];
+      const total = Number(count.total);
       return json({
         trackId: user.trackId,
         page,
         limit,
-        total: Number(count.total),
+        total,
+        hasMore: offset + records.results.length < total,
         records: records.results
       });
     }
 
-    const count = await env.DB.prepare(
-      'SELECT COUNT(*) AS total FROM member_checkins WHERE user_id=?1'
-    ).bind(user.id).first();
-    const records = await env.DB.prepare(
-      `SELECT mc.id,mc.occurrence_date AS date,mc.status,mc.submitted_at AS submittedAt,
-               t.name AS taskName,m.id AS mediaId,COALESCE(m.object_key,mc.object_key) AS objectKey,
-               tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
-         FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
-         LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
-         LEFT JOIN media_objects tm ON tm.business_id=m.id
-          AND tm.business_type IN ('member-checkin:thumb','admin-makeup:thumb')
-        WHERE mc.user_id=?1 ORDER BY mc.occurrence_date DESC,mc.submitted_at DESC
-        LIMIT ?2 OFFSET ?3`
-    ).bind(user.id, limit, offset).all();
-    for (const record of records.results) {
+    const [count, records] = await Promise.all([
+      env.DB.prepare(
+        'SELECT COUNT(*) AS total FROM member_checkins WHERE user_id=?1'
+      ).bind(user.id).first(),
+      env.DB.prepare(
+        `SELECT mc.id,mc.occurrence_date AS date,mc.status,mc.submitted_at AS submittedAt,
+                 t.name AS taskName,m.id AS mediaId,COALESCE(m.object_key,mc.object_key) AS objectKey,
+                 tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey
+           FROM member_checkins mc JOIN tasks t ON t.id=mc.task_id
+           LEFT JOIN media_objects m ON m.business_id=mc.id AND m.business_type='member-checkin'
+           LEFT JOIN media_objects tm ON tm.business_id=m.id
+            AND tm.business_type IN ('member-checkin:thumb','admin-makeup:thumb')
+          WHERE mc.user_id=?1 ORDER BY mc.occurrence_date DESC,mc.submitted_at DESC
+          LIMIT ?2 OFFSET ?3`
+      ).bind(user.id, limit, offset).all()
+    ]);
+    records.results = await mapWithConcurrency(records.results, 6, async (record) => {
       const displayUrl = record.objectKey
         ? (record.mediaId
           ? await createPrivateMediaUrl(env, record, 'owner', user.id)
@@ -272,12 +274,15 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
         }, 'owner', user.id)
         : displayUrl;
       record.images = displayUrl ? [{ thumbUrl, displayUrl, imageUrl: thumbUrl }] : [];
-    }
+      return record;
+    });
+    const total = Number(count.total);
     return json({
       trackId: user.trackId,
       page,
       limit,
-      total: Number(count.total),
+      total,
+      hasMore: offset + records.results.length < total,
       records: records.results
     });
   }
@@ -505,20 +510,35 @@ export const handleStudentRoutes = async (request, env, ctx, url) => {
               review_note AS reviewNote,version
          FROM checkins WHERE user_id=?1 AND checkin_date=?2 ORDER BY submitted_at`
     ).bind(user.id, date).all();
-    for (const item of results) {
+    const checkinIds = results.map((item) => item.id);
+    let fileRows = [];
+    if (checkinIds.length) {
+      const checkinPlaceholders = checkinIds.map((_, index) => `?${index + 1}`).join(',');
       const files = await env.DB.prepare(
-        `SELECT f.id,COALESCE(m.object_key,f.object_key) AS objectKey,
+        `SELECT f.id,f.checkin_id AS checkinId,
+                COALESCE(m.object_key,f.object_key) AS objectKey,
                 f.kind,f.sort_order AS sortOrder,m.id AS mediaId
            FROM checkin_files f LEFT JOIN media_objects m ON m.id=f.id
-          WHERE f.checkin_id=?1 ORDER BY f.kind,f.sort_order`
-      ).bind(item.id).all();
-      for (const file of files.results) {
-        file.imageUrl = file.mediaId
+          WHERE f.checkin_id IN (${checkinPlaceholders})
+          ORDER BY f.checkin_id,f.kind,f.sort_order`
+      ).bind(...checkinIds).all();
+      fileRows = files.results;
+    }
+    const signedFiles = await mapWithConcurrency(fileRows, 6, async (file) => ({
+      ...file,
+      imageUrl: file.mediaId
           ? await createPrivateMediaUrl(env, file, user.role === 'admin' ? 'admin' : 'owner', user.id)
-          : `/api/files/${file.id}`;
-      }
-      item.photos = files.results.filter((file) => file.kind === 'photo').map((file) => file.imageUrl);
-      item.summary = files.results.find((file) => file.kind === 'summary')?.imageUrl || null;
+          : `/api/files/${file.id}`
+    }));
+    const filesByCheckin = new Map();
+    for (const file of signedFiles) {
+      if (!filesByCheckin.has(file.checkinId)) filesByCheckin.set(file.checkinId, []);
+      filesByCheckin.get(file.checkinId).push(file);
+    }
+    for (const item of results) {
+      const files = filesByCheckin.get(item.id) || [];
+      item.photos = files.filter((file) => file.kind === 'photo').map((file) => file.imageUrl);
+      item.summary = files.find((file) => file.kind === 'summary')?.imageUrl || null;
     }
     return json({ checkins: results });
   }

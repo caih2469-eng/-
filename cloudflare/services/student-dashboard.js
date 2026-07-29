@@ -8,6 +8,40 @@ import {
 } from '../lib/runtime.js';
 import { createPrivateMediaUrl } from '../lib/media-signing.js';
 
+const QUERY_CHUNK_SIZE = 80;
+const SIGN_CONCURRENCY = 6;
+
+const unique = (values) => [...new Set(values.filter(Boolean))];
+const chunks = (values, size = QUERY_CHUNK_SIZE) => {
+  const result = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+};
+const placeholders = (count, start = 1) => Array.from(
+  { length: count },
+  (_, index) => `?${start + index}`
+).join(',');
+
+export const mapWithConcurrency = async (items, concurrency, mapper) => {
+  if (!items.length) return [];
+  const output = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      output[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    () => worker()
+  ));
+  return output;
+};
+
 export const teamForUser = (env, userId) => env.DB.prepare(
   `SELECT t.id, t.name, t.invite_code AS inviteCode, t.member_limit AS memberLimit,
           t.captain_user_id AS captainId, t.created_at AS createdAt
@@ -65,19 +99,14 @@ export const submissionOwner = async (env, user, task) => {
 };
 
 export const submissionImages = async (env, submissionId, viewer) => {
-  const { results } = await env.DB.prepare(
-    `SELECT i.id,COALESCE(m.object_key,i.object_key) AS objectKey,
-            i.content_type AS contentType,i.bytes,
-            i.sort_order AS sortOrder,m.id AS mediaId,
-            tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey,
-            tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
-       FROM task_submission_images i
-       LEFT JOIN media_objects m ON m.id=i.id
-       LEFT JOIN media_objects tm ON tm.business_id=m.id
-        AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
-      WHERE i.submission_id=?1 ORDER BY i.sort_order`
-  ).bind(submissionId).all();
-  return Promise.all(results.map(async (item) => {
+  const grouped = await submissionImagesForIds(env, [submissionId], viewer);
+  return grouped.get(submissionId) || [];
+};
+
+const signSubmissionImageRows = async (env, rows, viewer) => mapWithConcurrency(
+  rows,
+  SIGN_CONCURRENCY,
+  async (item) => {
     const audience = viewer.role === 'admin' ? 'admin' : 'owner';
     const displayUrl = item.mediaId
       ? await createPrivateMediaUrl(env, item, audience, viewer.id)
@@ -89,7 +118,37 @@ export const submissionImages = async (env, submissionId, viewer) => {
       }, audience, viewer.id)
       : displayUrl;
     return { ...item, thumbUrl, displayUrl, imageUrl: thumbUrl, url: thumbUrl };
-  }));
+  }
+);
+
+export const submissionImagesForIds = async (env, submissionIds, viewer) => {
+  const ids = unique(submissionIds);
+  const grouped = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return grouped;
+  const imageRows = [];
+  for (const idChunk of chunks(ids)) {
+    const { results } = await env.DB.prepare(
+      `SELECT i.id,i.submission_id AS submissionId,
+              COALESCE(m.object_key,i.object_key) AS objectKey,
+              i.content_type AS contentType,i.bytes,
+              i.sort_order AS sortOrder,m.id AS mediaId,
+              tm.id AS thumbMediaId,tm.object_key AS thumbObjectKey,
+              tm.mime_type AS thumbContentType,tm.file_size AS thumbBytes
+         FROM task_submission_images i
+         LEFT JOIN media_objects m ON m.id=i.id
+         LEFT JOIN media_objects tm ON tm.business_id=m.id
+          AND tm.business_type IN ('task:thumb','admin-makeup:thumb')
+        WHERE i.submission_id IN (${placeholders(idChunk.length)})
+        ORDER BY i.submission_id,i.sort_order`
+    ).bind(...idChunk).all();
+    imageRows.push(...results);
+  }
+  const signed = await signSubmissionImageRows(env, imageRows, viewer);
+  for (const image of signed) {
+    if (!grouped.has(image.submissionId)) grouped.set(image.submissionId, []);
+    grouped.get(image.submissionId).push(image);
+  }
+  return grouped;
 };
 
 export const buildStudentTasks = async (env, user, options = {}) => {
@@ -110,41 +169,120 @@ export const buildStudentTasks = async (env, user, options = {}) => {
        FROM tasks WHERE status='published' AND (?1='admin' OR track_id=?2)
       ORDER BY starts_at DESC LIMIT 100`
   ).bind(user.role, user.trackId || '').all();
-  const tasks = [];
   const today = options.date || shanghaiDate();
   const makeupAllowed = user.role === 'student'
     ? await hasMakeupPermission(env, user.id, today) : false;
-  for (const task of results) {
-    if (task.scheduleJson && !isTaskOccurrence(task, today)) continue;
-    const owner = user.role === 'admin' ? null : await submissionOwner(env, user, task).catch(() => null);
+  const visibleTasks = results.filter(
+    (task) => !task.scheduleJson || isTaskOccurrence(task, today)
+  );
+  const needsTeam = user.role === 'student' && visibleTasks.some(
+    (task) => task.submissionType === 'team' || task.trackId === 'interaction'
+  );
+  const team = needsTeam ? await teamForUser(env, user.id) : null;
+  const members = team ? await membersForTeam(env, team.id) : [];
+  const taskIds = unique(visibleTasks.map((task) => task.id));
+  const occurrenceDates = unique(visibleTasks.map(
+    (task) => (task.scheduleJson ? today : '')
+  ));
+  if (!occurrenceDates.includes('')) occurrenceDates.push('');
+
+  const ownerPairs = [];
+  if (user.role === 'student') {
+    if (visibleTasks.some((task) => task.submissionType !== 'team' && task.trackId !== 'interaction')) {
+      ownerPairs.push({ type: 'user', id: user.id });
+    }
+    if (team) ownerPairs.push({ type: 'team', id: team.id });
+  }
+
+  const submissions = [];
+  if (taskIds.length && ownerPairs.length) {
+    for (const taskChunk of chunks(taskIds, 70)) {
+      const values = [...taskChunk, ...occurrenceDates];
+      const taskIn = placeholders(taskChunk.length);
+      const occurrenceIn = placeholders(occurrenceDates.length, taskChunk.length + 1);
+      const ownerStart = taskChunk.length + occurrenceDates.length + 1;
+      const ownerSql = ownerPairs.map((owner, index) => {
+        const parameter = ownerStart + (index * 2);
+        values.push(owner.type, owner.id);
+        return `(owner_type=?${parameter} AND owner_id=?${parameter + 1})`;
+      }).join(' OR ');
+      const page = await env.DB.prepare(
+        `SELECT id,task_id AS taskId,owner_type AS ownerType,owner_id AS ownerId,
+                copy_text AS copy,plaza_copy AS plazaCopy,meal_type AS mealType,
+                is_public AS isPublic,status,version,occurrence_date AS occurrenceDate,
+                submitted_at AS submittedAt,review_note AS reviewNote
+           FROM task_submissions
+          WHERE task_id IN (${taskIn})
+            AND occurrence_date IN (${occurrenceIn})
+            AND (${ownerSql})`
+      ).bind(...values).all();
+      submissions.push(...page.results);
+    }
+  }
+  const imagesBySubmission = await submissionImagesForIds(
+    env,
+    submissions.map((submission) => submission.id),
+    user
+  );
+  const submissionsByOwnerTask = new Map();
+  for (const submission of submissions) {
+    submission.images = imagesBySubmission.get(submission.id) || [];
+    submissionsByOwnerTask.set(
+      `${submission.taskId}|${submission.ownerType}|${submission.ownerId}|${submission.occurrenceDate}`,
+      submission
+    );
+  }
+
+  const checkins = [];
+  if (team && taskIds.length) {
+    for (const taskChunk of chunks(taskIds, 75)) {
+      const taskIn = placeholders(taskChunk.length, 2);
+      const occurrenceStart = taskChunk.length + 2;
+      const occurrenceIn = placeholders(occurrenceDates.length, occurrenceStart);
+      const page = await env.DB.prepare(
+        `SELECT user_id AS userId,id,task_id AS taskId,occurrence_date AS occurrenceDate
+           FROM member_checkins
+          WHERE team_id=?1 AND task_id IN (${taskIn})
+            AND occurrence_date IN (${occurrenceIn})`
+      ).bind(team.id, ...taskChunk, ...occurrenceDates).all();
+      checkins.push(...page.results);
+    }
+  }
+  const checkinsByTask = new Map();
+  for (const checkin of checkins) {
+    const key = `${checkin.taskId}|${checkin.occurrenceDate}`;
+    if (!checkinsByTask.has(key)) checkinsByTask.set(key, []);
+    checkinsByTask.get(key).push(checkin);
+  }
+
+  const tasks = [];
+  for (const task of visibleTasks) {
+    const usesTeam = task.submissionType === 'team' || task.trackId === 'interaction';
+    const owner = user.role === 'admin'
+      ? null
+      : (usesTeam
+        ? (team ? { type: 'team', id: team.id, team } : null)
+        : { type: 'user', id: user.id, team: null });
     const occurrenceDate = task.scheduleJson ? today : '';
-    const submission = owner ? await env.DB.prepare(
-      `SELECT id,copy_text AS copy,plaza_copy AS plazaCopy,meal_type AS mealType,
-              is_public AS isPublic,status,version,occurrence_date AS occurrenceDate,
-              submitted_at AS submittedAt,review_note AS reviewNote
-         FROM task_submissions
-        WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3 AND occurrence_date=?4 LIMIT 1`
-    ).bind(task.id, owner.type, owner.id, occurrenceDate).first() : null;
-    if (submission) submission.images = await submissionImages(env, submission.id, user);
+    const submission = owner
+      ? submissionsByOwnerTask.get(`${task.id}|${owner.type}|${owner.id}|${occurrenceDate}`) || null
+      : null;
     const schedule = task.scheduleJson ? parseJson(task.scheduleJson, {}) : {};
     let teamProgress = null;
     let memberCheckin = null;
     let isCaptain = false;
     if (owner?.team) {
-      const members = await membersForTeam(env, owner.team.id);
-      const checkins = await env.DB.prepare(
-        `SELECT user_id AS userId,id FROM member_checkins
-          WHERE team_id=?1 AND task_id=?2 AND occurrence_date=?3`
-      ).bind(owner.team.id, task.id, occurrenceDate).all();
+      const taskCheckins = checkinsByTask.get(`${task.id}|${occurrenceDate}`) || [];
+      const completedUserIds = new Set(taskCheckins.map((item) => item.userId));
       teamProgress = {
         total: members.length,
-        completed: checkins.results.length,
+        completed: taskCheckins.length,
         members: members.map((member) => ({
           ...member,
-          checked: checkins.results.some((item) => item.userId === member.id)
+          checked: completedUserIds.has(member.id)
         }))
       };
-      memberCheckin = checkins.results.find((item) => item.userId === user.id) || null;
+      memberCheckin = taskCheckins.find((item) => item.userId === user.id) || null;
       isCaptain = owner.team.captainId === user.id;
     }
     const canSubmit = user.role === 'student' && taskWindowOpen(task, occurrenceDate, makeupAllowed);
@@ -194,24 +332,59 @@ export const buildStudentMaterialTasks = async (env, user) => {
             file_limit AS fileLimit,require_summary AS requireSummary,owner_type AS ownerType,status
        FROM material_tasks WHERE status='published' ORDER BY deadline`
   ).all();
+  const taskIds = unique(results.map((task) => task.id));
+  const needsTeam = results.some((task) => task.ownerType === 'team');
+  const team = needsTeam ? await teamForUser(env, user.id) : null;
+  const ownerPairs = [{ type: 'user', id: user.id }];
+  if (team) ownerPairs.push({ type: 'team', id: team.id });
+  const submissions = [];
+  for (const taskChunk of chunks(taskIds, 70)) {
+    const values = [...taskChunk];
+    const ownerStart = taskChunk.length + 1;
+    const ownerSql = ownerPairs.map((owner, index) => {
+      const parameter = ownerStart + (index * 2);
+      values.push(owner.type, owner.id);
+      return `(owner_type=?${parameter} AND owner_id=?${parameter + 1})`;
+    }).join(' OR ');
+    const page = await env.DB.prepare(
+      `SELECT id,task_id AS taskId,owner_type AS ownerType,owner_id AS ownerId,
+              summary,status,version,submitted_at AS submittedAt,
+              review_note AS reviewNote,updated_at AS updatedAt
+         FROM material_submissions
+        WHERE task_id IN (${placeholders(taskChunk.length)}) AND (${ownerSql})`
+    ).bind(...values).all();
+    submissions.push(...page.results);
+  }
+  const filesBySubmission = new Map();
+  for (const idChunk of chunks(submissions.map((submission) => submission.id))) {
+    const files = await env.DB.prepare(
+      `SELECT id,submission_id AS submissionId,original_name AS originalName,
+              content_type AS contentType,bytes
+         FROM material_files
+        WHERE submission_id IN (${placeholders(idChunk.length)})
+        ORDER BY submission_id,created_at`
+    ).bind(...idChunk).all();
+    for (const file of files.results) {
+      if (!filesBySubmission.has(file.submissionId)) filesBySubmission.set(file.submissionId, []);
+      filesBySubmission.get(file.submissionId).push(file);
+    }
+  }
+  const submissionsByOwnerTask = new Map();
+  for (const submission of submissions) {
+    submission.files = materialFilePayload(filesBySubmission.get(submission.id) || []);
+    submissionsByOwnerTask.set(
+      `${submission.taskId}|${submission.ownerType}|${submission.ownerId}`,
+      submission
+    );
+  }
   const tasks = [];
   for (const task of results) {
-    let owner = { type: 'user', id: user.id };
-    if (task.ownerType === 'team') {
-      const team = await teamForUser(env, user.id);
-      owner = team ? { type: 'team', id: team.id } : null;
-    }
-    const submission = owner ? await env.DB.prepare(
-      `SELECT id,summary,status,version,submitted_at AS submittedAt,review_note AS reviewNote,updated_at AS updatedAt
-         FROM material_submissions WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3 LIMIT 1`
-    ).bind(task.id, owner.type, owner.id).first() : null;
-    if (submission) {
-      const files = await env.DB.prepare(
-        `SELECT id,original_name AS originalName,content_type AS contentType,bytes
-           FROM material_files WHERE submission_id=?1 ORDER BY created_at`
-      ).bind(submission.id).all();
-      submission.files = materialFilePayload(files.results);
-    }
+    const owner = task.ownerType === 'team'
+      ? (team ? { type: 'team', id: team.id } : null)
+      : { type: 'user', id: user.id };
+    const submission = owner
+      ? submissionsByOwnerTask.get(`${task.id}|${owner.type}|${owner.id}`) || null
+      : null;
     const allowedTypes = parseJson(task.allowedTypesJson, []);
     tasks.push({
       ...task,
