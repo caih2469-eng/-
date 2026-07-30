@@ -53,6 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
+      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -94,6 +95,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
+      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
