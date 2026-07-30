@@ -65,10 +65,10 @@
       window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
-      loadStylesheet('/style.css?v=20260730-admin-refactor1');
-      loadStylesheet('/admin-dashboard-refactor.css?v=20260730-admin-refactor1');
-      await loadScript('/site-path.js?v=20260730-admin-refactor1');
-      await loadScript('/app.js?v=20260730-admin-refactor1');
+      loadStylesheet('/style.css?v=20260730-plaza640');
+      loadStylesheet('/admin-dashboard-refactor.css?v=20260730-plaza640');
+      await loadScript('/site-path.js?v=20260730-plaza640');
+      await loadScript('/app.js?v=20260730-plaza640');
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });
