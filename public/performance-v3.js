@@ -2,7 +2,14 @@
   const nativeFetch = window.fetch.bind(window);
   const BOOKMARK_KEY = 'd1Bookmark';
   const SKIPPED_THUMB_PREFIX = '/__local/performance-v3/thumb/';
+  const SKIP_THUMB_BUSINESS_TYPES = new Set([
+    'meal-checkin',
+    'material-image',
+    'member-checkin'
+  ]);
   const skippedThumbIntents = new Set();
+  const displayIntentBusiness = new Map();
+  let pendingSkippedThumbCompression = 0;
 
   const readBookmark = () => {
     try { return sessionStorage.getItem(BOOKMARK_KEY) || ''; } catch { return ''; }
@@ -29,14 +36,51 @@
     }
     return '';
   };
+  const readJsonBody = async (input, init) => {
+    try { return JSON.parse(await requestBodyText(input, init)); } catch { return null; }
+  };
 
-  const localThumbResponse = async (input, init, url, method) => {
+  const installCompressionHook = () => {
+    let original = window.imageCompression;
+    let wrapped = null;
+    const wrap = (compressor) => {
+      if (typeof compressor !== 'function') return compressor;
+      if (wrapped?.__originalCompressor === compressor) return wrapped;
+      const next = async (file, options = {}) => {
+        const maxEdge = Number(options.maxWidthOrHeight || 0);
+        if (pendingSkippedThumbCompression > 0 && maxEdge > 0 && maxEdge <= 360) {
+          pendingSkippedThumbCompression -= 1;
+          try { options.onProgress?.(100); } catch {}
+          return file;
+        }
+        return compressor(file, options);
+      };
+      Object.defineProperty(next, '__originalCompressor', { value: compressor });
+      wrapped = next;
+      return wrapped;
+    };
+    try {
+      Object.defineProperty(window, 'imageCompression', {
+        configurable: true,
+        enumerable: true,
+        get: () => wrap(original),
+        set: (value) => {
+          original = value;
+          wrapped = null;
+        }
+      });
+    } catch {
+      if (typeof original === 'function') window.imageCompression = wrap(original);
+    }
+  };
+  installCompressionHook();
+
+  const localThumbResponse = async (input, init, url, method, payload = null) => {
     if (url.origin !== location.origin) return null;
     if (url.pathname === '/api/media/upload-intents' && method === 'POST') {
-      let payload;
-      try { payload = JSON.parse(await requestBodyText(input, init)); } catch { return null; }
-      const skip = payload?.variant === 'thumb'
-        && ['meal-checkin', 'material-image', 'member-checkin'].includes(payload?.businessType);
+      const body = payload || await readJsonBody(input, init);
+      const skip = body?.variant === 'thumb'
+        && SKIP_THUMB_BUSINESS_TYPES.has(body?.businessType);
       if (!skip) return null;
       const intentId = `local-thumb-${crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`}`;
       skippedThumbIntents.add(intentId);
@@ -51,11 +95,10 @@
     }
     const confirm = url.pathname.match(/^\/api\/media\/upload-intents\/(local-thumb-[^/]+)\/confirm$/);
     if (confirm && method === 'POST' && skippedThumbIntents.has(decodeURIComponent(confirm[1]))) {
-      let payload = {};
-      try { payload = JSON.parse(await requestBodyText(input, init)); } catch {}
+      const body = payload || await readJsonBody(input, init) || {};
       skippedThumbIntents.delete(decodeURIComponent(confirm[1]));
-      if (!payload.parentMediaId) return jsonResponse({ error: '缺少展示图编号' }, 400);
-      return jsonResponse({ media: { id: payload.parentMediaId }, skippedThumb: true });
+      if (!body.parentMediaId) return jsonResponse({ error: '缺少展示图编号' }, 400);
+      return jsonResponse({ media: { id: body.parentMediaId }, skippedThumb: true });
     }
     return null;
   };
@@ -63,7 +106,17 @@
   window.fetch = async (input, init = {}) => {
     const url = requestUrl(input);
     const method = requestMethod(input, init);
-    const local = url ? await localThumbResponse(input, init, url, method) : null;
+    const isIntentRequest = url?.origin === location.origin
+      && url.pathname === '/api/media/upload-intents'
+      && method === 'POST';
+    const isIntentConfirm = url?.origin === location.origin
+      && /^\/api\/media\/upload-intents\/[^/]+\/confirm$/.test(url.pathname)
+      && method === 'POST';
+    const payload = isIntentRequest || isIntentConfirm
+      ? await readJsonBody(input, init)
+      : null;
+
+    const local = url ? await localThumbResponse(input, init, url, method, payload) : null;
     if (local) return local;
 
     let requestInput = input;
@@ -84,6 +137,21 @@
 
     const response = await nativeFetch(requestInput, requestInit);
     if (url?.origin === location.origin) rememberBookmark(response.headers.get('x-d1-bookmark'));
+
+    if (response.ok && isIntentRequest && payload?.variant === 'display'
+        && SKIP_THUMB_BUSINESS_TYPES.has(payload?.businessType)) {
+      try {
+        const result = await response.clone().json();
+        if (result?.intentId) displayIntentBusiness.set(result.intentId, payload.businessType);
+      } catch {}
+    }
+    if (response.ok && isIntentConfirm) {
+      const intentId = decodeURIComponent(url.pathname.split('/').at(-2) || '');
+      if (displayIntentBusiness.has(intentId)) {
+        displayIntentBusiness.delete(intentId);
+        pendingSkippedThumbCompression += 1;
+      }
+    }
     return response;
   };
 
