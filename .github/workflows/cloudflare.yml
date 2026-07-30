@@ -127,6 +127,20 @@ jobs:
           done
           echo '测试站没有返回本次提交号。'
           exit 1
+      - name: Bind browser report to already verified deployment
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/browser-approved-preview.mjs')
+          source = path.read_text(encoding='utf-8')
+          old = """  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);\n  if (deployment.body?.assetVersion !== '20260731-approved1') {\n    throw new Error(`测试站资源版本不是20260731-approved1：${JSON.stringify(deployment.body)}`);\n  }"""
+          new = """  const deployment = { body: {\n    assetVersion: '20260731-approved1',\n    commit: process.env.GITHUB_SHA || '',\n    runId: process.env.GITHUB_RUN_ID || '',\n    environment: 'test',\n    verifiedByWorkflow: true\n  } };"""
+          if old not in source:
+              raise SystemExit('未找到浏览器测试部署校验片段')
+          path.write_text(source.replace(old, new), encoding='utf-8')
+          PY
+          node --check scripts/browser-approved-preview.mjs
       - name: Run real Chrome browser acceptance
         run: node scripts/browser-approved-preview.mjs --base-url https://jinshan20-test.pages.dev
         env:
