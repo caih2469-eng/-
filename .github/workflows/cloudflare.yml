@@ -50,7 +50,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: cloudflare-test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
