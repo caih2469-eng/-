@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 
-export const MAX_THUMB_EDGE = 360;
-export const MAX_THUMB_BYTES = 120 * 1024;
+export const MAX_THUMB_EDGE = 640;
+export const MIN_THUMB_EDGE = 600;
+export const MAX_THUMB_BYTES = 180 * 1024;
 
 const TARGETS = Object.freeze({
   test: Object.freeze({
@@ -181,6 +182,7 @@ export const runThumbnailAudit = async (options, adapters = {}) => {
         thumbNotWebP: 0,
         thumbTooLarge: 0,
         thumbEdgeTooLong: 0,
+        thumbEdgeTooShort: 0,
         originalObjectMissing: 0,
         displayObjectMissing: 0,
         invalidObjectKey: 0
@@ -239,7 +241,7 @@ export const runThumbnailAudit = async (options, adapters = {}) => {
         pushIssue(item, 'originalObjectMissing', { reason: 'missing-d1-key' });
       } else if (validateObjectKey(row.original_key, options.environment)) {
         const original = await inspectObject(row.original_key);
-        item.original.exists = original.exists;
+        item.original = { ...item.original, ...original };
         if (!original.exists) pushIssue(item, 'originalObjectMissing', { key: row.original_key });
       }
 
@@ -247,7 +249,7 @@ export const runThumbnailAudit = async (options, adapters = {}) => {
         pushIssue(item, 'displayObjectMissing', { reason: 'missing-d1-record' });
       } else if (validateObjectKey(row.display_key, options.environment)) {
         const display = await inspectObject(row.display_key);
-        item.display.exists = display.exists;
+        item.display = { ...item.display, ...display };
         if (!display.exists) pushIssue(item, 'displayObjectMissing', { key: row.display_key });
       }
 
@@ -272,6 +274,17 @@ export const runThumbnailAudit = async (options, adapters = {}) => {
             pushIssue(item, 'thumbEdgeTooLong', {
               actualLongestEdge: thumb.longestEdge,
               maximumEdge: MAX_THUMB_EDGE
+            });
+          }
+          const sourceLongestEdge = Math.max(
+            Number(item.display.longestEdge || 0),
+            Number(item.original.longestEdge || 0)
+          );
+          if (sourceLongestEdge >= MIN_THUMB_EDGE && thumb.longestEdge < MIN_THUMB_EDGE) {
+            pushIssue(item, 'thumbEdgeTooShort', {
+              actualLongestEdge: thumb.longestEdge,
+              minimumEdge: MIN_THUMB_EDGE,
+              sourceLongestEdge
             });
           }
         }
