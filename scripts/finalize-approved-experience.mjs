@@ -45,4 +45,25 @@ const write = (file, source) => fs.writeFileSync(file, source, 'utf8');
   }
 }
 
-console.log('Finalized approved 640px media imports and check-in settings compatibility.');
+{
+  const { file, source } = read('public/app.js');
+  if (!source.includes(marker)) {
+    const next = marker + '\n' + source
+      .replaceAll('正在生成540px WebP缩略图', '正在生成640px WebP缩略图')
+      .replaceAll('生成540px WebP缩略图', '生成640px WebP缩略图')
+      .replace(/const MEDIA_THUMB_MAX_EDGE = (?:360|540|640);/, 'const MEDIA_THUMB_MAX_EDGE = 640;');
+    write(file, next);
+  }
+}
+
+for (const relativePath of ['test/member-checkin-fast.test.js', 'test/mobile-admin-photo-fix.test.js']) {
+  const { file, source } = read(relativePath);
+  const next = source
+    .replaceAll('540px WebP缩略图', '640px WebP缩略图')
+    .replaceAll('最长边540px', '最长边640px')
+    .replace(/MEDIA_THUMB_MAX_EDGE = (?:360|540|640)/g, 'MEDIA_THUMB_MAX_EDGE = 640')
+    .replace(/THUMB_MAX_EDGE = (?:360|540|640)/g, 'THUMB_MAX_EDGE = 640');
+  if (next !== source) write(file, next);
+}
+
+console.log('Finalized approved 640px media imports, labels, tests and check-in settings compatibility.');
