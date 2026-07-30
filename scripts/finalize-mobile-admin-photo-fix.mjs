@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const version = '20260730-adminphoto2';
+const version = '20260731-approved1';
 
 const readRequired = (relative) => {
   const file = path.join(root, relative);
@@ -22,7 +22,7 @@ const replaceOnce = (source, search, replacement, label) => {
 
 {
   const { file, source } = readRequired('scripts/apply-admin-dashboard-refactor.mjs');
-  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
+  const next = source.replace(/202607(?:30-(?:flow2|adminphoto1|adminphoto2)|31-approved1)/g, version);
   if (!next.includes(version)) throw new Error('后台补丁缓存版本更新失败');
   writeIfChanged(file, source, next);
 }
@@ -47,7 +47,7 @@ const replaceOnce = (source, search, replacement, label) => {
     ].join('\n');
     const newMarkup = [
       '          <span class="image-shell"><img ${imageIndex === 0 ? `src="${escapeHtml(thumbUrl)}"` : `data-src="${escapeHtml(thumbUrl)}"`} loading="${imageIndex === 0 ? \'eager\' : \'lazy\'}"',
-      '            fetchpriority="${imageIndex === 0 ? \'high\' : \'low\'}" decoding="async" width="540" height="405" alt="打卡照片"'
+      '            fetchpriority="${imageIndex === 0 ? \'high\' : \'low\'}" decoding="async" width="640" height="480" alt="打卡照片"'
     ].join('\n');
     next = replaceOnce(next, oldMarkup, newMarkup, '首张管理员缩略图优先加载标记');
   }
@@ -55,12 +55,13 @@ const replaceOnce = (source, search, replacement, label) => {
   if (!next.includes(prioritizedMarker)) {
     throw new Error('首张管理员缩略图优先加载补丁失败');
   }
+  next = next.replace(/width="540" height="405"/g, 'width="640" height="480"');
   writeIfChanged(file, source, next);
 }
 
 {
   const { file, source } = readRequired('public/bootstrap.js');
-  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
+  const next = source.replace(/202607(?:30-(?:flow2|adminphoto1|adminphoto2)|31-approved1)/g, version);
   if (!next.includes(version)) throw new Error('启动资源缓存版本更新失败');
   writeIfChanged(file, source, next);
 }
@@ -81,14 +82,14 @@ const replaceOnce = (source, search, replacement, label) => {
 
 {
   const { file, source } = readRequired('test/admin-dashboard-refactor.test.js');
-  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
+  const next = source.replace(/202607(?:30-(?:flow2|adminphoto1|adminphoto2)|31-approved1)/g, version);
   writeIfChanged(file, source, next);
 }
 
 {
   const { file, source } = readRequired('test/stage-g-observability-assets.test.js');
   const next = source.replace(
-    /const expectedVersion = '20260730-(?:flow2|adminphoto1|adminphoto2)';/,
+    /const expectedVersion = '202607(?:30-(?:flow2|adminphoto1|adminphoto2)|31-approved1)';/,
     `const expectedVersion = '${version}';`
   );
   writeIfChanged(file, source, next);
@@ -97,15 +98,15 @@ const replaceOnce = (source, search, replacement, label) => {
 {
   const { file, source } = readRequired('test/production-media-login-performance.test.js');
   const next = source
-    .replace(/MEDIA_THUMB_MAX_EDGE = (?:360|540)/g, 'MEDIA_THUMB_MAX_EDGE = 540')
+    .replace(/MEDIA_THUMB_MAX_EDGE = (?:360|540|640)/g, 'MEDIA_THUMB_MAX_EDGE = 640')
     .replaceAll('MEDIA_THUMB_QUALITY = 0\\.72', 'MEDIA_THUMB_QUALITY = 0\\.82')
-    .replace(/THUMB_MAX_EDGE = (?:360|540)/g, 'THUMB_MAX_EDGE = 540');
+    .replace(/THUMB_MAX_EDGE = (?:360|540|640)/g, 'THUMB_MAX_EDGE = 640');
   writeIfChanged(file, source, next);
 }
 
 {
   const { file, source } = readRequired('test/member-checkin-fast.test.js');
-  const replacement = `test('单人打卡展示图使用fast接口并生成540px WebP缩略图', () => {
+  const replacement = `test('单人打卡展示图使用fast接口并生成640px WebP缩略图', () => {
   const app = fs.readFileSync('public/app.js', 'utf8');
   const memberBody = app.match(
     /function memberCheckinForm\\(task\\) \\{([\\s\\S]*?)\\r?\\n\\}\\r?\\n\\r?\\nfunction materialSubmissionForm/
@@ -118,16 +119,16 @@ const replaceOnce = (source, search, replacement, label) => {
   assert.match(memberBody, /const mediaIds = session\\?\\.items/);
   assert.doesNotMatch(memberBody, /readFiles/);
   assert.match(app, /const MEMBER_FAST_MAX_BYTES = 307_200/);
-  assert.match(app, /const MEDIA_THUMB_MAX_EDGE = 540/);
+  assert.match(app, /const MEDIA_THUMB_MAX_EDGE = 640/);
   assert.match(app, /const MEDIA_THUMB_QUALITY = 0\\.82/);
   assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.76, maxSizeMB: 0\\.25 \\}/);
   assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.70, maxSizeMB: 0\\.30 \\}/);
   assert.match(app, /\\{ maxWidthOrHeight: 800, initialQuality: 0\\.68, maxSizeMB: 0\\.30 \\}/);
   assert.match(app, /图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。/);
 });`;
-  const pattern = /test\('单人打卡前端只使用fast接口、最多三轮压缩且不生成缩略图',[\s\S]*?\n\}\);/;
+  const pattern = /test\('单人打卡(?:前端只使用fast接口、最多三轮压缩且不生成缩略图|展示图使用fast接口并生成(?:540|640)px WebP缩略图)',[\s\S]*?\n\}\);/;
   const next = pattern.test(source) ? source.replace(pattern, replacement) : source;
-  if (!next.includes("test('单人打卡展示图使用fast接口并生成540px WebP缩略图'")) {
+  if (!next.includes("test('单人打卡展示图使用fast接口并生成640px WebP缩略图'")) {
     throw new Error('单人打卡测试标准更新失败');
   }
   writeIfChanged(file, source, next);
@@ -136,7 +137,7 @@ const replaceOnce = (source, search, replacement, label) => {
 {
   const { file, source } = readRequired('test/mobile-admin-photo-fix.test.js');
   const anchor = "  assert.doesNotMatch(drawer, /new Image\\(\\)/);";
-  const addition = `${anchor}\n  assert.match(drawer, /imageIndex === 0/);\n  assert.match(drawer, /loading=\"\\$\\{imageIndex === 0 \\? 'eager' : 'lazy'\\}\"/);\n  assert.match(drawer, /fetchpriority=\"\\$\\{imageIndex === 0 \\? 'high' : 'low'\\}\"/);`;
+  const addition = `${anchor}\n  assert.match(drawer, /imageIndex === 0/);\n  assert.match(drawer, /loading="\\$\\{imageIndex === 0 \\? 'eager' : 'lazy'\\}"/);\n  assert.match(drawer, /fetchpriority="\\$\\{imageIndex === 0 \\? 'high' : 'low'\\}"/);`;
   const next = source.includes('assert.match(drawer, /imageIndex === 0/);')
     ? source
     : source.replace(anchor, addition);
@@ -146,4 +147,4 @@ const replaceOnce = (source, search, replacement, label) => {
   writeIfChanged(file, source, next);
 }
 
-console.log('Finalized mobile admin photo asset versions, first-thumbnail priority and test expectations.');
+console.log('Finalized approved asset versions, first-thumbnail priority and test expectations.');
