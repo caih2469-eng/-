@@ -15,21 +15,22 @@ const sourceBetween = (start, end) => {
   return appSource.slice(startIndex, endIndex);
 };
 
-test('阶段E：广场和排行榜缓存仅存于页面内存并按用户隔离', () => {
+test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 20_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
-  assert.match(appSource, /const rankingViewCache = new Map\(\);/);
+  assert.match(appSource, /const adminCommentViewCache = new Map\(\);/);
+  assert.doesNotMatch(appSource, /const rankingViewCache = new Map\(\);/);
   assert.match(appSource, /const scopedCacheKey = \(\.\.\.parts\) => \[/);
   assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
   assert.match(appSource, /\]\.join\('\|'\);/);
   assert.match(appSource, /scopedCacheKey\('plaza', sort, page, month\)/);
-  assert.match(appSource, /scopedCacheKey\('ranking', period, currentKey\)/);
+  assert.match(appSource, /scopedCacheKey\('admin-comments', page\)/);
   const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
 });
 
 test('阶段E：打开广场详情并行加载，浏览计数不阻塞，关闭不重新请求列表', () => {
-  const block = sourceBetween('async function openPlazaPost', 'async function adminComments');
+  const block = sourceBetween('async function openPlazaPost', 'const renderAdminCommentsPage');
   assert.match(block, /Promise\.all\(\[detailPromise, commentsPromise\]\)/);
   assert.match(block, /void api\(`\/api\/plaza\/\$\{postId\}\/view`/);
   assert.doesNotMatch(block, /await api\(`\/api\/plaza\/\$\{postId\}\/view`/);
