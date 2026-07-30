@@ -1,4 +1,6 @@
 (() => {
+  const ASSET_VERSION = '20260730-perfv3';
+  const BOOKMARK_KEY = 'd1Bookmark';
   const perfEnabled = (() => {
     try {
       return new URLSearchParams(location.search).get('debugPerf') === '1'
@@ -19,10 +21,27 @@
     if (window.__PERF_METRICS__.length > 500) window.__PERF_METRICS__.shift();
     console.debug('[perf]', metric);
   };
+
   const bootstrapStarted = performance.now();
-  const loadScript = (src) => new Promise((resolve, reject) => {
+  const assetUrl = (pathname) => `${pathname}?v=${ASSET_VERSION}`;
+  const readBookmark = () => {
+    try { return sessionStorage.getItem(BOOKMARK_KEY) || ''; } catch { return ''; }
+  };
+  const rememberBookmark = (value) => {
+    if (!value) return;
+    try { sessionStorage.setItem(BOOKMARK_KEY, String(value).slice(0, 1024)); } catch {}
+  };
+  const preload = (pathname, as) => {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = as;
+    link.href = assetUrl(pathname);
+    document.head.appendChild(link);
+  };
+  const loadScript = (pathname) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = src;
+    script.src = assetUrl(pathname);
+    script.async = false;
     script.onload = resolve;
     script.onerror = reject;
     document.body.appendChild(script);
@@ -32,18 +51,39 @@
       '<section class="boot-shell"><div class="boot-error">网络连接失败，请检查网络后重试。<br><button type="button" id="bootRetry">重新加载</button></div></section>';
     document.querySelector('#bootRetry').onclick = () => location.reload();
   };
+
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = assetUrl('/style.css');
+  document.head.appendChild(stylesheet);
+  preload('/performance-v3.js', 'script');
+  preload('/site-path.js', 'script');
+  preload('/app.js', 'script');
+  const compressionPreload = document.createElement('link');
+  compressionPreload.rel = 'preload';
+  compressionPreload.as = 'script';
+  compressionPreload.href = '/vendor/browser-image-compression-2.0.2.js';
+  compressionPreload.dataset.compressionPreload = 'true';
+  document.head.appendChild(compressionPreload);
+
   const bootstrap = async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
       let storedToken = '';
       try { storedToken = localStorage.getItem('token') || ''; } catch {}
+      const bookmark = readBookmark();
       const response = await fetch('/api/session', {
         method: 'POST',
         credentials: 'same-origin',
-        headers: storedToken ? { authorization: `Bearer ${storedToken}` } : {},
+        cache: 'no-store',
+        headers: {
+          ...(storedToken ? { authorization: `Bearer ${storedToken}` } : {}),
+          ...(bookmark ? { 'x-d1-bookmark': bookmark } : {})
+        },
         signal: controller.signal
       });
+      rememberBookmark(response.headers.get('x-d1-bookmark'));
       if (response.status === 401 || response.status === 403) {
         location.replace('/entrance');
         return;
@@ -59,12 +99,12 @@
       window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
-      const stylesheet = document.createElement('link');
-      stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/style.css?v=20260730-plaza640';
-      document.head.appendChild(stylesheet);
-      await loadScript('/site-path.js?v=20260730-plaza640');
-      await loadScript('/app.js?v=20260730-plaza640');
+
+      await Promise.all([
+        loadScript('/performance-v3.js'),
+        loadScript('/site-path.js')
+      ]);
+      await loadScript('/app.js');
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });
