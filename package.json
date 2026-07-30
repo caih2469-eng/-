@@ -15,8 +15,8 @@
     "cleanup:member-checkin-fast": "node scripts/cleanup-staging-member-checkin-fast-load.mjs",
     "check:text": "node scripts/audit-text-encoding.mjs",
     "precheck": "node scripts/apply-admin-dashboard-refactor.mjs && node scripts/apply-mobile-admin-photo-fix.mjs && node scripts/finalize-mobile-admin-photo-fix.mjs",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/apply-mobile-admin-photo-fix.mjs && node --check scripts/finalize-mobile-admin-photo-fix.mjs",
-    "pretest": "node scripts/finalize-mobile-admin-photo-fix.mjs",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/apply-mobile-admin-photo-fix.mjs && node --check scripts/finalize-mobile-admin-photo-fix.mjs && node --check scripts/force-current-asset-version.mjs",
+    "pretest": "node scripts/finalize-mobile-admin-photo-fix.mjs && node scripts/force-current-asset-version.mjs",
     "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
