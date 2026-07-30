@@ -98,4 +98,5 @@ ${marker}
   }
 }
 
+await import('./apply-approved-plaza-prefetch.mjs');
 console.log('Installed real-device photo timing diagnostics behind debugPerf=1.');
