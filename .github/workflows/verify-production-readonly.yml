@@ -1,0 +1,50 @@
+name: Verify exact production deployment
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for exact production commit and asset version
+        shell: bash
+        env:
+          EXPECTED_COMMIT: bc1b69f6caee925f2917ef1a433fbbe00f80a326
+          EXPECTED_ASSET_VERSION: 20260731-approved1
+        run: |
+          set -euo pipefail
+          url="https://jinshan20.pages.dev/deployment-version.json?verify=${GITHUB_RUN_ID}"
+          for attempt in $(seq 1 60); do
+            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
+            if printf '%s' "$body" | grep -Fq "$EXPECTED_COMMIT" && printf '%s' "$body" | grep -Fq "$EXPECTED_ASSET_VERSION"; then
+              echo "PRODUCTION_EXACT_COMMIT_VERIFIED=$EXPECTED_COMMIT"
+              echo "PRODUCTION_ASSET_VERSION_VERIFIED=$EXPECTED_ASSET_VERSION"
+              printf 'DEPLOYMENT_VERSION_JSON=%s\n' "$body"
+              exit 0
+            fi
+            echo "Waiting for production deployment ($attempt/60)..."
+            sleep 5
+          done
+          echo '正式站在等待时间内未返回预期提交号与资源版本。'
+          exit 1
+      - name: Verify production homepage and generated assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          index="$(curl -fsS --connect-timeout 8 --max-time 20 -H 'Cache-Control: no-cache' 'https://jinshan20.pages.dev/?verify=browser-release')"
+          printf '%s' "$index" | grep -Fq 'bootstrap.js?v=20260731-approved1'
+          bootstrap="$(curl -fsS --connect-timeout 8 --max-time 20 -H 'Cache-Control: no-cache' 'https://jinshan20.pages.dev/bootstrap.js?v=20260731-approved1')"
+          printf '%s' "$bootstrap" | grep -Fq '20260731-approved1'
+          printf '%s' "$bootstrap" | grep -Fq '__BOOTSTRAP_PLAZA_PROMISE__'
+          if printf '%s' "$bootstrap" | grep -Eq '20260730-(flow2|adminphoto1|adminphoto2)'; then
+            echo '正式站仍返回旧资源版本。'
+            exit 1
+          fi
+          echo 'PRODUCTION_HOME_AND_ASSETS_VERIFIED=true'
