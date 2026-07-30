@@ -50,6 +50,24 @@ test('管理员签名与用户签名使用不同受众', async () => {
   assert.equal(verified.scope, 'admin-1');
 });
 
+test('同一私密图片在签名窗口内复用稳定URL以命中移动端缓存', async () => {
+  const { createPrivateMediaUrl } = await signingModule;
+  const originalNow = Date.now;
+  const windowStartSeconds = Math.floor(1_700_000_001 / 900) * 900;
+  try {
+    Date.now = () => (windowStartSeconds + 100) * 1000;
+    const first = await createPrivateMediaUrl(env, media, 'owner', 'user-1', 900);
+    Date.now = () => (windowStartSeconds + 800) * 1000;
+    const second = await createPrivateMediaUrl(env, media, 'owner', 'user-1', 900);
+    assert.equal(second, first);
+    Date.now = () => (windowStartSeconds + 901) * 1000;
+    const nextWindow = await createPrivateMediaUrl(env, media, 'owner', 'user-1', 900);
+    assert.notEqual(nextWindow, first);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('私密媒体路由拒绝匿名与他人，允许所有者和管理员签名', async () => {
   const { createPrivateMediaUrl } = await signingModule;
   const { handleMediaRoutes } = await mediaRouteModule;

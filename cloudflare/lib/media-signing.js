@@ -28,7 +28,11 @@ const hmac = async (payload, secret) => {
 };
 
 export const createPrivateMediaUrl = async (env, media, audience, scope, ttlSeconds = 15 * 60) => {
-  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // Keep the signed URL stable during one TTL window so mobile WebViews can reuse
+  // their private browser cache when a drawer is reopened. The extra window keeps
+  // every generated URL valid for at least ttlSeconds.
+  const exp = (Math.floor(nowSeconds / ttlSeconds) + 2) * ttlSeconds;
   const environment = env.ENVIRONMENT || 'unknown';
   const values = {
     mediaId: media.id,
