@@ -71,7 +71,7 @@ export const validateSafeTarget = (options) => {
 };
 
 export const thumbnailObjectKey = (environment, mediaId) =>
-  `media/${environment}/backfill/plaza-thumbs/${encodeURIComponent(mediaId)}-thumb-640.webp`;
+  `media/${environment}/backfill/plaza-thumbs/${encodeURIComponent(mediaId)}-thumb-640-v2.webp`;
 
 const stripAnsi = (value) => String(value || '').replace(
   // eslint-disable-next-line no-control-regex
@@ -181,6 +181,21 @@ const verifyExistingThumbnail = async (filePath) => {
     throw new Error(`已有对象为 ${file.byteLength} 字节，拒绝覆盖`);
   }
   return { bytes: file.byteLength, width: metadata.width, height: metadata.height };
+};
+
+const wait = (milliseconds) => new Promise((resolve) => {
+  setTimeout(resolve, milliseconds);
+});
+
+const verifyUploadedThumbnail = async (options, objectKey, workDir, mediaId) => {
+  const retryDelays = [0, 500, 1000, 1500];
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt]) await wait(retryDelays[attempt]);
+    const verifyPath = path.join(workDir, `${mediaId}-verify-${attempt}.webp`);
+    const uploadedObject = await fetchR2Object(options, objectKey, verifyPath, true);
+    if (uploadedObject) return verifyExistingThumbnail(verifyPath);
+  }
+  throw new Error('R2缩略图上传后校验失败，D1未切换');
 };
 
 const insertVariant = (options, item, objectKey, bytes) => queryD1(options, `
@@ -302,11 +317,9 @@ export const runBackfill = async (options) => {
           };
           uploadNewR2Object(options, objectKey, outputPath);
           addedObjectKey = objectKey;
-          const uploadedObject = await fetchR2Object(options, objectKey, outputPath, true);
-          if (!uploadedObject) throw new Error('R2缩略图上传后校验失败，D1未切换');
-          await verifyExistingThumbnail(outputPath);
           report.r2ObjectsAdded += 1;
           report.rollback.r2ObjectKeysToDelete.push(objectKey);
+          await verifyUploadedThumbnail(options, objectKey, workDir, candidate.mediaId);
         }
 
         if (missingRecord) {
