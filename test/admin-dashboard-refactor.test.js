@@ -38,10 +38,11 @@ test('admin dashboard patch is idempotent and removes retired admin entry points
   assert.match(compact, /refreshCompactTeamPanel/);
 });
 
-test('bootstrap loads the updated assets with the flow cache key', () => {
+test('bootstrap loads only adminphoto3 versioned assets', () => {
   const bootstrap = read('public/bootstrap.js');
   assert.match(bootstrap, /admin-dashboard-refactor\.css/);
-  assert.match(bootstrap, /20260730-flow2/);
+  assert.match(bootstrap, /20260730-adminphoto3/);
+  assert.doesNotMatch(bootstrap, /20260730-(?:flow2|adminphoto1|adminphoto2)/);
 });
 
 test('compact dashboard stylesheet includes mobile card layouts', () => {

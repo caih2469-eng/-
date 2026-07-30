@@ -13,7 +13,7 @@ const headerSource = read('public', '_headers');
 const workerSource = read('cloudflare', 'worker.js');
 
 test('阶段G：入口、主应用与样式统一使用最终版本化资源', () => {
-  const expectedVersion = '20260730-flow2';
+  const expectedVersion = '20260730-adminphoto3';
   const references = [indexSource, entranceSource, bootstrapSource]
     .flatMap((source) => [...source.matchAll(/\?v=([a-zA-Z0-9-]+)/g)].map((match) => match[1]));
   assert.ok(references.length >= 5);
@@ -34,6 +34,7 @@ test('阶段G：性能指标只在调试模式记录且不包含凭据或图片�
   assert.match(appSource, /recordPerf\('upload'/);
   assert.match(appSource, /recordPerf\('submit'/);
   assert.match(appSource, /recordPerf\('home-restore'/);
+  assert.match(appSource, /recordPerf\('admin-thumb-visible'/);
   const recorderBlock = bootstrapSource.slice(
     bootstrapSource.indexOf('window.__RECORD_PERF__'),
     bootstrapSource.indexOf('const bootstrapStarted')
