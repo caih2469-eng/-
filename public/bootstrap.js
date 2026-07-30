@@ -59,12 +59,6 @@
   preload('/performance-v3.js', 'script');
   preload('/site-path.js', 'script');
   preload('/app.js', 'script');
-  const compressionPreload = document.createElement('link');
-  compressionPreload.rel = 'preload';
-  compressionPreload.as = 'script';
-  compressionPreload.href = '/vendor/browser-image-compression-2.0.2.js';
-  compressionPreload.dataset.compressionPreload = 'true';
-  document.head.appendChild(compressionPreload);
 
   const bootstrap = async () => {
     const controller = new AbortController();
