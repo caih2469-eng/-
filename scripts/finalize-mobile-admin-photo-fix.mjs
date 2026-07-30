@@ -14,6 +14,12 @@ const writeIfChanged = (file, before, after) => {
   if (after !== before) fs.writeFileSync(file, after, 'utf8');
 };
 
+const replaceOnce = (source, search, replacement, label) => {
+  const next = source.replace(search, replacement);
+  if (next === source) throw new Error(`未找到${label}，已停止以避免误改`);
+  return next;
+};
+
 {
   const { file, source } = readRequired('scripts/apply-admin-dashboard-refactor.mjs');
   const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
@@ -24,17 +30,29 @@ const writeIfChanged = (file, before, after) => {
 {
   const { file, source } = readRequired('public/app.js');
   let next = source;
-  next = next.replace(
-    'const photos = images.map((media) => {',
-    'const photos = images.map((media, imageIndex) => {'
-  );
-  next = next.replace(
-    `<span class="image-shell"><img data-src="\${escapeHtml(thumbUrl)}" loading="lazy"
-            fetchpriority="low" decoding="async" width="540" height="405" alt="打卡照片"`,
-    `<span class="image-shell"><img \${imageIndex === 0 ? `src="\${escapeHtml(thumbUrl)}"` : `data-src="\${escapeHtml(thumbUrl)}"`} loading="\${imageIndex === 0 ? 'eager' : 'lazy'}"
-            fetchpriority="\${imageIndex === 0 ? 'high' : 'low'}" decoding="async" width="540" height="405" alt="打卡照片"`
-  );
-  if (!next.includes("imageIndex === 0 ? 'high' : 'low'")) {
+  if (!next.includes('const photos = images.map((media, imageIndex) => {')) {
+    next = replaceOnce(
+      next,
+      'const photos = images.map((media) => {',
+      'const photos = images.map((media, imageIndex) => {',
+      '管理员照片索引'
+    );
+  }
+
+  const prioritizedMarker = "fetchpriority=\"${imageIndex === 0 ? 'high' : 'low'}\"";
+  if (!next.includes(prioritizedMarker)) {
+    const oldMarkup = [
+      '          <span class="image-shell"><img data-src="${escapeHtml(thumbUrl)}" loading="lazy"',
+      '            fetchpriority="low" decoding="async" width="540" height="405" alt="打卡照片"'
+    ].join('\n');
+    const newMarkup = [
+      '          <span class="image-shell"><img ${imageIndex === 0 ? `src="${escapeHtml(thumbUrl)}"` : `data-src="${escapeHtml(thumbUrl)}"`} loading="${imageIndex === 0 ? \'eager\' : \'lazy\'}"',
+      '            fetchpriority="${imageIndex === 0 ? \'high\' : \'low\'}" decoding="async" width="540" height="405" alt="打卡照片"'
+    ].join('\n');
+    next = replaceOnce(next, oldMarkup, newMarkup, '首张管理员缩略图优先加载标记');
+  }
+
+  if (!next.includes(prioritizedMarker)) {
     throw new Error('首张管理员缩略图优先加载补丁失败');
   }
   writeIfChanged(file, source, next);
