@@ -100,9 +100,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '20260730-adminphoto1' public/bootstrap.js
-          grep -q '20260730-adminphoto1' public/entrance.html
-          if grep -R -n '20260730-flow2' public/bootstrap.js public/index.html public/entrance.html; then
+          grep -q '20260730-adminphoto2' public/bootstrap.js
+          grep -q '20260730-adminphoto2' public/entrance.html
+          if grep -R -n -E '20260730-(flow2|adminphoto1)' public/bootstrap.js public/index.html public/entrance.html; then
             echo '旧资源版本仍残留，停止部署。'
             exit 1
           fi
@@ -121,7 +121,7 @@ jobs:
       - name: Stamp exact production commit
         shell: bash
         run: |
-          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260730-adminphoto1',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260730-adminphoto2',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
       - name: Deploy exact main commit to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
@@ -136,7 +136,7 @@ jobs:
           url="https://jinshan20.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}&attempt=${GITHUB_RUN_ATTEMPT}"
           for attempt in $(seq 1 30); do
             body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
-            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260730-adminphoto1'; then
+            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260730-adminphoto2'; then
               echo "Production verified at commit $GITHUB_SHA"
               printf '%s\n' "$body"
               exit 0
