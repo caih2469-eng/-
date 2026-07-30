@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const version = '20260730-adminphoto1';
+const version = '20260730-adminphoto2';
 
 const readRequired = (relative) => {
   const file = path.join(root, relative);
@@ -16,8 +16,41 @@ const writeIfChanged = (file, before, after) => {
 
 {
   const { file, source } = readRequired('scripts/apply-admin-dashboard-refactor.mjs');
-  const next = source.replaceAll('20260730-flow2', version);
+  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
   if (!next.includes(version)) throw new Error('后台补丁缓存版本更新失败');
+  writeIfChanged(file, source, next);
+}
+
+{
+  const { file, source } = readRequired('public/app.js');
+  let next = source;
+  next = next.replace(
+    'const photos = images.map((media) => {',
+    'const photos = images.map((media, imageIndex) => {'
+  );
+  next = next.replace(
+    `<span class="image-shell"><img data-src="\${escapeHtml(thumbUrl)}" loading="lazy"
+            fetchpriority="low" decoding="async" width="540" height="405" alt="打卡照片"`,
+    `<span class="image-shell"><img \${imageIndex === 0 ? `src="\${escapeHtml(thumbUrl)}"` : `data-src="\${escapeHtml(thumbUrl)}"`} loading="\${imageIndex === 0 ? 'eager' : 'lazy'}"
+            fetchpriority="\${imageIndex === 0 ? 'high' : 'low'}" decoding="async" width="540" height="405" alt="打卡照片"`
+  );
+  if (!next.includes("imageIndex === 0 ? 'high' : 'low'")) {
+    throw new Error('首张管理员缩略图优先加载补丁失败');
+  }
+  writeIfChanged(file, source, next);
+}
+
+{
+  const { file, source } = readRequired('public/bootstrap.js');
+  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
+  if (!next.includes(version)) throw new Error('启动资源缓存版本更新失败');
+  writeIfChanged(file, source, next);
+}
+
+{
+  const { file, source } = readRequired('public/index.html');
+  const next = source.replace(/\/bootstrap\.js\?v=[a-zA-Z0-9-]+/, `/bootstrap.js?v=${version}`);
+  if (!next.includes(`/bootstrap.js?v=${version}`)) throw new Error('首页缓存版本更新失败');
   writeIfChanged(file, source, next);
 }
 
@@ -30,13 +63,16 @@ const writeIfChanged = (file, before, after) => {
 
 {
   const { file, source } = readRequired('test/admin-dashboard-refactor.test.js');
-  const next = source.replace(/20260730-(?:flow2|adminphoto1)/g, version);
+  const next = source.replace(/20260730-(?:flow2|adminphoto1|adminphoto2)/g, version);
   writeIfChanged(file, source, next);
 }
 
 {
   const { file, source } = readRequired('test/stage-g-observability-assets.test.js');
-  const next = source.replace(/const expectedVersion = '20260730-(?:flow2|adminphoto1)';/, `const expectedVersion = '${version}';`);
+  const next = source.replace(
+    /const expectedVersion = '20260730-(?:flow2|adminphoto1|adminphoto2)';/,
+    `const expectedVersion = '${version}';`
+  );
   writeIfChanged(file, source, next);
 }
 
@@ -79,4 +115,17 @@ const writeIfChanged = (file, before, after) => {
   writeIfChanged(file, source, next);
 }
 
-console.log('Finalized mobile admin photo asset versions and test expectations.');
+{
+  const { file, source } = readRequired('test/mobile-admin-photo-fix.test.js');
+  const anchor = "  assert.doesNotMatch(drawer, /new Image\\(\\)/);";
+  const addition = `${anchor}\n  assert.match(drawer, /imageIndex === 0/);\n  assert.match(drawer, /loading=\"\\$\\{imageIndex === 0 \\? 'eager' : 'lazy'\\}\"/);\n  assert.match(drawer, /fetchpriority=\"\\$\\{imageIndex === 0 \\? 'high' : 'low'\\}\"/);`;
+  const next = source.includes('assert.match(drawer, /imageIndex === 0/);')
+    ? source
+    : source.replace(anchor, addition);
+  if (!next.includes('assert.match(drawer, /imageIndex === 0/);')) {
+    throw new Error('管理员首图优先级测试更新失败');
+  }
+  writeIfChanged(file, source, next);
+}
+
+console.log('Finalized mobile admin photo asset versions, first-thumbnail priority and test expectations.');
