@@ -12,6 +12,7 @@ test('student home keeps only the requested shortcuts and a working history moda
   assert.match(studentBody, /id="historyCheckins"/);
   assert.match(studentBody, /id="plaza"/);
   assert.match(studentBody, /id="inbox"/);
+  assert.match(studentBody, /id="teamCheckinStats"/);
   assert.match(studentBody, /id="modalRoot"/);
   assert.doesNotMatch(studentBody, /id="ranking"/);
   assert.doesNotMatch(studentBody, /profile-card/);
@@ -22,7 +23,7 @@ test('student home keeps only the requested shortcuts and a working history moda
 test('member check-in respects the administrator image limit and submits all confirmed media ids', () => {
   const app = read('public/app.js');
   const memberBody = app.match(/function memberCheckinForm\(task\) \{([\s\S]*?)\n}\n\nfunction materialSubmissionForm/)?.[1] || '';
-  assert.match(memberBody, /Number\(task\.imageLimit\)/);
+  assert.match(memberBody, /Number\(task\.memberImageLimit \|\| task\.imageLimit\)/);
   assert.match(memberBody, /multiple required/);
   assert.match(memberBody, /files\.length > maxImages/);
   assert.match(memberBody, /session\?\.items\?\.map\(\(item\) => item\.mediaId\)/);
