@@ -29,24 +29,30 @@ test('startup preloads app resources and propagates D1 bookmarks', () => {
   assert.match(runtime, /response\.headers\.get\('x-d1-bookmark'\)/);
 });
 
-test('non-plaza thumbnail requests are completed locally', () => {
+test('non-plaza thumbnail compression and upload are completed locally', () => {
   const runtime = source('public/performance-v3.js');
-  assert.match(runtime, /payload\?\.variant === 'thumb'/);
-  assert.match(runtime, /\['meal-checkin', 'material-image', 'member-checkin'\]/);
+  assert.match(runtime, /body\?\.variant === 'thumb'/);
+  assert.match(runtime, /SKIP_THUMB_BUSINESS_TYPES/);
+  assert.match(runtime, /'meal-checkin'/);
+  assert.match(runtime, /'material-image'/);
+  assert.match(runtime, /'member-checkin'/);
+  assert.match(runtime, /pendingSkippedThumbCompression/);
+  assert.match(runtime, /maxEdge <= 360/);
   assert.match(runtime, /skippedThumb: true/);
-  assert.doesNotMatch(runtime, /businessType.*task.*skippedThumb/s);
+  assert.doesNotMatch(runtime, /SKIP_THUMB_BUSINESS_TYPES[\s\S]*?'task'/);
 });
 
-test('Pages functions use request-scoped D1 sessions and fast upload override', () => {
+test('Pages functions use request-scoped D1 sessions and safe fast upload override', () => {
   const wrapper = source('cloudflare/lib/d1-session-wrapper.js');
   assert.match(wrapper, /withSession/);
   assert.match(wrapper, /first-unconstrained/);
   assert.match(wrapper, /first-primary/);
   assert.match(wrapper, /getBookmark/);
+  assert.match(source('cloudflare/routes/member-fast-v3-safe.js'), /errorResponse/);
   for (const environment of ['test', 'staging', 'production']) {
     const entry = source(`cloudflare/pages-${environment}/functions/[[path]].js`);
     assert.match(entry, /withD1Session/);
-    assert.match(entry, /handleMemberFastV3/);
+    assert.match(entry, /handleMemberFastV3Safe/);
   }
 });
 
