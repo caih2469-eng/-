@@ -61,10 +61,10 @@
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/style.css?v=20260730-perf-final1';
+      stylesheet.href = '/style.css?v=20260730-plaza640';
       document.head.appendChild(stylesheet);
-      await loadScript('/site-path.js?v=20260730-perf-final1');
-      await loadScript('/app.js?v=20260730-perf-final1');
+      await loadScript('/site-path.js?v=20260730-plaza640');
+      await loadScript('/app.js?v=20260730-plaza640');
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });

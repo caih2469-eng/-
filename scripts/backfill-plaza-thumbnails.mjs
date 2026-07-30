@@ -71,7 +71,7 @@ export const validateSafeTarget = (options) => {
 };
 
 export const thumbnailObjectKey = (environment, mediaId) =>
-  `media/${environment}/backfill/plaza-thumbs/${encodeURIComponent(mediaId)}-thumb.webp`;
+  `media/${environment}/backfill/plaza-thumbs/${encodeURIComponent(mediaId)}-thumb-640.webp`;
 
 const stripAnsi = (value) => String(value || '').replace(
   // eslint-disable-next-line no-control-regex
@@ -110,8 +110,8 @@ const queryD1 = (options, sql) => {
 const sqlText = (value) => `'${String(value).replaceAll("'", "''")}'`;
 
 export const createThumbnail = async (input) => {
-  const dimensions = [360, 340, 320, 300, 280];
-  const qualities = [84, 80, 76, 72, 68, 64, 60];
+  const dimensions = [640, 620, 600];
+  const qualities = [86, 84, 82, 80, 78, 76, 74, 72];
   let best = null;
   for (const edge of dimensions) {
     for (const quality of qualities) {
@@ -191,9 +191,9 @@ VALUES
    ${sqlText(objectKey)},'image/webp',${Number(bytes)},${sqlText(new Date().toISOString())})
 `.trim());
 
-const updateVariant = (options, item, bytes) => queryD1(options, `
+const updateVariant = (options, item, objectKey, bytes) => queryD1(options, `
 UPDATE image_variants
-   SET content_type='image/webp',bytes=${Number(bytes)}
+   SET object_key=${sqlText(objectKey)},content_type='image/webp',bytes=${Number(bytes)}
  WHERE source_type='task_submission_image'
    AND source_id=${sqlText(item.mediaId)}
    AND variant='thumb'
@@ -216,7 +216,9 @@ export const runBackfill = async (options) => {
   const before = await runThumbnailAudit(options);
   const candidates = before.items.filter((item) => {
     const codes = issueCodes(item);
-    return codes.has('thumbRecordMissing') || codes.has('thumbObjectMissing');
+    return codes.has('thumbRecordMissing')
+      || codes.has('thumbObjectMissing')
+      || codes.has('thumbEdgeTooShort');
   });
   const report = {
     mode: options.apply ? 'apply' : 'dry-run',
@@ -270,9 +272,7 @@ export const runBackfill = async (options) => {
       }
 
       const missingRecord = codes.has('thumbRecordMissing');
-      const objectKey = missingRecord
-        ? thumbnailObjectKey(options.environment, candidate.mediaId)
-        : candidate.thumb.key;
+      const objectKey = thumbnailObjectKey(options.environment, candidate.mediaId);
       if (!validateObjectKey(objectKey, options.environment, { thumbnail: true })) {
         resultItem.result = 'skipped-unsafe';
         resultItem.error = `缩略图对象键不安全：${objectKey}`;
@@ -302,6 +302,9 @@ export const runBackfill = async (options) => {
           };
           uploadNewR2Object(options, objectKey, outputPath);
           addedObjectKey = objectKey;
+          const uploadedObject = await fetchR2Object(options, objectKey, outputPath, true);
+          if (!uploadedObject) throw new Error('R2缩略图上传后校验失败，D1未切换');
+          await verifyExistingThumbnail(outputPath);
           report.r2ObjectsAdded += 1;
           report.rollback.r2ObjectKeysToDelete.push(objectKey);
         }
@@ -319,12 +322,14 @@ export const runBackfill = async (options) => {
         } else {
           const oldType = candidate.thumb.contentType;
           const oldBytes = candidate.thumb.bytes;
-          const update = updateVariant(options, candidate, thumbnail.bytes);
+          const oldKey = candidate.thumb.key;
+          const update = updateVariant(options, candidate, objectKey, thumbnail.bytes);
           const changes = Number(update.meta?.changes || 0);
           report.d1RecordsUpdated += changes;
           if (changes) {
             report.rollback.d1Statements.push(
-              `UPDATE image_variants SET content_type=${sqlText(oldType)},bytes=${Number(oldBytes)} `
+              `UPDATE image_variants SET object_key=${sqlText(oldKey)},`
+              + `content_type=${sqlText(oldType)},bytes=${Number(oldBytes)} `
               + `WHERE source_type='task_submission_image' AND source_id=${sqlText(candidate.mediaId)} `
               + `AND variant='thumb';`
             );

@@ -162,12 +162,15 @@ test('二次提速参数前后端一致，并复用已加载缩略图', () => {
   const app = fs.readFileSync('public/app.js', 'utf8');
   const media = fs.readFileSync('cloudflare/routes/media.js', 'utf8');
   assert.match(app, /MEDIA_THUMB_MAX_EDGE = 360/);
+  assert.match(app, /MEDIA_PLAZA_THUMB_MAX_EDGE = 640/);
   assert.match(app, /MEDIA_DISPLAY_MAX_EDGE = 960/);
   assert.match(app, /MEDIA_THUMB_QUALITY = 0\.72/);
+  assert.match(app, /MEDIA_PLAZA_THUMB_QUALITY = 0\.84/);
   assert.match(app, /MEDIA_DISPLAY_QUALITY = 0\.78/);
   assert.match(app, /renderedImage\?\.complete/);
   assert.match(app, /await displayImage\.decode\(\)/);
   assert.match(media, /THUMB_MAX_EDGE = 360/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 640/);
   assert.match(media, /DISPLAY_MAX_EDGE = 960/);
   assert.doesNotMatch(media, /variant === 'thumb' \? 480 : 1280/);
 });

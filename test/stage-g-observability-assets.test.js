@@ -13,7 +13,7 @@ const headerSource = read('public', '_headers');
 const workerSource = read('cloudflare', 'worker.js');
 
 test('阶段G：入口、主应用与样式统一使用最终版本化资源', () => {
-  const expectedVersion = '20260730-perf-final1';
+  const expectedVersion = '20260730-plaza640';
   const references = [indexSource, entranceSource, bootstrapSource]
     .flatMap((source) => [...source.matchAll(/\?v=([a-zA-Z0-9-]+)/g)].map((match) => match[1]));
   assert.ok(references.length >= 5);

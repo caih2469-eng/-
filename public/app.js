@@ -493,10 +493,13 @@ const escapeHtml = (value) =>
 
 const MEDIA_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const MEDIA_THUMB_MAX_EDGE = 360;
+const MEDIA_PLAZA_THUMB_MAX_EDGE = 640;
 const MEDIA_DISPLAY_MAX_EDGE = 960;
 const MEDIA_THUMB_MAX_SIZE_MB = 0.12;
+const MEDIA_PLAZA_THUMB_MAX_SIZE_MB = 0.18;
 const MEDIA_DISPLAY_MAX_SIZE_MB = 0.7;
 const MEDIA_THUMB_QUALITY = 0.72;
+const MEDIA_PLAZA_THUMB_QUALITY = 0.84;
 const MEDIA_DISPLAY_QUALITY = 0.78;
 const MEMBER_FAST_MAX_BYTES = 307_200;
 const MEMBER_FAST_MAX_EDGE = 960;
@@ -571,10 +574,20 @@ const compressImage = async (file, options = {}) => {
   const sourceFile = await normalizeSourceImage(file);
   const imageCompression = await loadImageCompressionLibrary();
   const isThumb = options.variant === 'thumb';
+  const isPlazaThumb = isThumb && options.plazaThumb === true;
+  const maxSizeMB = isPlazaThumb
+    ? MEDIA_PLAZA_THUMB_MAX_SIZE_MB
+    : (isThumb ? MEDIA_THUMB_MAX_SIZE_MB : MEDIA_DISPLAY_MAX_SIZE_MB);
+  const maxWidthOrHeight = isPlazaThumb
+    ? MEDIA_PLAZA_THUMB_MAX_EDGE
+    : (isThumb ? MEDIA_THUMB_MAX_EDGE : MEDIA_DISPLAY_MAX_EDGE);
+  const initialQuality = isPlazaThumb
+    ? MEDIA_PLAZA_THUMB_QUALITY
+    : (isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY);
   const common = {
-    maxSizeMB: isThumb ? MEDIA_THUMB_MAX_SIZE_MB : MEDIA_DISPLAY_MAX_SIZE_MB,
-    maxWidthOrHeight: isThumb ? MEDIA_THUMB_MAX_EDGE : MEDIA_DISPLAY_MAX_EDGE,
-    initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY,
+    maxSizeMB,
+    maxWidthOrHeight,
+    initialQuality,
     useWebWorker: true,
     libURL: `${location.origin}/vendor/browser-image-compression-2.0.2.js`,
     preserveExif: false,
@@ -587,7 +600,7 @@ const compressImage = async (file, options = {}) => {
     blob = await imageCompression(sourceFile, {
       ...common,
       fileType: 'image/jpeg',
-      initialQuality: isThumb ? MEDIA_THUMB_QUALITY : MEDIA_DISPLAY_QUALITY
+      initialQuality
     });
     header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
     if (blob.type !== 'image/jpeg' || !bytesMatchMime(header, 'image/jpeg')) {
@@ -596,7 +609,7 @@ const compressImage = async (file, options = {}) => {
   }
   if (!blob.size || blob.size > 1.5 * 1024 * 1024) throw new Error('压缩后图片仍然过大，请重新选择图片。');
   const dimensions = await imageDimensions(blob);
-  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > (isThumb ? MEDIA_THUMB_MAX_EDGE : MEDIA_DISPLAY_MAX_EDGE)) {
+  if (!dimensions.width || !dimensions.height || Math.max(dimensions.width, dimensions.height) > maxWidthOrHeight) {
     throw new Error('压缩图片尺寸校验失败，请重新选择图片。');
   }
   const extension = blob.type === 'image/webp' ? 'webp' : 'jpg';
@@ -850,7 +863,8 @@ const createMediaUploadSession = (files, context = {}, ui = {}) => {
       setStatus(`${position}：正在生成列表图片…`);
       const thumbCompressed = await compressImageMeasured(display.file, {
         signal: controller.signal,
-        variant: 'thumb'
+        variant: 'thumb',
+        plazaThumb: context.businessType === 'task'
       });
       const thumb = await uploadCompressedImage(thumbCompressed, {
         ...context,

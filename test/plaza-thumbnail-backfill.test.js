@@ -115,7 +115,7 @@ test('backfill keeps test protection and requires all production confirmations',
   }), /D1/);
 });
 
-test('thumbnail generation is WebP, no longer than 360px and no larger than 120KB', async () => {
+test('plaza thumbnail generation is high-quality WebP up to 640px and 180KB', async () => {
   const {
     createThumbnail,
     MAX_THUMB_EDGE,
@@ -133,7 +133,50 @@ test('thumbnail generation is WebP, no longer than 360px and no larger than 120K
   const metadata = await sharp(thumbnail.data).metadata();
   assert.equal(metadata.format, 'webp');
   assert.ok(Math.max(metadata.width, metadata.height) <= MAX_THUMB_EDGE);
+  assert.ok(Math.max(metadata.width, metadata.height) >= 600);
   assert.ok(thumbnail.data.byteLength <= MAX_THUMB_BYTES);
+});
+
+test('audit marks legacy 360px plaza thumbnails for background upgrade', async () => {
+  const { runThumbnailAudit } = await import('../scripts/audit-plaza-thumbnails.mjs');
+  const source = await sharp({
+    create: {
+      width: 960,
+      height: 720,
+      channels: 3,
+      background: { r: 60, g: 120, b: 180 }
+    }
+  }).webp({ quality: 88 }).toBuffer();
+  const legacyThumb = await sharp(source).resize({
+    width: 360,
+    height: 360,
+    fit: 'inside'
+  }).webp({ quality: 80 }).toBuffer();
+  const row = {
+    media_id: 'legacy-360',
+    original_key: 'task-submissions/source.webp',
+    original_bytes: source.length,
+    original_content_type: 'image/webp',
+    post_id: 'post-legacy',
+    post_status: 'visible',
+    submission_id: 'submission-legacy',
+    is_public: 1,
+    thumb_key: 'media/test/legacy-thumb.webp',
+    thumb_bytes: legacyThumb.length,
+    thumb_content_type: 'image/webp',
+    display_key: 'media/test/display.webp',
+    display_bytes: source.length,
+    display_content_type: 'image/webp'
+  };
+  const report = await runThumbnailAudit(testTarget, {
+    queryD1: async () => ({ results: [row] }),
+    fetchR2Object: async (_options, key, destination) => {
+      await writeFile(destination, key.includes('legacy-thumb') ? legacyThumb : source);
+      return true;
+    }
+  });
+  assert.equal(report.totals.issueCounts.thumbEdgeTooShort, 1);
+  assert.equal(report.totals.affected, 1);
 });
 
 test('plaza responses prefer thumb URLs', () => {

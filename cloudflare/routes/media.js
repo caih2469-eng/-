@@ -18,6 +18,7 @@ const ALLOWED_TYPES = new Map([
 ]);
 const MAX_FINAL_BYTES = 1_572_864;
 const THUMB_MAX_EDGE = 360;
+const PLAZA_THUMB_MAX_EDGE = 640;
 const DISPLAY_MAX_EDGE = 960;
 const INTENT_TTL_SECONDS = 180;
 const MEMBER_FAST_MAX_BYTES = 307_200;
@@ -381,12 +382,15 @@ const createUploadIntent = async (request, env) => {
   const businessType = cleanText(body.businessType, 40);
   const variant = body.variant === 'thumb' ? 'thumb' : 'display';
   const storedBusinessType = variant === 'thumb' ? `${businessType}:thumb` : businessType;
+  const maxEdge = variant === 'thumb'
+    ? (businessType === 'task' ? PLAZA_THUMB_MAX_EDGE : THUMB_MAX_EDGE)
+    : DISPLAY_MAX_EDGE;
   if (!extension || !['task', 'member-checkin', 'meal-checkin', 'material-image', 'admin-makeup'].includes(businessType)) {
     return json({ error: '不支持的图片类型或上传用途' }, 415);
   }
   if (!Number.isInteger(expectedSize) || expectedSize < 1 || expectedSize > MAX_FINAL_BYTES
-      || !Number.isInteger(width) || width < 1 || width > (variant === 'thumb' ? THUMB_MAX_EDGE : DISPLAY_MAX_EDGE)
-      || !Number.isInteger(height) || height < 1 || height > (variant === 'thumb' ? THUMB_MAX_EDGE : DISPLAY_MAX_EDGE)) {
+      || !Number.isInteger(width) || width < 1 || width > maxEdge
+      || !Number.isInteger(height) || height < 1 || height > maxEdge) {
     return json({ error: '压缩图片的大小或尺寸不符合要求' }, 400);
   }
   if (taskId) {
@@ -477,13 +481,15 @@ const confirmUpload = async (request, env, intentId) => {
   const isThumb = intent.businessType.endsWith(':thumb');
   const parentMediaId = isThumb ? cleanText(body.parentMediaId, 80) : null;
   if (isThumb) {
+    const baseBusinessType = intent.businessType.replace(/:thumb$/, '');
+    const maxThumbEdge = baseBusinessType === 'task' ? PLAZA_THUMB_MAX_EDGE : THUMB_MAX_EDGE;
     const parent = parentMediaId ? await env.DB.prepare(
       `SELECT id FROM media_objects
         WHERE id=?1 AND owner_user_id=?2 AND COALESCE(task_id,'')=COALESCE(?3,'')
           AND business_type=?4 AND business_id IS NULL LIMIT 1`
     ).bind(parentMediaId, intent.userId, intent.taskId || null,
       intent.businessType.replace(/:thumb$/, '')).first() : null;
-    if (!parent || Math.max(Number(intent.width), Number(intent.height)) > THUMB_MAX_EDGE) {
+    if (!parent || Math.max(Number(intent.width), Number(intent.height)) > maxThumbEdge) {
       await env.UPLOADS.delete(intent.objectKey).catch(() => null);
       return json({ error: '缩略图与原图片不匹配' }, 403, { 'cache-control': 'no-store' });
     }
