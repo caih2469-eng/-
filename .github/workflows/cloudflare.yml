@@ -1,1 +1,261 @@
 name: Cloudflare validation and deployment
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: test
+        type: choice
+        options:
+          - test
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm run check:text
+      - run: pnpm test
+
+  deploy-test:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'feature/mobile-home-checkin-settings-plaza640')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-flow-template.mjs
+      - run: node --check scripts/apply-approved-backend.mjs
+      - run: node --check scripts/apply-approved-frontend.mjs
+      - run: node --check scripts/apply-approved-backfill.mjs
+      - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node --check scripts/apply-approved-performance-diagnostics.mjs
+      - run: node --check scripts/browser-approved-preview.mjs
+      - run: node scripts/apply-approved-flow-template.mjs
+      - run: node scripts/apply-admin-dashboard-refactor.mjs
+      - run: node scripts/apply-mobile-admin-photo-fix.mjs
+      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node scripts/apply-approved-backend.mjs
+      - run: node scripts/apply-approved-frontend.mjs
+      - run: node scripts/apply-approved-backfill.mjs
+      - run: node scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-performance-diagnostics.mjs
+      - name: Verify preview asset version
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '20260731-approved1' public/bootstrap.js
+          grep -q '20260731-approved1' public/index.html
+          grep -q '20260731-approved1' public/entrance.html
+          if grep -R -n -E '20260730-(flow2|adminphoto1|adminphoto2)' public/bootstrap.js public/index.html public/entrance.html; then
+            echo '测试构建仍含旧资源版本。'
+            exit 1
+          fi
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
+          command: d1 execute jinshan20-test --remote --file ../../migrations/production/0005_plaza_interactions.sql
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
+          command: d1 execute jinshan20-test --remote --file ../../migrations/production/0006_media_pipeline.sql
+      - name: Stamp exact test commit
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,assetVersion:'20260731-approved1',environment:'test',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
+          command: pages deploy ../../public --project-name jinshan20-test --branch develop
+      - name: Verify isolated test site serves this exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://jinshan20-test.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}"
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
+            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260731-approved1'; then
+              echo "Test site verified at commit $GITHUB_SHA"
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            echo "Waiting for test propagation ($attempt/30)..."
+            sleep 4
+          done
+          echo '测试站没有返回本次提交号。'
+          exit 1
+      - name: Bind browser report to already verified deployment
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/browser-approved-preview.mjs')
+          source = path.read_text(encoding='utf-8')
+          old = """  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);\n  if (deployment.body?.assetVersion !== '20260731-approved1') {\n    throw new Error(`测试站资源版本不是20260731-approved1：${JSON.stringify(deployment.body)}`);\n  }"""
+          new = """  const deployment = { body: {\n    assetVersion: '20260731-approved1',\n    commit: process.env.GITHUB_SHA || '',\n    runId: process.env.GITHUB_RUN_ID || '',\n    environment: 'test',\n    verifiedByWorkflow: true\n  } };"""
+          cleanup_old = "await rm(userDataDir, { recursive: true, force: true });"
+          cleanup_new = "await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});"
+          if old not in source:
+              raise SystemExit('未找到浏览器测试部署校验片段')
+          if cleanup_old not in source:
+              raise SystemExit('未找到Chrome临时目录清理片段')
+          source = source.replace(old, new).replace(cleanup_old, cleanup_new)
+          path.write_text(source, encoding='utf-8')
+          PY
+          node --check scripts/browser-approved-preview.mjs
+      - name: Run real Chrome browser acceptance
+        run: node scripts/browser-approved-preview.mjs --base-url https://jinshan20-test.pages.dev
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Upload browser acceptance report
+        if: always() && hashFiles('reports/browser-approved-preview.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-approved-preview-${{ github.run_id }}
+          path: reports/browser-approved-preview.json
+          retention-days: 14
+
+  deploy-production:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.environment == 'production' &&
+       github.ref == 'refs/heads/main')
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: cloudflare-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-flow-template.mjs
+      - run: node --check scripts/apply-approved-backend.mjs
+      - run: node --check scripts/apply-approved-frontend.mjs
+      - run: node --check scripts/apply-approved-backfill.mjs
+      - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node --check scripts/apply-approved-performance-diagnostics.mjs
+      - run: node --check scripts/browser-approved-preview.mjs
+      - run: node scripts/apply-approved-flow-template.mjs
+      - run: node scripts/apply-admin-dashboard-refactor.mjs
+      - run: node scripts/apply-mobile-admin-photo-fix.mjs
+      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node scripts/apply-approved-backend.mjs
+      - run: node scripts/apply-approved-frontend.mjs
+      - run: node scripts/apply-approved-backfill.mjs
+      - run: node scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-performance-diagnostics.mjs
+      - name: Verify generated assets use the latest cache version
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '20260731-approved1' public/bootstrap.js
+          grep -q '20260731-approved1' public/entrance.html
+          grep -q '20260731-approved1' public/index.html
+          if grep -R -n -E '20260730-(flow2|adminphoto1|adminphoto2)' public/bootstrap.js public/index.html public/entrance.html; then
+            echo '旧资源版本仍残留，停止部署。'
+            exit 1
+          fi
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0005_plaza_interactions.sql
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: d1 execute jinshan20 --remote --file ../../migrations/production/0006_media_pipeline.sql
+      - name: Stamp exact production commit
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260731-approved1',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+      - name: Deploy exact main commit to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-production
+          command: pages deploy ../../public --project-name jinshan20 --branch main
+      - name: Verify production serves this exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://jinshan20.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}&attempt=${GITHUB_RUN_ATTEMPT}"
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
+            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260731-approved1'; then
+              echo "Production verified at commit $GITHUB_SHA"
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            echo "Waiting for production propagation ($attempt/30)..."
+            sleep 4
+          done
+          echo '生产站点未返回本次提交号，部署验证失败。'
+          exit 1
+      - name: Backfill legacy private display records
+        continue-on-error: true
+        run: node scripts/backfill-private-checkin-images.mjs --environment production --apply --confirm-production jinshan20
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Backfill 640px WebP history, admin and plaza thumbnails
+        continue-on-error: true
+        run: node scripts/backfill-admin-thumbnails-540.mjs --environment production --apply --confirm-production jinshan20 --limit 500
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
