@@ -51,9 +51,7 @@ jobs:
     environment: cloudflare-test
     steps:
       - uses: actions/checkout@v4
-      - run: node scripts/apply-admin-dashboard-refactor.mjs
-      - run: node scripts/apply-mobile-admin-photo-fix.mjs
-      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node scripts/build-current-assets.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -93,16 +91,16 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/apply-admin-dashboard-refactor.mjs
-      - run: node scripts/apply-mobile-admin-photo-fix.mjs
-      - run: node scripts/finalize-mobile-admin-photo-fix.mjs
-      - name: Verify generated assets use the latest cache version
+      - run: node scripts/build-current-assets.mjs
+      - name: Verify generated assets use only the latest cache version
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '20260730-adminphoto2' public/bootstrap.js
-          grep -q '20260730-adminphoto2' public/entrance.html
-          if grep -R -n -E '20260730-(flow2|adminphoto1)' public/bootstrap.js public/index.html public/entrance.html; then
+          grep -q '20260730-adminphoto3' public/bootstrap.js
+          grep -q '20260730-adminphoto3' public/index.html
+          grep -q 'MOBILE_ADMIN_PHOTO_FIX_V3' public/app.js
+          grep -q 'PRIVATE_MEDIA_EDGE_CACHE_V3' cloudflare/routes/media.js
+          if grep -R -n -E '20260730-(flow2|adminphoto1|adminphoto2)' public/bootstrap.js public/index.html public/entrance.html; then
             echo '旧资源版本仍残留，停止部署。'
             exit 1
           fi
@@ -121,7 +119,7 @@ jobs:
       - name: Stamp exact production commit
         shell: bash
         run: |
-          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260730-adminphoto2',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260730-adminphoto3',feature:'mobile-admin-thumb-prefetch-v3',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
       - name: Deploy exact main commit to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
@@ -129,22 +127,33 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-production
           command: pages deploy ../../public --project-name jinshan20 --branch main
-      - name: Verify production serves this exact commit
+      - name: Verify production serves this exact commit and V3 assets
         shell: bash
         run: |
           set -euo pipefail
-          url="https://jinshan20.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}&attempt=${GITHUB_RUN_ATTEMPT}"
+          marker_url="https://jinshan20.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}&attempt=${GITHUB_RUN_ATTEMPT}"
           for attempt in $(seq 1 30); do
-            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
-            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260730-adminphoto2'; then
-              echo "Production verified at commit $GITHUB_SHA"
-              printf '%s\n' "$body"
+            marker="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$marker_url" || true)"
+            index="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "https://jinshan20.pages.dev/?verify=${GITHUB_SHA}" || true)"
+            bootstrap="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "https://jinshan20.pages.dev/bootstrap.js?v=20260730-adminphoto3&verify=${GITHUB_SHA}" || true)"
+            app="$(curl -fsS --connect-timeout 8 --max-time 20 -H 'Cache-Control: no-cache' "https://jinshan20.pages.dev/app.js?v=20260730-adminphoto3&verify=${GITHUB_SHA}" || true)"
+            if printf '%s' "$marker" | grep -Fq "$GITHUB_SHA" \
+              && printf '%s' "$marker" | grep -Fq '20260730-adminphoto3' \
+              && printf '%s' "$index" | grep -Fq 'bootstrap.js?v=20260730-adminphoto3' \
+              && printf '%s' "$bootstrap" | grep -Fq 'app.js?v=20260730-adminphoto3' \
+              && printf '%s' "$app" | grep -Fq 'MOBILE_ADMIN_PHOTO_FIX_V3'; then
+              if printf '%s\n%s\n%s' "$index" "$bootstrap" "$app" | grep -E '20260730-(flow2|adminphoto1|adminphoto2)'; then
+                echo '正式站仍返回旧资源引用，部署验证失败。'
+                exit 1
+              fi
+              echo "Production verified at exact commit $GITHUB_SHA with adminphoto3"
+              printf '%s\n' "$marker"
               exit 0
             fi
             echo "Waiting for production propagation ($attempt/30)..."
             sleep 4
           done
-          echo '生产站点未返回本次提交号，部署验证失败。'
+          echo '生产站点未返回本次提交和V3代码，部署验证失败。'
           exit 1
       - name: Backfill legacy private display records
         continue-on-error: true
@@ -152,7 +161,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Backfill 540px WebP admin thumbnails
+      - name: Backfill 540px WebP admin thumbnails V3
         continue-on-error: true
         run: node scripts/backfill-admin-thumbnails-540.mjs --environment production --apply --confirm-production jinshan20 --limit 500
         env:
