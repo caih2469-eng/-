@@ -4,6 +4,7 @@ import process from 'node:process';
 
 const root = process.cwd();
 const appPath = path.join(root, 'public', 'app.js');
+const entrancePath = path.join(root, 'public', 'entrance.html');
 const studentRoutePath = path.join(root, 'cloudflare', 'routes', 'student.js');
 const adminTemplatePath = path.join(root, 'scripts', 'admin-dashboard-refactor.template.js');
 const flowTemplatePath = path.join(root, 'scripts', 'student-admin-flow.template.js');
@@ -33,6 +34,7 @@ const extractSegment = (template, name) => {
 };
 
 requireFile(appPath, 'public/app.js');
+requireFile(entrancePath, 'public/entrance.html');
 requireFile(studentRoutePath, 'cloudflare/routes/student.js');
 requireFile(adminTemplatePath, '后台减法重构模板');
 requireFile(flowTemplatePath, '学生与后台流程修复模板');
@@ -108,6 +110,16 @@ if (!appSource.includes(flowMarker)) {
     `${memberCheckin}\n\nfunction materialSubmissionForm(task) {`,
     '互动赛道个人打卡函数'
   );
+  appSource = replaceRequired(
+    appSource,
+    "      releaseSession();\n      returnToCachedStudentHome('个人打卡成功');",
+    "      recordPerf('submit', { action: 'member-checkin', success: true, imageCount: mediaIds.length, navigationEpoch });\n      releaseSession();\n      returnToCachedStudentHome('个人打卡成功');",
+    '个人打卡成功性能记录'
+  );
+  appSource = appSource.replace(
+    "    } catch (error) {\n      alert(error?.message || '打卡提交失败，请稍后重试。');",
+    "    } catch (error) {\n      recordPerf('submit', { action: 'member-checkin', success: false, navigationEpoch });\n      alert(error?.message || '打卡提交失败，请稍后重试。');"
+  );
 
   appSource = replaceRequired(
     appSource,
@@ -168,6 +180,10 @@ if (!appSource.includes(flowMarker)) {
 }
 
 fs.writeFileSync(appPath, appSource, 'utf8');
+
+let entranceSource = fs.readFileSync(entrancePath, 'utf8');
+entranceSource = entranceSource.replace(/\/entrance\.js\?v=[a-zA-Z0-9-]+/, '/entrance.js?v=20260730-flow2');
+fs.writeFileSync(entrancePath, entranceSource, 'utf8');
 
 let studentRoute = fs.readFileSync(studentRoutePath, 'utf8');
 if (!studentRoute.includes(backendMarker)) {
