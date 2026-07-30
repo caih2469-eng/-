@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "migrate": "node migrations/001-user-profiles-and-tracks.js && node migrations/002-team-system.js && node migrations/003-task-system.js && node migrations/004-submission-system.js && node migrations/005-plaza-system.js && node migrations/006-like-view-statistics.js && node migrations/007-ranking-system.js && node migrations/009-material-collection.js && node migrations/010-scheduled-tasks-and-team-import.js && node migrations/011-member-checkins-and-captains.js",
+    "backfill:plaza-thumbs": "node scripts/backfill-plaza-thumbnails.mjs",
+    "check:text": "node scripts/audit-text-encoding.mjs",
     "check": "node --check server.js && node --check public/app.js",
     "test": "node --test --test-concurrency=1"
   },
@@ -16,5 +18,9 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "sharp": "0.35.3",
+    "wrangler": "4.115.0"
   }
 }

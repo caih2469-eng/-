@@ -39,6 +39,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+      - run: pnpm run check:text
       - run: pnpm test
 
   deploy-test:
