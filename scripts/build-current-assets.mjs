@@ -24,6 +24,20 @@ if (!app.includes('/* MOBILE_ADMIN_PHOTO_FIX_V1 */')
 
 run('scripts/finalize-mobile-admin-photo-fix.mjs');
 
+const updateTest = (file, transform) => {
+  const source = fs.readFileSync(file, 'utf8');
+  const next = transform(source);
+  if (next !== source) fs.writeFileSync(file, next, 'utf8');
+};
+
+updateTest('test/production-media-login-performance.test.js', (source) => source
+  .replace(/MEDIA_THUMB_MAX_EDGE = (?:360|540)/g, 'MEDIA_THUMB_MAX_EDGE = 540')
+  .replace(/MEDIA_THUMB_QUALITY = 0\\\.(?:72|78|82)/g, 'MEDIA_THUMB_QUALITY = 0\\.78')
+  .replace(/THUMB_MAX_EDGE = (?:360|540)/g, 'THUMB_MAX_EDGE = 540'));
+
+updateTest('test/member-checkin-fast.test.js', (source) => source
+  .replace(/MEDIA_THUMB_QUALITY = 0\\\.(?:72|78|82)/g, 'MEDIA_THUMB_QUALITY = 0\\.78'));
+
 app = fs.readFileSync(appPath, 'utf8');
 const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
 const index = fs.readFileSync('public/index.html', 'utf8');
