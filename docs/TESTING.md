@@ -193,3 +193,55 @@ node server.js
 - GitHub Actions 运行 lint、类型检查、测试和构建。
 - Cloudflare 预览环境验证 D1 migrations、R2 bindings 和 secrets。
 - 生产部署前执行备份、回滚和隐私验收。
+
+## 2026-07-30 Draft PR 阻塞项验证
+
+### 历史广场缩略图
+
+只在测试 D1 `jinshan20-test` 与测试 R2 `jinshan20-test` 执行：
+
+- 全量广场媒体：2 张；
+- 执行前缺失 `thumb`：1 张；
+- 成功补全：1 张；
+- 失败：0；
+- 新增 R2 对象：1；
+- 新增 D1 `image_variants` 记录：1；
+- 执行后缺失：0；
+- 重复执行新增对象与记录：均为 0。
+
+缺失媒体：
+
+- 媒体 ID：`c4d96fa5-fd0c-42be-9e4d-000d75ed117e`
+- 帖子 ID：`f9d741dd-3a31-494a-9865-ee66d79e970a`
+- 原图：465,730B JPEG
+- 补全结果：27,742B WebP、360×203、质量参数 84
+
+脚本默认只做 dry-run；应用时使用：
+
+```powershell
+npm run backfill:plaza-thumbs -- --apply
+```
+
+脚本硬性拒绝非 `test` 环境、名称不以 `-test` 结尾的 D1/R2 资源，以及非
+`pages-test/wrangler.jsonc` 配置。正式资源未读取、未修改。
+
+### 中文编码
+
+- `npm run check:text`：严格 UTF-8 解码及乱码替换串扫描通过，0 项违规。
+- 7 个旧 UTF-16LE 报告已无损转换为 UTF-8。
+- 测试 D1 中早期问号替换数据已改为明确测试文案。
+- 正式 D1 未读取、未修改。
+
+### 自动化结果
+
+| 命令 | 结果 |
+| --- | --- |
+| `npm run check` | 通过 |
+| `npm run check:text` | 通过 |
+| `npm test` | 59/59 通过 |
+
+### 真机状态
+
+Android 微信、Android QQ、Android Chrome、iPhone 微信、iPhone QQ 和
+iPhone Safari 均没有真实设备记录，统一判定：**未通过**。详细执行表见
+`docs/MANUAL_DEVICE_TEST_CHECKLIST.md`。

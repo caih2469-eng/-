@@ -52,7 +52,8 @@ test('入口页不加载主应用，登录脚本具备移动端降级、防重�
   assert.match(bootstrap, /fetch\(['"]\/api\/session['"]/);
   assert.match(bootstrap, /__BOOTSTRAP_AUTHENTICATED__/);
   assert.match(app, /window\.__BOOTSTRAP_AUTHENTICATED__/);
-  assert.match(worker, /studentId:\s*auth\.user\.studentId/);
+  assert.match(worker, /user:\s*auth\.user/);
+  assert.match(worker, /dashboard/);
 });
 
 test('图片列表在SQL层分页，首屏不超过20张且管理员每页不超过30人', () => {
@@ -169,4 +170,126 @@ test('二次提速参数前后端一致，并复用已加载缩略图', () => {
   assert.match(media, /THUMB_MAX_EDGE = 360/);
   assert.match(media, /DISPLAY_MAX_EDGE = 960/);
   assert.doesNotMatch(media, /variant === 'thumb' \? 480 : 1280/);
+});
+
+test('阶段A统一请求层具备去重、超时、安全重试和页面竞态保护', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  assert.match(app, /const inflightGetRequests = new Map\(\)/);
+  assert.match(app, /credentials:\s*'same-origin'/);
+  assert.match(app, /method === 'GET' \|\| method === 'HEAD' \? 12_000 : 30_000/);
+  assert.match(app, /\[502,\s*503,\s*504\]\.includes\(response\.status\)/);
+  assert.match(app, /300 \+ Math\.floor\(Math\.random\(\) \* 301\)/);
+  assert.match(app, /const requestKey = `\$\{user\?\.(?:id|studentId)/);
+  assert.match(app, /\.finally\(\(\) => inflightGetRequests\.delete\(requestKey\)\)/);
+  assert.match(app, /let navigationEpoch = 0/);
+  assert.match(app, /if \(!isCurrentNavigation\(pageEpoch\)\) return/);
+  assert.match(app, /let midnightRefreshTimer = null/);
+  assert.match(app, /clearTimeout\(midnightRefreshTimer\)/);
+  assert.match(app, /60_000/);
+  assert.doesNotMatch(app, /headers:\s*\{\s*'Content-Type':\s*'application\/json'/);
+});
+
+test('阶段A删除不可达登录代码并按需加载本地压缩库', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
+  const loginBody = app.match(/function login\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(loginBody, /location\.replace\('\/entrance\.html'\)/);
+  assert.doesNotMatch(loginBody, /meteor|glass-login|mousemove|#login/);
+  assert.doesNotMatch(bootstrap, /browser-image-compression-2\.0\.2\.js/);
+  assert.match(app, /const loadImageCompressionLibrary = \(\) =>/);
+  assert.match(app, /imageCompressionLibraryPromise/);
+  assert.match(app, /script\.src = '\/vendor\/browser-image-compression-2\.0\.2\.js'/);
+  assert.match(app, /imageCompressionLibraryPromise = null/);
+  assert.match(app, /void loadImageCompressionLibrary\(\)\.catch/);
+});
+
+test('阶段B会话直接携带学生首页快照，前端复用快照并后台刷新聚合接口', () => {
+  const worker = fs.readFileSync('cloudflare/worker.js', 'utf8');
+  const service = fs.readFileSync('cloudflare/services/student-dashboard.js', 'utf8');
+  const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const server = fs.readFileSync('server.js', 'utf8');
+  assert.match(worker, /buildStudentDashboard/);
+  assert.match(worker, /dashboard\s*=\s*auth\.user\.role === 'student'/);
+  assert.match(bootstrap, /__BOOTSTRAP_SESSION__/);
+  assert.match(bootstrap, /__BOOTSTRAP_DASHBOARD__/);
+  assert.match(app, /const studentViewState =/);
+  assert.match(app, /api\('\/api\/student-dashboard'\)/);
+  assert.match(app, /window\.__BOOTSTRAP_DASHBOARD__/);
+  assert.match(app, /studentViewState\.scrollY/);
+  const studentBody = app.match(/async function student\([\s\S]*?\n\}\n\nasync function admin/)?.[0] || '';
+  assert.doesNotMatch(studentBody, /api\('\/api\/(?:teams|teams\/me|tasks|material-tasks)'/);
+  assert.match(service, /if \(user\.trackId !== 'interaction'\) return null/);
+  assert.match(service, /SELECT COUNT\(\*\) AS total FROM teams/);
+  assert.doesNotMatch(service, /SELECT \* FROM teams/);
+  assert.match(server, /buildLocalStudentDashboard/);
+  assert.match(server, /route === '\/api\/student-dashboard'/);
+});
+
+test('阶段B Cloudflare学生会话不泄露密码字段，健康赛道不会读取队伍表', async () => {
+  const [{ default: worker }, { createToken }] = await Promise.all([
+    import('../cloudflare/worker.js'),
+    import('../cloudflare/lib/runtime.js')
+  ]);
+  const user = {
+    id: 'user-health-1',
+    studentId: '246731001',
+    name: '健康赛道测试',
+    role: 'student',
+    campus: '南平',
+    trackId: 'health',
+    status: 'active',
+    createdAt: '2026-07-01T00:00:00.000Z'
+  };
+  const statements = [];
+  const DB = {
+    prepare(sql) {
+      statements.push(sql.replace(/\s+/g, ' ').trim());
+      return {
+        bind() { return this; },
+        async first() {
+          if (/FROM users WHERE id/i.test(sql)) return user;
+          return null;
+        },
+        async all() {
+          if (/FROM app_config/i.test(sql)) {
+            return {
+              results: [
+                { key: 'activityEnabled', valueJson: 'false' },
+                { key: 'trackEnabled', valueJson: '{"interaction":false,"health":false}' },
+                { key: 'maxTeams', valueJson: '50' }
+              ]
+            };
+          }
+          if (/FROM material_tasks/i.test(sql)) return { results: [] };
+          return { results: [] };
+        },
+        async run() { return { success: true }; }
+      };
+    }
+  };
+  const env = {
+    DB,
+    SESSION_SECRET: 'stage-b-session-secret-at-least-32-bytes',
+    MEDIA_SIGNING_SECRET: 'stage-b-media-secret-at-least-32-bytes',
+    ENVIRONMENT: 'test',
+    PROJECT_NAME: 'jinshan20-test'
+  };
+  const token = await createToken(user, env.SESSION_SECRET);
+  const response = await worker.fetch(new Request(
+    'https://jinshan20-test.pages.dev/api/session',
+    { method: 'POST', headers: { authorization: `Bearer ${token}` } }
+  ), env, { waitUntil() {} });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.user.id, user.id);
+  assert.equal(payload.dashboard.version, 1);
+  assert.deepEqual(payload.dashboard.tasks, []);
+  assert.deepEqual(payload.dashboard.materialTasks, []);
+  assert.equal(payload.dashboard.teamSummary, null);
+  assert.equal('password' in payload.user, false);
+  assert.equal('passwordHash' in payload.user, false);
+  assert.equal(JSON.stringify(payload).includes('passwordHash'), false);
+  assert.equal(statements.some((sql) => /\bteams\b/i.test(sql)), false);
 });

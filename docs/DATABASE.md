@@ -158,3 +158,27 @@ checkins/{checkin-id}/{file-id}.{ext}
 阶段 9 迁移新增 `materialTasks[]` 和 `materialSubmissions[]`。任务保存截止时间、扩展名白名单、文件上限、总结要求及个人/队伍模式；提交使用 `(taskId, ownerType, ownerId)` 作为业务唯一关系并包含 `version`。数据库仅保存文件元数据和私有存储名，文件二进制位于 `material-files/`。
 
 任务日程迁移为 `tasks[]` 增加 `scheduleType`、活动日期范围、`refreshDays[]`、`weekdays[]`、每日时间范围；`taskSubmissions[]` 增加 `occurrenceDate` 和 `plazaCopy`。周期任务唯一关系扩展为 `(taskId, ownerType, ownerId, occurrenceDate)`。`config.allowSelfJoin` 默认 `false`。
+
+## Cloudflare 历史缩略图补全
+
+当前 Cloudflare 版本使用 `image_variants` 保存图片变体。历史广场缩略图补全脚本为：
+
+```text
+scripts/backfill-plaza-thumbnails.mjs
+```
+
+脚本规则：
+
+- 只允许测试环境；
+- 查询所有广场帖子关联媒体，不以帖子可见状态缩小审计范围；
+- 已有 `thumb` 记录的媒体不会重复处理；
+- 使用确定性对象键
+  `media/test/backfill/plaza-thumbs/{media-id}-thumb.webp`；
+- 只读取现有 `display` 或原图；
+- 生成最长边不超过 360px、大小不超过 120KB 的 WebP；
+- 使用 `INSERT OR IGNORE` 写入 `image_variants`；
+- 不修改原图、提交记录、帖子状态或任何正式资源；
+- 重复执行不会新增重复 R2 对象或 D1 记录。
+
+本轮没有新增数据库表或迁移文件。测试环境从 1 个缺失变体补全到 0 个；
+正式 D1/R2 未核验、未执行，状态为“未通过”。

@@ -1,0 +1,45 @@
+﻿{
+  "inventoryBeforeFinalCleanup": {
+    "ok": true,
+    "runId": "accept-20260730-a",
+    "users": 0,
+    "loadAdmins": 1,
+    "mediaObjects": 0,
+    "memberCheckins": 0,
+    "uploadIntents": 0,
+    "thumbMediaObjects": 0,
+    "duplicateMediaObjectKeys": 0,
+    "teams": 0,
+    "tasks": 0,
+    "r2Objects": 0
+  },
+  "cleanup": {
+    "ok": true,
+    "runId": "accept-20260730-a",
+    "deletedR2Objects": 0,
+    "d1Changes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0
+    ],
+    "inventoryAfter": {
+      "runId": "accept-20260730-a",
+      "users": 0,
+      "loadAdmins": 0,
+      "mediaObjects": 0,
+      "memberCheckins": 0,
+      "uploadIntents": 0,
+      "thumbMediaObjects": 0,
+      "duplicateMediaObjectKeys": 0,
+      "teams": 0,
+      "tasks": 0,
+      "r2Objects": 0
+    }
+  }
+}

@@ -10,6 +10,7 @@ import {
   claimConfirmedMedia
 } from '../lib/runtime.js';
 import { excelResponse } from '../lib/excel.js';
+import { buildStudentMaterialTasks } from '../services/student-dashboard.js';
 
 const teamForUser = (env, userId) => env.DB.prepare(
   `SELECT t.id,t.name FROM teams t JOIN team_members tm ON tm.team_id=t.id
@@ -61,34 +62,7 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
   const user = auth.user;
 
   if (route === '/api/material-tasks' && request.method === 'GET') {
-    const { results } = await env.DB.prepare(
-      `SELECT id,title,description,deadline,allowed_types_json AS allowedTypesJson,
-              file_limit AS fileLimit,require_summary AS requireSummary,owner_type AS ownerType,status
-         FROM material_tasks WHERE status='published' ORDER BY deadline`
-    ).all();
-    const tasks = [];
-    for (const task of results) {
-      const owner = await ownerForTask(env, user, task).catch(() => null);
-      const submission = owner ? await env.DB.prepare(
-        `SELECT id,summary,status,version,submitted_at AS submittedAt,review_note AS reviewNote,updated_at AS updatedAt
-           FROM material_submissions WHERE task_id=?1 AND owner_type=?2 AND owner_id=?3`
-      ).bind(task.id, owner.type, owner.id).first() : null;
-      if (submission) {
-        const files = await env.DB.prepare(
-          `SELECT id,original_name AS originalName,content_type AS contentType,bytes
-             FROM material_files WHERE submission_id=?1 ORDER BY created_at`
-        ).bind(submission.id).all();
-        submission.files = filePayload(files.results);
-      }
-      tasks.push({
-        ...task,
-        allowedTypes: parseJson(task.allowedTypesJson, []),
-        fileTypes: parseJson(task.allowedTypesJson, []).map((item) => item.replace(/^\./, '')),
-        requireSummary: Boolean(task.requireSummary),
-        submission
-      });
-    }
-    return json({ tasks });
+    return json({ tasks: await buildStudentMaterialTasks(env, user) });
   }
 
   const submitMatch = route.match(/^\/api\/material-tasks\/([^/]+)\/submission$/);
@@ -279,24 +253,36 @@ export const handleMaterialRoutes = async (request, env, ctx, url) => {
     const campuses = await env.DB.prepare(
       "SELECT DISTINCT campus FROM users WHERE role='student' AND campus<>'' ORDER BY campus"
     ).all();
-    const campusProgress = [];
-    for (const task of taskPayloads.filter((item) => item.ownerType === 'user')) {
-      const progress = await env.DB.prepare(
-        `SELECT u.campus,COUNT(*) AS total,
-          SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END) AS completed
-         FROM users u LEFT JOIN material_submissions s
-          ON s.owner_id=u.id AND s.owner_type='user' AND s.task_id=?1
-         WHERE u.role='student' GROUP BY u.campus ORDER BY u.campus`
-      ).bind(task.id).all();
-      campusProgress.push({
+    const progress = await env.DB.prepare(
+      `SELECT mt.id AS taskId,u.campus,COUNT(*) AS total,
+              SUM(CASE WHEN s.id IS NULL THEN 0 ELSE 1 END) AS completed
+         FROM material_tasks mt
+         JOIN users u ON u.role='student'
+         LEFT JOIN material_submissions s
+           ON s.owner_id=u.id AND s.owner_type='user' AND s.task_id=mt.id
+        WHERE mt.owner_type='user'
+        GROUP BY mt.id,u.campus
+        ORDER BY mt.id,u.campus`
+    ).all();
+    const progressByTask = new Map();
+    for (const item of progress.results) {
+      if (!progressByTask.has(item.taskId)) progressByTask.set(item.taskId, []);
+      progressByTask.get(item.taskId).push({
+        campus: item.campus,
+        total: Number(item.total),
+        completed: Number(item.completed)
+      });
+    }
+    const campusProgress = taskPayloads
+      .filter((item) => item.ownerType === 'user')
+      .map((task) => ({
         taskId: task.id,
-        campuses: progress.results.map((item) => ({
+        campuses: (progressByTask.get(task.id) || []).map((item) => ({
           campus: item.campus,
           total: Number(item.total),
           completed: Number(item.completed)
         }))
-      });
-    }
+      }));
     return json({
       tasks: taskPayloads,
       submissions: submissions.results,

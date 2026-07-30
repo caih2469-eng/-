@@ -118,7 +118,8 @@ test('前端使用固定版本压缩库且新图片流程不发送Base64', () =>
   const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
   const app = fs.readFileSync('public/app.js', 'utf8');
   assert.match(html, /\bbootstrap\.js\b/);
-  assert.match(bootstrap, /browser-image-compression-2\.0\.2\.js/);
+  assert.doesNotMatch(bootstrap, /browser-image-compression-2\.0\.2\.js/);
+  assert.match(app, /script\.src = '\/vendor\/browser-image-compression-2\.0\.2\.js'/);
   assert.match(app, /useWebWorker:\s*true/);
   assert.match(app, /method:\s*'PUT'/);
   assert.match(app, /mediaIds:/);

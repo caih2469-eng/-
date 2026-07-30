@@ -4,7 +4,11 @@ const baseUrl = (process.env.LOAD_BASE_URL || 'https://jinshan20-test.pages.dev'
 const studentId = process.env.LOAD_STUDENT_ID;
 const password = process.env.LOAD_PASSWORD;
 const users = Number(process.env.LOAD_USERS || 700);
-const batchSize = Number(process.env.LOAD_BATCH_SIZE || users);
+const requestedBatchSize = Number(process.env.LOAD_BATCH_SIZE || 50);
+if (!Number.isInteger(requestedBatchSize) || requestedBatchSize < 1 || requestedBatchSize > 100) {
+  throw new Error('LOAD_BATCH_SIZE must be an integer between 1 and 100');
+}
+const batchSize = requestedBatchSize;
 const filePath = process.env.LOAD_FILE_PATH || '';
 const postId = process.env.LOAD_POST_ID || '';
 const selectedScenarios = new Set((process.env.LOAD_SCENARIOS || '').split(',').map((item) => item.trim()).filter(Boolean));

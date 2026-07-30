@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "mode": "read-only",
+  "environment": "test",
+  "database": "jinshan20-test",
+  "bucket": "jinshan20-test",
+  "generatedAt": "2026-07-30T01:25:34.002Z",
+  "totals": {
+    "plazaMedia": 2,
+    "compliant": 0,
+    "affected": 2,
+    "issueCounts": {
+      "thumbRecordMissing": 0,
+      "thumbObjectMissing": 0,
+      "thumbNotWebP": 0,
+      "thumbTooLarge": 0,
+      "thumbEdgeTooLong": 1,
+      "originalObjectMissing": 0,
+      "displayObjectMissing": 1,
+      "invalidObjectKey": 0
+    }
+  },
+  "items": [
+    {
+      "mediaId": "c4d96fa5-fd0c-42be-9e4d-000d75ed117e",
+      "postId": "f9d741dd-3a31-494a-9865-ee66d79e970a",
+      "submissionId": "f8ad4117-2283-4468-996b-729c6ca8fd92",
+      "postStatus": "visible",
+      "original": {
+        "key": "task-submissions/64116bd5-9fde-4da7-b3d5-2a2976fbaeff/45e38759-947b-4e31-9dfe-a7cd8df6f7c7/c4d96fa5-fd0c-42be-9e4d-000d75ed117e.jpg",
+        "bytes": 465730,
+        "contentType": "image/jpeg",
+        "exists": true
+      },
+      "display": {
+        "key": null,
+        "bytes": 0,
+        "contentType": null
+      },
+      "thumb": {
+        "key": "media/test/backfill/plaza-thumbs/c4d96fa5-fd0c-42be-9e4d-000d75ed117e-thumb.webp",
+        "bytes": 27742,
+        "contentType": "image/webp",
+        "exists": true,
+        "format": "webp",
+        "width": 360,
+        "height": 203,
+        "longestEdge": 360
+      },
+      "issues": [
+        {
+          "code": "displayObjectMissing",
+          "reason": "missing-d1-record"
+        }
+      ]
+    },
+    {
+      "mediaId": "2a122308-72ac-49b9-bf94-157ffc488a03",
+      "postId": "media-cache-test-post",
+      "submissionId": "media-cache-test-submission",
+      "postStatus": "visible",
+      "original": {
+        "key": "media/test/admin-test/2a122308-72ac-49b9-bf94-157ffc488a03.png",
+        "bytes": 75233,
+        "contentType": "image/png",
+        "exists": true
+      },
+      "display": {
+        "key": "media/test/cache-verification/2a122308-72ac-49b9-bf94-157ffc488a03-display.webp",
+        "bytes": 150922,
+        "contentType": "image/webp",
+        "exists": true
+      },
+      "thumb": {
+        "key": "media/test/cache-verification/2a122308-72ac-49b9-bf94-157ffc488a03-thumb.webp",
+        "bytes": 32034,
+        "contentType": "image/webp",
+        "exists": true,
+        "format": "webp",
+        "width": 480,
+        "height": 322,
+        "longestEdge": 480
+      },
+      "issues": [
+        {
+          "code": "thumbEdgeTooLong",
+          "actualLongestEdge": 480,
+          "maximumEdge": 360
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const root = path.resolve(__dirname, '..');
+const appSource = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+const styleSource = fs.readFileSync(path.join(root, 'public', 'style.css'), 'utf8');
+
+const sourceBetween = (start, end) => {
+  const startIndex = appSource.indexOf(start);
+  const endIndex = appSource.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `缺少代码段起点：${start}`);
+  assert.notEqual(endIndex, -1, `缺少代码段终点：${end}`);
+  return appSource.slice(startIndex, endIndex);
+};
+
+test('阶段E：广场和排行榜缓存仅存于页面内存并按用户隔离', () => {
+  assert.match(appSource, /const VIEW_CACHE_TTL_MS = 20_000;/);
+  assert.match(appSource, /const plazaViewCache = new Map\(\);/);
+  assert.match(appSource, /const rankingViewCache = new Map\(\);/);
+  assert.match(appSource, /const scopedCacheKey = \(\.\.\.parts\) => \[/);
+  assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
+  assert.match(appSource, /\]\.join\('\|'\);/);
+  assert.match(appSource, /scopedCacheKey\('plaza', sort, page, month\)/);
+  assert.match(appSource, /scopedCacheKey\('ranking', period, currentKey\)/);
+  const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
+  assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
+});
+
+test('阶段E：打开广场详情并行加载，浏览计数不阻塞，关闭不重新请求列表', () => {
+  const block = sourceBetween('async function openPlazaPost', 'async function adminComments');
+  assert.match(block, /Promise\.all\(\[detailPromise, commentsPromise\]\)/);
+  assert.match(block, /void api\(`\/api\/plaza\/\$\{postId\}\/view`/);
+  assert.doesNotMatch(block, /await api\(`\/api\/plaza\/\$\{postId\}\/view`/);
+  assert.match(block, /countedPlazaViews\.has\(viewKey\)/);
+  assert.match(block, /root\.innerHTML = '';/);
+  assert.match(block, /window\.scrollTo\(0, plazaScrollY\)/);
+  const closeBlock = block.slice(block.indexOf('const closePost'), block.indexOf('root.querySelector', block.indexOf('const closePost')));
+  assert.doesNotMatch(closeBlock, /\bplaza\s*\(/);
+});
+
+test('阶段E：学生成功操作局部更新、轻提示并后台刷新，不直接重载首页', () => {
+  assert.match(appSource, /const returnToCachedStudentHome =/);
+  assert.match(appSource, /提交成功，但最新数据刷新失败，可稍后重新进入查看。/);
+  assert.match(appSource, /patchStudentTask\(/);
+  assert.match(appSource, /patchStudentMaterialTask\(/);
+  assert.ok((appSource.match(/returnToCachedStudentHome\(/g) || []).length >= 4);
+  assert.match(appSource, /草稿已保存/);
+  assert.match(appSource, /最终提交成功/);
+  assert.match(appSource, /个人打卡成功/);
+  assert.match(appSource, /材料提交成功/);
+});
+
+test('阶段E：写操作按钮即时进入忙碌状态，提示和缓存异常均有移动端样式', () => {
+  assert.match(appSource, /const beginButtonLoading =/);
+  assert.match(appSource, /button\.dataset\.loading === 'true'/);
+  assert.match(appSource, /button\.disabled = true/);
+  assert.match(appSource, /aria-live/);
+  assert.match(styleSource, /\.toast-region\s*\{/);
+  assert.match(styleSource, /\.app-toast\.visible\s*\{/);
+  assert.match(styleSource, /\.view-cache-status\s*\{/);
+  assert.match(styleSource, /\.plaza-detail-placeholder\s*\{/);
+});

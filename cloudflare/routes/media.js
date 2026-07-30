@@ -1,6 +1,15 @@
 import { AwsClient } from 'aws4fetch';
-import { cleanText, json, nowIso, readJson, requireUser } from '../lib/runtime.js';
+import {
+  cleanText,
+  hasMakeupPermission,
+  json,
+  nowIso,
+  readJson,
+  requireUser,
+  shanghaiDate
+} from '../lib/runtime.js';
 import { verifyPrivateMediaRequest } from '../lib/media-signing.js';
+import { taskWindowOpen, teamForUser } from '../services/student-dashboard.js';
 
 const ALLOWED_TYPES = new Map([
   ['image/jpeg', 'jpg'],
@@ -11,6 +20,9 @@ const MAX_FINAL_BYTES = 1_572_864;
 const THUMB_MAX_EDGE = 360;
 const DISPLAY_MAX_EDGE = 960;
 const INTENT_TTL_SECONDS = 180;
+const MEMBER_FAST_MAX_BYTES = 307_200;
+const MEMBER_FAST_MAX_EDGE = 960;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const noLeak = (status = 404) => json({ error: '媒体不可访问' }, status, {
   'cache-control': 'no-store',
@@ -27,12 +39,333 @@ const signatureMatches = (bytes, type) => {
     && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP';
 };
 
+const sha256Bytes = async (bytes) => {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+const memberFastMediaPayload = (media) => ({
+  id: media.id,
+  mimeType: media.mimeType,
+  fileSize: Number(media.fileSize),
+  width: Number(media.width),
+  height: Number(media.height)
+});
+
+const loadTestContext = async (request, env, url) => {
+  if (!['test', 'staging'].includes(String(env.ENVIRONMENT || '').toLowerCase())
+      || String(env.ALLOW_LOAD_TESTS || '').toLowerCase() !== 'true') {
+    return { error: json({ error: '负载测试接口未启用' }, 404, { 'cache-control': 'no-store' }) };
+  }
+  const auth = await requireUser(request, env, true);
+  if (auth.error) return { error: auth.error };
+  const runId = cleanText(url.searchParams.get('runId'), 40).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(runId)) {
+    return { error: json({ error: 'runId格式无效' }, 400, { 'cache-control': 'no-store' }) };
+  }
+  return {
+    runId,
+    userPrefix: `load-fast-user-${runId}-`,
+    teamPrefix: `load-fast-team-${runId}-`,
+    adminId: `lf-admin-${runId.slice(0, 30)}`,
+    taskId: `load-fast-task-${runId}`,
+    objectPrefix: `media/${env.ENVIRONMENT}/load-fast-user-${runId}-`
+  };
+};
+
+const listAllR2Keys = async (bucket, prefix) => {
+  const keys = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    keys.push(...page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys;
+};
+
+const readMemberFastLoadInventory = async (env, context) => {
+  const like = `${context.userPrefix}%`;
+  const [
+    users,
+    loadAdmins,
+    uploads,
+    checkins,
+    intents,
+    thumbs,
+    duplicateMedia,
+    teams,
+    tasks,
+    r2Keys
+  ] = await Promise.all([
+    env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE id LIKE ?1').bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE id=?1')
+      .bind(context.adminId).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM media_objects WHERE owner_user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM member_checkins WHERE user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM media_upload_intents WHERE user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM media_objects WHERE owner_user_id LIKE ?1 AND business_type LIKE '%:thumb'"
+    ).bind(like).first(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM (
+         SELECT object_key FROM media_objects WHERE owner_user_id LIKE ?1
+          GROUP BY object_key HAVING COUNT(*)>1
+       )`
+    ).bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM teams WHERE id LIKE ?1')
+      .bind(`${context.teamPrefix}%`).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM tasks WHERE id=?1')
+      .bind(context.taskId).first(),
+    listAllR2Keys(env.UPLOADS, context.objectPrefix)
+  ]);
+  return {
+    runId: context.runId,
+    users: Number(users?.total || 0),
+    loadAdmins: Number(loadAdmins?.total || 0),
+    mediaObjects: Number(uploads?.total || 0),
+    memberCheckins: Number(checkins?.total || 0),
+    uploadIntents: Number(intents?.total || 0),
+    thumbMediaObjects: Number(thumbs?.total || 0),
+    duplicateMediaObjectKeys: Number(duplicateMedia?.total || 0),
+    teams: Number(teams?.total || 0),
+    tasks: Number(tasks?.total || 0),
+    r2Objects: r2Keys.length
+  };
+};
+
+const memberFastLoadInventory = async (request, env, url) => {
+  const context = await loadTestContext(request, env, url);
+  if (context.error) return context.error;
+  const inventory = await readMemberFastLoadInventory(env, context);
+  return json({ ok: true, ...inventory }, 200, { 'cache-control': 'no-store' });
+};
+
+const memberFastLoadCleanup = async (request, env, url) => {
+  const context = await loadTestContext(request, env, url);
+  if (context.error) return context.error;
+  const like = `${context.userPrefix}%`;
+  const r2Keys = await listAllR2Keys(env.UPLOADS, context.objectPrefix);
+  for (let offset = 0; offset < r2Keys.length; offset += 1000) {
+    await env.UPLOADS.delete(r2Keys.slice(offset, offset + 1000));
+  }
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM image_variants
+        WHERE source_type='member_checkin'
+          AND source_id IN (SELECT id FROM member_checkins WHERE user_id LIKE ?1)`
+    ).bind(like),
+    env.DB.prepare('DELETE FROM member_checkins WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM media_objects WHERE owner_user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM media_upload_intents WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM team_members WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM teams WHERE id LIKE ?1').bind(`${context.teamPrefix}%`),
+    env.DB.prepare('DELETE FROM users WHERE id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM users WHERE id=?1').bind(context.adminId),
+    env.DB.prepare('DELETE FROM tasks WHERE id=?1').bind(context.taskId)
+  ]);
+  const inventoryAfter = await readMemberFastLoadInventory(env, context);
+  return json({
+    ok: true,
+    runId: context.runId,
+    deletedR2Objects: r2Keys.length,
+    d1Changes: results.map((result) => Number(result.meta?.changes || 0)),
+    inventoryAfter
+  }, 200, { 'cache-control': 'no-store' });
+};
+
+const memberFastUpload = async (request, env) => {
+  const auth = await requireUser(request, env);
+  if (auth.error) return auth.error;
+  if (auth.user.role !== 'student' || auth.user.trackId !== 'interaction') {
+    return json({ error: '仅四校区互动赛道学生可以上传个人打卡图片' }, 403);
+  }
+
+  const taskId = cleanText(request.headers.get('x-task-id'), 80);
+  const idempotencyKey = cleanText(request.headers.get('x-idempotency-key'), 80);
+  const mimeType = cleanText(request.headers.get('content-type'), 80).toLowerCase().split(';')[0];
+  const width = Number(request.headers.get('x-image-width'));
+  const height = Number(request.headers.get('x-image-height'));
+  const declaredLength = Number(request.headers.get('content-length') || 0);
+  if (!taskId) return json({ error: '缺少任务编号' }, 400);
+  if (!UUID_PATTERN.test(idempotencyKey)) return json({ error: '上传幂等编号格式无效' }, 400);
+  if (!['image/webp', 'image/jpeg'].includes(mimeType)) {
+    return json({ error: '个人打卡成品仅支持 WebP 或 JPEG' }, 415);
+  }
+  if (!Number.isInteger(width) || !Number.isInteger(height)
+      || width < 1 || height < 1 || Math.max(width, height) > MEMBER_FAST_MAX_EDGE) {
+    return json({ error: '图片尺寸无效，最长边不能超过960像素' }, 400);
+  }
+  if (declaredLength > MEMBER_FAST_MAX_BYTES) {
+    return json({ error: '图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。' }, 413);
+  }
+
+  const task = await env.DB.prepare(
+    `SELECT id,track_id AS trackId,submission_type AS submissionType,
+            starts_at AS startsAt,ends_at AS endsAt,schedule_json AS scheduleJson,status
+       FROM tasks WHERE id=?1 LIMIT 1`
+  ).bind(taskId).first();
+  if (!task || task.status !== 'published' || task.trackId !== 'interaction'
+      || (task.submissionType && task.submissionType !== 'team')) {
+    return json({ error: '任务不存在、已关闭或不支持队伍成员打卡' }, 404);
+  }
+  const team = await teamForUser(env, auth.user.id);
+  if (!team) return json({ error: '尚未分配队伍，不能上传队伍打卡图片' }, 403);
+  const occurrenceDate = shanghaiDate();
+  let windowOpen = taskWindowOpen(task, occurrenceDate, false);
+  if (!windowOpen) {
+    const makeupAllowed = await hasMakeupPermission(env, auth.user.id, occurrenceDate);
+    windowOpen = taskWindowOpen(task, occurrenceDate, makeupAllowed);
+  }
+  if (!windowOpen) return json({ error: '当前不在该任务的打卡时间范围内' }, 403);
+
+  const buffer = await request.arrayBuffer();
+  if (!buffer.byteLength) return json({ error: '图片内容不能为空' }, 400);
+  if (buffer.byteLength > MEMBER_FAST_MAX_BYTES) {
+    return json({ error: '图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。' }, 413);
+  }
+  const bytes = new Uint8Array(buffer);
+  if (!signatureMatches(bytes, mimeType)) return json({ error: '图片真实格式校验失败' }, 415);
+
+  const digest = await sha256Bytes(buffer);
+  const extension = mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const objectKey = `media/${env.ENVIRONMENT || 'test'}/${auth.user.id}/member-checkin/${idempotencyKey}-${digest}.${extension}`;
+  const now = nowIso();
+  const expiresAt = new Date(Date.now() + INTENT_TTL_SECONDS * 1000).toISOString();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO media_upload_intents
+      (id,user_id,task_id,business_type,object_key,mime_type,expected_size,width,height,status,
+       expires_at,created_at,updated_at)
+     VALUES (?1,?2,?3,'member-checkin',?4,?5,?6,?7,?8,'pending',?9,?10,?10)`
+  ).bind(idempotencyKey, auth.user.id, task.id, objectKey, mimeType, buffer.byteLength,
+    width, height, expiresAt, now).run();
+  const intent = await env.DB.prepare(
+    `SELECT id,user_id AS userId,task_id AS taskId,business_type AS businessType,
+            object_key AS objectKey,mime_type AS mimeType,expected_size AS expectedSize,
+            width,height,status
+       FROM media_upload_intents WHERE id=?1 LIMIT 1`
+  ).bind(idempotencyKey).first();
+  if (!intent) return json({ error: '上传会话创建失败，请稍后重试' }, 500);
+  if (intent.userId !== auth.user.id) return json({ error: '无权使用该上传编号' }, 403);
+  const intentMatches = intent.taskId === task.id
+    && intent.businessType === 'member-checkin'
+    && intent.objectKey === objectKey
+    && intent.mimeType === mimeType
+    && Number(intent.expectedSize) === buffer.byteLength
+    && Number(intent.width) === width
+    && Number(intent.height) === height;
+  if (!intentMatches) return json({ error: '相同上传编号对应的图片内容不一致' }, 409);
+
+  const existingMedia = await env.DB.prepare(
+    `SELECT id,owner_user_id AS ownerUserId,task_id AS taskId,business_type AS businessType,
+            object_key AS objectKey,mime_type AS mimeType,file_size AS fileSize,width,height
+       FROM media_objects WHERE id=?1 LIMIT 1`
+  ).bind(idempotencyKey).first();
+  if (existingMedia) {
+    if (existingMedia.ownerUserId !== auth.user.id) return json({ error: '无权访问该媒体记录' }, 403);
+    if (intent.status !== 'confirmed' || existingMedia.taskId !== task.id
+        || existingMedia.businessType !== 'member-checkin' || existingMedia.objectKey !== objectKey
+        || existingMedia.mimeType !== mimeType || Number(existingMedia.fileSize) !== buffer.byteLength
+        || Number(existingMedia.width) !== width || Number(existingMedia.height) !== height) {
+      return json({ error: '上传记录状态或内容不一致' }, 409);
+    }
+    return json({ ok: true, repeated: true, media: memberFastMediaPayload(existingMedia) });
+  }
+  if (intent.status === 'confirmed') return json({ error: '已确认的上传缺少媒体记录' }, 409);
+  if (intent.status !== 'pending') return json({ error: '该上传会话已失效' }, 409);
+
+  const priorObject = await env.UPLOADS.head(objectKey);
+  if (priorObject && (priorObject.size !== buffer.byteLength
+      || priorObject.httpMetadata?.contentType !== mimeType
+      || priorObject.customMetadata?.sha256 !== digest)) {
+    return json({ error: '上传对象与幂等记录不一致' }, 409);
+  }
+  let wroteNewObject = false;
+  if (!priorObject) {
+    await env.UPLOADS.put(objectKey, buffer, {
+      httpMetadata: { contentType: mimeType },
+      customMetadata: { sha256: digest, idempotencyKey }
+    });
+    wroteNewObject = true;
+  }
+  try {
+    const object = await env.UPLOADS.head(objectKey);
+    if (!object || object.size !== buffer.byteLength
+        || object.httpMetadata?.contentType !== mimeType
+        || object.customMetadata?.sha256 !== digest) {
+      throw Object.assign(new Error('R2图片校验失败，请重新上传'), { status: 409 });
+    }
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO media_objects
+          (id,owner_user_id,task_id,business_type,object_key,mime_type,file_size,width,height,etag,
+           visibility,business_id,created_at,updated_at)
+         VALUES (?1,?2,?3,'member-checkin',?4,?5,?6,?7,?8,?9,'private',NULL,?10,?10)`
+      ).bind(idempotencyKey, auth.user.id, task.id, objectKey, mimeType, buffer.byteLength,
+        width, height, object.httpEtag || '', now),
+      env.DB.prepare(
+        `UPDATE media_upload_intents
+            SET status='confirmed',confirmed_at=?1,updated_at=?1
+          WHERE id=?2 AND user_id=?3 AND status='pending'`
+      ).bind(now, idempotencyKey, auth.user.id)
+    ]);
+    if (!results[1]?.meta?.changes) {
+      const recovered = await env.DB.prepare(
+        `SELECT id,mime_type AS mimeType,file_size AS fileSize,width,height
+           FROM media_objects WHERE id=?1 AND owner_user_id=?2 LIMIT 1`
+      ).bind(idempotencyKey, auth.user.id).first();
+      if (recovered) {
+        return json({ ok: true, repeated: true, media: memberFastMediaPayload(recovered) });
+      }
+      throw Object.assign(new Error('图片确认发生冲突，请点击重试上传'), { status: 409 });
+    }
+    return json({
+      ok: true,
+      repeated: false,
+      media: memberFastMediaPayload({
+        id: idempotencyKey,
+        mimeType,
+        fileSize: buffer.byteLength,
+        width,
+        height
+      })
+    }, 201);
+  } catch (error) {
+    if (wroteNewObject) await env.UPLOADS.delete(objectKey).catch(() => null);
+    throw error;
+  }
+};
+
 const rejectIntent = async (env, intent, reason) => {
   await env.UPLOADS.delete(intent.objectKey).catch(() => null);
   await env.DB.prepare(
     "UPDATE media_upload_intents SET status='rejected',updated_at=?1 WHERE id=?2 AND status='pending'"
   ).bind(nowIso(), intent.id).run();
   throw Object.assign(new Error(reason), { status: 415 });
+};
+
+export const inspectUploadedObject = async (env, objectKey) => {
+  const ranged = await env.UPLOADS.get(objectKey, { range: { offset: 0, length: 16 } });
+  if (!ranged) return null;
+  const bytes = new Uint8Array(await new Response(ranged.body).arrayBuffer());
+  let size = Number(ranged.size);
+  let contentType = ranged.httpMetadata?.contentType || '';
+  let etag = ranged.httpEtag || '';
+  let usedHeadFallback = false;
+  if (!Number.isFinite(size) || size < 1 || !contentType || !etag) {
+    const metadata = await env.UPLOADS.head(objectKey);
+    if (!metadata) return null;
+    usedHeadFallback = true;
+    size = Number(metadata.size);
+    contentType = metadata.httpMetadata?.contentType || '';
+    etag = metadata.httpEtag || '';
+  }
+  return { bytes, size, contentType, etag, usedHeadFallback };
 };
 
 const createUploadIntent = async (request, env) => {
@@ -131,16 +464,14 @@ const confirmUpload = async (request, env, intentId) => {
       await rejectIntent(env, intent, '任务已关闭，图片不能继续确认');
     }
   }
-  const object = await env.UPLOADS.head(intent.objectKey);
+  const object = await inspectUploadedObject(env, intent.objectKey);
   if (!object) return json({ error: 'R2尚未收到图片，请重新上传' }, 409);
-  const actualType = object.httpMetadata?.contentType || '';
+  const actualType = object.contentType;
   if (object.size < 1 || object.size > MAX_FINAL_BYTES || object.size !== Number(intent.expectedSize)
       || actualType !== intent.mimeType || !ALLOWED_TYPES.has(actualType)) {
     return rejectIntent(env, intent, '上传图片的大小或类型与申请信息不一致');
   }
-  const head = await env.UPLOADS.get(intent.objectKey, { range: { offset: 0, length: 16 } });
-  const bytes = new Uint8Array(await new Response(head.body).arrayBuffer());
-  if (!signatureMatches(bytes, actualType)) return rejectIntent(env, intent, '图片真实格式校验失败');
+  if (!signatureMatches(object.bytes, actualType)) return rejectIntent(env, intent, '图片真实格式校验失败');
   const now = nowIso();
   const mediaId = intent.id;
   const isThumb = intent.businessType.endsWith(':thumb');
@@ -164,7 +495,7 @@ const confirmUpload = async (request, env, intentId) => {
           visibility,business_id,created_at,updated_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'private',?11,?12,?12)`
     ).bind(mediaId, intent.userId, intent.taskId, intent.businessType, intent.objectKey,
-      actualType, object.size, intent.width, intent.height, object.httpEtag || '', parentMediaId, now),
+       actualType, object.size, intent.width, intent.height, object.etag, parentMediaId, now),
     env.DB.prepare(
       "UPDATE media_upload_intents SET status='confirmed',confirmed_at=?1,updated_at=?1 WHERE id=?2 AND status='pending'"
     ).bind(now, intent.id)
@@ -286,11 +617,20 @@ const cleanupOrphanMedia = async (request, env) => {
 };
 
 export const handleMediaRoutes = async (request, env, ctx, url) => {
+  if (url.pathname === '/__load/member-checkin-fast/inventory' && request.method === 'GET') {
+    return memberFastLoadInventory(request, env, url);
+  }
+  if (url.pathname === '/__load/member-checkin-fast/cleanup' && request.method === 'POST') {
+    return memberFastLoadCleanup(request, env, url);
+  }
   if (url.pathname === '/api/admin/media/cleanup' && request.method === 'POST') {
     return cleanupOrphanMedia(request, env);
   }
   if (url.pathname === '/api/media/upload-intents' && request.method === 'POST') {
     return createUploadIntent(request, env);
+  }
+  if (url.pathname === '/api/media/member-checkin-fast' && request.method === 'POST') {
+    return memberFastUpload(request, env);
   }
   const confirm = url.pathname.match(/^\/api\/media\/upload-intents\/([^/]+)\/confirm$/);
   if (confirm && request.method === 'POST') return confirmUpload(request, env, decodeURIComponent(confirm[1]));
