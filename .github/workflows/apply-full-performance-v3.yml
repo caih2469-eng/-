@@ -1,0 +1,60 @@
+name: Apply full performance v3 patch
+
+on:
+  push:
+    branches:
+      - fix/full-performance-v3-20260730
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-full-performance-v3
+  cancel-in-progress: false
+
+jobs:
+  patch-and-verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.head_commit.message, 'perf: apply full performance v3')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: fix/full-performance-v3-20260730
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Apply source patch
+        run: node scripts/apply-full-performance-v3.mjs
+      - name: Syntax and text checks
+        run: |
+          pnpm run check
+          pnpm run check:text
+      - name: Automated tests
+        run: pnpm test
+      - name: Commit generated source changes
+        run: |
+          rm scripts/apply-full-performance-v3.mjs
+          rm .github/workflows/apply-full-performance-v3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/app.js public/bootstrap.js public/index.html \
+            cloudflare/worker.js cloudflare/routes/media.js \
+            cloudflare/routes/materials.js cloudflare/routes/student.js \
+            test/full-performance-v3.test.js docs/FULL_PERFORMANCE_V3_AUDIT.md \
+            scripts/apply-full-performance-v3.mjs .github/workflows/apply-full-performance-v3.yml
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 1
+          fi
+          git commit -m "perf: apply full performance v3"
+          git push origin HEAD:fix/full-performance-v3-20260730
