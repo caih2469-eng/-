@@ -52,9 +52,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-backend.mjs
+      - run: node --check scripts/apply-approved-frontend.mjs
+      - run: node --check scripts/apply-approved-backfill.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - run: node scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node scripts/apply-approved-backend.mjs
+      - run: node scripts/apply-approved-frontend.mjs
+      - run: node scripts/apply-approved-backfill.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -95,16 +101,23 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-backend.mjs
+      - run: node --check scripts/apply-approved-frontend.mjs
+      - run: node --check scripts/apply-approved-backfill.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - run: node scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node scripts/apply-approved-backend.mjs
+      - run: node scripts/apply-approved-frontend.mjs
+      - run: node scripts/apply-approved-backfill.mjs
       - name: Verify generated assets use the latest cache version
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '20260730-adminphoto2' public/bootstrap.js
-          grep -q '20260730-adminphoto2' public/entrance.html
-          if grep -R -n -E '20260730-(flow2|adminphoto1)' public/bootstrap.js public/index.html public/entrance.html; then
+          grep -q '20260731-approved1' public/bootstrap.js
+          grep -q '20260731-approved1' public/entrance.html
+          grep -q '20260731-approved1' public/index.html
+          if grep -R -n -E '20260730-(flow2|adminphoto1|adminphoto2)' public/bootstrap.js public/index.html public/entrance.html; then
             echo '旧资源版本仍残留，停止部署。'
             exit 1
           fi
@@ -123,7 +136,7 @@ jobs:
       - name: Stamp exact production commit
         shell: bash
         run: |
-          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260730-adminphoto2',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,assetVersion:'20260731-approved1',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
       - name: Deploy exact main commit to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
@@ -138,7 +151,7 @@ jobs:
           url="https://jinshan20.pages.dev/deployment-version.json?run=${GITHUB_RUN_ID}&attempt=${GITHUB_RUN_ATTEMPT}"
           for attempt in $(seq 1 30); do
             body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
-            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260730-adminphoto2'; then
+            if printf '%s' "$body" | grep -Fq "$GITHUB_SHA" && printf '%s' "$body" | grep -Fq '20260731-approved1'; then
               echo "Production verified at commit $GITHUB_SHA"
               printf '%s\n' "$body"
               exit 0
@@ -154,7 +167,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Backfill 540px WebP admin thumbnails
+      - name: Backfill 640px WebP history, admin and plaza thumbnails
         continue-on-error: true
         run: node scripts/backfill-admin-thumbnails-540.mjs --environment production --apply --confirm-production jinshan20 --limit 500
         env:
