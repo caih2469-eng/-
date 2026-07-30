@@ -20,6 +20,13 @@
     console.debug('[perf]', metric);
   };
   const bootstrapStarted = performance.now();
+  const assetVersion = '20260730-admin-refactor1';
+  const loadStylesheet = (href) => {
+    const stylesheet = document.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = href;
+    document.head.appendChild(stylesheet);
+  };
   const loadScript = (src) => new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = src;
@@ -59,12 +66,10 @@
       window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
-      const stylesheet = document.createElement('link');
-      stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/style.css?v=20260730-plaza640';
-      document.head.appendChild(stylesheet);
-      await loadScript('/site-path.js?v=20260730-plaza640');
-      await loadScript('/app.js?v=20260730-plaza640');
+      loadStylesheet(`/style.css?v=${assetVersion}`);
+      loadStylesheet(`/admin-dashboard-refactor.css?v=${assetVersion}`);
+      await loadScript(`/site-path.js?v=${assetVersion}`);
+      await loadScript(`/app.js?v=${assetVersion}`);
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });
