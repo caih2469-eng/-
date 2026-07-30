@@ -14,7 +14,7 @@
 .admin-user-overview .pending strong { color: #ff9f43; }
 .admin-user-tile-copy { min-width: 0; display: grid; gap: 3px; text-align: left; }
 .admin-user-tile-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted, #8f96a8); font-weight: 400; }
-.user-completion.pending { opacity: .55; }
+.user-completion.pending { opacity: .72; }
 .admin-management-stack { display: grid; gap: 12px; }
 .admin-compact-module { padding: 0 !important; overflow: hidden; }
 .admin-accordion-heading { margin: 0; }
@@ -55,6 +55,20 @@
 .admin-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-advanced-note { margin: 0; padding: 0 4px 18px; color: var(--muted, #8f96a8); font-size: .88rem; text-align: center; }
 
+/* STUDENT_ADMIN_FLOW_V2 */
+.admin-post-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.admin-post-tile { min-height: 126px; align-content: start; }
+.admin-post-tile .user-completion { min-width: 54px; padding-inline: 8px; border-radius: 999px; font-size: .78rem; }
+.student-shortcuts-compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.student-shortcuts-compact button { min-height: 150px; }
+.student-shortcuts-compact button strong { font-size: clamp(1.15rem, 2.4vw, 1.55rem); }
+#modalRoot:empty { display: none; }
+.history-drawer { max-height: min(86vh, 780px); }
+.drawer-photo-grid.compact { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+#memberPreview { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+#memberUploadStatus { min-height: 1.5em; }
+.admin-comment-list { content-visibility: auto; contain-intrinsic-size: 900px; }
+
 @media (max-width: 760px) {
   .admin-refactor-hero .row { display: grid; }
   .admin-header-actions { justify-content: flex-start; }
@@ -69,6 +83,8 @@
   .admin-compact-actions { justify-content: flex-start; }
   .admin-post-status { justify-content: flex-start; }
   .admin-post-row > button { justify-self: start; }
+  .student-shortcuts-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .student-shortcuts-compact button:last-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 430px) {
@@ -77,4 +93,6 @@
   .admin-header-actions button { flex: 1 1 calc(50% - 8px); }
   .admin-post-details { grid-template-columns: 1fr; }
   .admin-post-details .wide { grid-column: auto; }
+  .admin-post-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-post-tile { min-height: 138px; padding: 14px 12px; }
 }
