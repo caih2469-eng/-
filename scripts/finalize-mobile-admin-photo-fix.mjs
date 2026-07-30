@@ -15,6 +15,13 @@ const writeIfChanged = (file, before, after) => {
 };
 
 {
+  const { file, source } = readRequired('scripts/apply-admin-dashboard-refactor.mjs');
+  const next = source.replaceAll('20260730-flow2', version);
+  if (!next.includes(version)) throw new Error('后台补丁缓存版本更新失败');
+  writeIfChanged(file, source, next);
+}
+
+{
   const { file, source } = readRequired('public/entrance.html');
   const next = source.replace(/\/entrance\.js\?v=[a-zA-Z0-9-]+/, `/entrance.js?v=${version}`);
   if (!next.includes(`/entrance.js?v=${version}`)) throw new Error('登录入口缓存版本更新失败');
@@ -37,7 +44,7 @@ const writeIfChanged = (file, before, after) => {
   const { file, source } = readRequired('test/production-media-login-performance.test.js');
   const next = source
     .replace(/MEDIA_THUMB_MAX_EDGE = (?:360|540)/g, 'MEDIA_THUMB_MAX_EDGE = 540')
-    .replace(/MEDIA_THUMB_QUALITY = (?:0\.72|0\.82)/g, 'MEDIA_THUMB_QUALITY = 0.82')
+    .replaceAll('MEDIA_THUMB_QUALITY = 0\\.72', 'MEDIA_THUMB_QUALITY = 0\\.82')
     .replace(/THUMB_MAX_EDGE = (?:360|540)/g, 'THUMB_MAX_EDGE = 540');
   writeIfChanged(file, source, next);
 }
