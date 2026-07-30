@@ -189,3 +189,15 @@ test('plaza responses prefer thumb URLs', () => {
   assert.ok(thumbUrls.length >= 2);
   assert.ok(imageUrls.length >= 2);
 });
+
+test('backfill uses a versioned immutable key and bounded separate-path verification', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'backfill-plaza-thumbnails.mjs'),
+    'utf8'
+  );
+  assert.match(source, /-thumb-640-v2\.webp/);
+  assert.match(source, /const retryDelays = \[0, 500, 1000, 1500\]/);
+  assert.match(source, /const verifyPath = path\.join\(workDir,[\s\S]*-verify-\$\{attempt\}/);
+  assert.match(source, /fetchR2Object\(options, objectKey, verifyPath, true\)/);
+  assert.doesNotMatch(source, /fetchR2Object\(options, objectKey, outputPath, true\);\s*if \(!uploadedObject\)/);
+});
