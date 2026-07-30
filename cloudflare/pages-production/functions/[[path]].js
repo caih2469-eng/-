@@ -1,6 +1,6 @@
 import worker from '../../worker.js';
 import { withD1Session } from '../../lib/d1-session-wrapper.js';
-import { handleMemberFastV3 } from '../../routes/member-fast-v3.js';
+import { handleMemberFastV3Safe } from '../../routes/member-fast-v3-safe.js';
 
 export const onRequest = async (context) => {
   const incoming = new URL(context.request.url);
@@ -14,7 +14,7 @@ export const onRequest = async (context) => {
   if (pathname === '/health' || pathname.startsWith('/api/') || pathname.startsWith('/__load/')) {
     return withD1Session(routedRequest, context.env, async (request, env) => {
       if (pathname === '/api/media/member-checkin-fast' && request.method === 'POST') {
-        return handleMemberFastV3(request, env);
+        return handleMemberFastV3Safe(request, env);
       }
       return worker.fetch(request, env, context);
     });
