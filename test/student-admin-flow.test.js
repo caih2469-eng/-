@@ -25,8 +25,8 @@ test('member check-in respects the administrator image limit and submits all con
   assert.match(memberBody, /Number\(task\.imageLimit\)/);
   assert.match(memberBody, /multiple required/);
   assert.match(memberBody, /files\.length > maxImages/);
-  assert.match(memberBody, /session\.items\.map\(\(item\) => item\.mediaId\)/);
-  assert.match(memberBody, /mediaIds\n\s*}\)/);
+  assert.match(memberBody, /session\?\.items\?\.map\(\(item\) => item\.mediaId\)/);
+  assert.match(memberBody, /occurrenceDate: task\.occurrenceDate,[\s\S]*mediaIds/);
   assert.doesNotMatch(memberBody, /files\?\.\[0\]/);
 });
 
