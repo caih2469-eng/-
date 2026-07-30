@@ -52,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: node scripts/apply-admin-dashboard-refactor.mjs
+      - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -79,10 +80,20 @@ jobs:
        github.ref == 'refs/heads/main')
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: cloudflare-production
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: node scripts/apply-admin-dashboard-refactor.mjs
+      - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -95,6 +106,16 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-production
           command: d1 execute jinshan20 --remote --file ../../migrations/production/0006_media_pipeline.sql
+      - name: Backfill legacy private display records
+        run: node scripts/backfill-private-checkin-images.mjs --environment production --apply --confirm-production jinshan20
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Backfill 540px WebP admin thumbnails
+        run: node scripts/backfill-admin-thumbnails-540.mjs --environment production --apply --confirm-production jinshan20 --limit 500
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
