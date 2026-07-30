@@ -30,10 +30,10 @@ test('admin dashboard patch is idempotent and generates the compact dashboard', 
   assert.match(compact, /refreshCompactTeamPanel/);
 });
 
-test('bootstrap loads the refactor stylesheet with a new cache key', () => {
+test('bootstrap loads the refactor stylesheet with the unified production cache key', () => {
   const bootstrap = read('public/bootstrap.js');
   assert.match(bootstrap, /admin-dashboard-refactor\.css/);
-  assert.match(bootstrap, /20260730-admin-refactor1/);
+  assert.match(bootstrap, /20260730-plaza640/);
 });
 
 test('compact dashboard stylesheet includes mobile layout rules', () => {
