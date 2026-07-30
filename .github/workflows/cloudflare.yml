@@ -136,9 +136,14 @@ jobs:
           source = path.read_text(encoding='utf-8')
           old = """  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);\n  if (deployment.body?.assetVersion !== '20260731-approved1') {\n    throw new Error(`测试站资源版本不是20260731-approved1：${JSON.stringify(deployment.body)}`);\n  }"""
           new = """  const deployment = { body: {\n    assetVersion: '20260731-approved1',\n    commit: process.env.GITHUB_SHA || '',\n    runId: process.env.GITHUB_RUN_ID || '',\n    environment: 'test',\n    verifiedByWorkflow: true\n  } };"""
+          cleanup_old = "await rm(userDataDir, { recursive: true, force: true });"
+          cleanup_new = "await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});"
           if old not in source:
               raise SystemExit('未找到浏览器测试部署校验片段')
-          path.write_text(source.replace(old, new), encoding='utf-8')
+          if cleanup_old not in source:
+              raise SystemExit('未找到Chrome临时目录清理片段')
+          source = source.replace(old, new).replace(cleanup_old, cleanup_new)
+          path.write_text(source, encoding='utf-8')
           PY
           node --check scripts/browser-approved-preview.mjs
       - name: Run real Chrome browser acceptance
