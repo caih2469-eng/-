@@ -51,6 +51,7 @@ jobs:
     environment: cloudflare-test
     steps:
       - uses: actions/checkout@v4
+      - run: node scripts/apply-admin-dashboard-refactor.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -81,6 +82,7 @@ jobs:
     environment: cloudflare-production
     steps:
       - uses: actions/checkout@v4
+      - run: node scripts/apply-admin-dashboard-refactor.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
