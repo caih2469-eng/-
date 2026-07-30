@@ -1,0 +1,243 @@
+{
+  "schemaVersion": 1,
+  "environment": "https://jinshan20-test.pages.dev",
+  "runId": "accept-20260730-a",
+  "generatedAt": "2026-07-30T01:30:20.440Z",
+  "users": 700,
+  "fixture": {
+    "path": "test/fixtures/member-checkin-fast-load.webp",
+    "bytes": 10406,
+    "mimeType": "image/webp",
+    "width": 800,
+    "height": 600
+  },
+  "prepared": {
+    "taskId": "load-fast-task-accept-20260730-a",
+    "users": 700,
+    "teams": 35
+  },
+  "inventoryBefore": {
+    "ok": true,
+    "runId": "accept-20260730-a",
+    "users": 701,
+    "mediaObjects": 0,
+    "memberCheckins": 0,
+    "uploadIntents": 0,
+    "thumbMediaObjects": 0,
+    "duplicateMediaObjectKeys": 0,
+    "teams": 35,
+    "tasks": 1,
+    "r2Objects": 0
+  },
+  "stages": [
+    {
+      "concurrency": 10,
+      "users": 175,
+      "successes": 175,
+      "failures": 0,
+      "successRate": 100,
+      "fiveXx": 0,
+      "wallTimeMs": 73096.8,
+      "latency": {
+        "login": {
+          "count": 175,
+          "averageMs": 411.6,
+          "p50Ms": 343.4,
+          "p95Ms": 814.4,
+          "p99Ms": 1578.2,
+          "maxMs": 2174.7
+        },
+        "memberCheckinFast": {
+          "count": 175,
+          "averageMs": 2031.7,
+          "p50Ms": 1986.8,
+          "p95Ms": 2410.2,
+          "p99Ms": 2658.9,
+          "maxMs": 2691.8
+        },
+        "memberCheckinPut": {
+          "count": 175,
+          "averageMs": 1078.9,
+          "p50Ms": 1045.5,
+          "p95Ms": 1398.4,
+          "p99Ms": 1543.7,
+          "maxMs": 1597.6
+        },
+        "queryVerify": {
+          "count": 175,
+          "averageMs": 524.4,
+          "p50Ms": 463.1,
+          "p95Ms": 1053.1,
+          "p99Ms": 1161.6,
+          "maxMs": 1512.8
+        }
+      },
+      "errors": []
+    },
+    {
+      "concurrency": 25,
+      "users": 175,
+      "successes": 175,
+      "failures": 0,
+      "successRate": 100,
+      "fiveXx": 0,
+      "wallTimeMs": 29511.2,
+      "latency": {
+        "login": {
+          "count": 175,
+          "averageMs": 424.3,
+          "p50Ms": 343.5,
+          "p95Ms": 890.8,
+          "p99Ms": 1264.5,
+          "maxMs": 1421.8
+        },
+        "memberCheckinFast": {
+          "count": 175,
+          "averageMs": 1987.1,
+          "p50Ms": 1943.8,
+          "p95Ms": 2395,
+          "p99Ms": 2507.6,
+          "maxMs": 2664.8
+        },
+        "memberCheckinPut": {
+          "count": 175,
+          "averageMs": 1069.2,
+          "p50Ms": 1033.9,
+          "p95Ms": 1439.1,
+          "p99Ms": 1520.9,
+          "maxMs": 1711.3
+        },
+        "queryVerify": {
+          "count": 175,
+          "averageMs": 498.7,
+          "p50Ms": 456.9,
+          "p95Ms": 734.3,
+          "p99Ms": 1224.1,
+          "maxMs": 1321.4
+        }
+      },
+      "errors": []
+    },
+    {
+      "concurrency": 50,
+      "users": 175,
+      "successes": 175,
+      "failures": 0,
+      "successRate": 100,
+      "fiveXx": 0,
+      "wallTimeMs": 17097,
+      "latency": {
+        "login": {
+          "count": 175,
+          "averageMs": 504.5,
+          "p50Ms": 356.7,
+          "p95Ms": 1165.1,
+          "p99Ms": 1743.9,
+          "maxMs": 2409
+        },
+        "memberCheckinFast": {
+          "count": 175,
+          "averageMs": 2073.3,
+          "p50Ms": 2031.2,
+          "p95Ms": 2531.1,
+          "p99Ms": 2722.7,
+          "maxMs": 2900.1
+        },
+        "memberCheckinPut": {
+          "count": 175,
+          "averageMs": 1140.2,
+          "p50Ms": 1109.7,
+          "p95Ms": 1490.9,
+          "p99Ms": 1708.5,
+          "maxMs": 1792.7
+        },
+        "queryVerify": {
+          "count": 175,
+          "averageMs": 517.6,
+          "p50Ms": 477.3,
+          "p95Ms": 801.6,
+          "p99Ms": 1120.4,
+          "maxMs": 1242.8
+        }
+      },
+      "errors": []
+    },
+    {
+      "concurrency": 100,
+      "users": 175,
+      "successes": 175,
+      "failures": 0,
+      "successRate": 100,
+      "fiveXx": 0,
+      "wallTimeMs": 11413.9,
+      "latency": {
+        "login": {
+          "count": 175,
+          "averageMs": 614.6,
+          "p50Ms": 458.4,
+          "p95Ms": 1026.8,
+          "p99Ms": 1409.6,
+          "maxMs": 1633.2
+        },
+        "memberCheckinFast": {
+          "count": 175,
+          "averageMs": 2537.2,
+          "p50Ms": 2577.6,
+          "p95Ms": 3003.9,
+          "p99Ms": 3512,
+          "maxMs": 3832.6
+        },
+        "memberCheckinPut": {
+          "count": 175,
+          "averageMs": 1585.2,
+          "p50Ms": 1547.9,
+          "p95Ms": 1992.7,
+          "p99Ms": 2175.6,
+          "maxMs": 2392.2
+        },
+        "queryVerify": {
+          "count": 175,
+          "averageMs": 647.5,
+          "p50Ms": 620,
+          "p95Ms": 1024.3,
+          "p99Ms": 1319.2,
+          "maxMs": 1647.6
+        }
+      },
+      "errors": []
+    }
+  ],
+  "idempotency": {
+    "status": 200,
+    "repeated": true,
+    "mediaIdMatches": true,
+    "r2ObjectsUnchanged": true,
+    "mediaObjectsUnchanged": true
+  },
+  "inventoryAfter": {
+    "ok": true,
+    "runId": "accept-20260730-a",
+    "users": 701,
+    "mediaObjects": 700,
+    "memberCheckins": 700,
+    "uploadIntents": 700,
+    "thumbMediaObjects": 0,
+    "duplicateMediaObjectKeys": 0,
+    "teams": 35,
+    "tasks": 1,
+    "r2Objects": 700
+  },
+  "acceptance": {
+    "successful": 700,
+    "failed": 0,
+    "successRate": 100,
+    "fiveXx": 0,
+    "fiveXxRate": 0,
+    "noDuplicateSubmissions": true,
+    "noDuplicateMediaObjects": true,
+    "r2ObjectsEqualSuccessfulUploads": true,
+    "thumbIsZero": true,
+    "idempotencyPassed": true,
+    "passed": true
+  }
+}

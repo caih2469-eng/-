@@ -205,3 +205,61 @@
 7. `251565c`
 
 正式站未部署本轮代码，因此正式环境当前无需回滚。
+
+## 11. 2026-07-30 第2、3、4项复验
+
+本节数据来自本次实际测试环境执行。正式 D1、正式 R2 和正式站均未读取、写入或部署。
+
+### 11.1 历史广场缩略图审计
+
+- 新增只读脚本：`scripts/audit-plaza-thumbnails.mjs`。
+- 脚本允许显式选择 `production`，但代码路径只允许 D1 `SELECT/WITH` 与 R2 对象读取。
+- 正式资源未获得授权，因此正式库存状态仍为：**未通过**。
+- 测试环境实际审计：广场媒体 2 个，合规 0 个，受影响 2 个。
+- 测试环境问题：最长边超过 360px 1 个；缺少 display 对象或记录 1 个。
+- 测试环境没有发现：thumb D1 记录缺失、thumb R2 对象缺失、非 WebP、超过 120KB、原始对象缺失、错误对象键。
+- 正式 backfill 必须同时提供：
+  `--environment production --apply --confirm-production jinshan20`。
+- 缺少任何一个参数都会拒绝；异常已有对象不会被覆盖；原图不会被修改或删除。
+
+### 11.2 Pages 双斜杠路由
+
+测试站实际请求：
+
+`https://jinshan20-test.pages.dev//api/me?probe=double-slash`
+
+结果：
+
+- 第一次响应：HTTP 308。
+- `Location`：`https://jinshan20-test.pages.dev/api/me?probe=double-slash`。
+- 跟随跳转后：HTTP 401。
+- `Content-Type`：`application/json; charset=utf-8`。
+- 响应体为登录状态 JSON，不是 `text/html` SPA。
+- 查询参数完整保留，跳转目标固定为当前同源站点。
+
+### 11.3 700个实际业务上传
+
+旧 `production-upload-load.mjs` 已停用，不再作为验收工具。3.5GB 伪造负载条件已删除，
+由 700 个独立测试账号的真实业务链路替代：
+
+`login → member-checkin-fast → member-checkin PUT → history query verification`
+
+| 并发 | 用户 | 成功 | 失败 | 成功率 | 5xx | Fast上传平均 | Fast上传P95 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 175 | 175 | 0 | 100% | 0 | 2031.7ms | 2410.2ms |
+| 25 | 175 | 175 | 0 | 100% | 0 | 1987.1ms | 2395.0ms |
+| 50 | 175 | 175 | 0 | 100% | 0 | 2073.3ms | 2531.1ms |
+| 100 | 175 | 175 | 0 | 100% | 0 | 2537.2ms | 3003.9ms |
+
+验收结果：
+
+- 700/700 成功，成功率 100%。
+- 5xx 为 0，5xx 率 0%。
+- 重复幂等键返回同一媒体记录；R2 和 D1 数量均未增加。
+- 重复提交 0；重复媒体对象键 0。
+- R2 对象 700，等于成功上传数。
+- thumb 对象 0。
+- 测试结束后，用户、管理员、队伍、任务、上传会话、媒体记录、打卡记录和 R2 对象均为 0。
+- 写入压测接口已恢复关闭；测试站最终配置 `ALLOW_LOAD_TESTS=false`。
+
+真机验收本轮按用户要求暂不处理，不能标记为通过。PR继续保持 Draft，不合并 `main`，不部署正式站。

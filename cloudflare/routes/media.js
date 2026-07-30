@@ -54,6 +54,131 @@ const memberFastMediaPayload = (media) => ({
   height: Number(media.height)
 });
 
+const loadTestContext = async (request, env, url) => {
+  if (!['test', 'staging'].includes(String(env.ENVIRONMENT || '').toLowerCase())
+      || String(env.ALLOW_LOAD_TESTS || '').toLowerCase() !== 'true') {
+    return { error: json({ error: '负载测试接口未启用' }, 404, { 'cache-control': 'no-store' }) };
+  }
+  const auth = await requireUser(request, env, true);
+  if (auth.error) return { error: auth.error };
+  const runId = cleanText(url.searchParams.get('runId'), 40).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(runId)) {
+    return { error: json({ error: 'runId格式无效' }, 400, { 'cache-control': 'no-store' }) };
+  }
+  return {
+    runId,
+    userPrefix: `load-fast-user-${runId}-`,
+    teamPrefix: `load-fast-team-${runId}-`,
+    adminId: `lf-admin-${runId.slice(0, 30)}`,
+    taskId: `load-fast-task-${runId}`,
+    objectPrefix: `media/${env.ENVIRONMENT}/load-fast-user-${runId}-`
+  };
+};
+
+const listAllR2Keys = async (bucket, prefix) => {
+  const keys = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    keys.push(...page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys;
+};
+
+const readMemberFastLoadInventory = async (env, context) => {
+  const like = `${context.userPrefix}%`;
+  const [
+    users,
+    loadAdmins,
+    uploads,
+    checkins,
+    intents,
+    thumbs,
+    duplicateMedia,
+    teams,
+    tasks,
+    r2Keys
+  ] = await Promise.all([
+    env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE id LIKE ?1').bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE id=?1')
+      .bind(context.adminId).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM media_objects WHERE owner_user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM member_checkins WHERE user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM media_upload_intents WHERE user_id LIKE ?1')
+      .bind(like).first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM media_objects WHERE owner_user_id LIKE ?1 AND business_type LIKE '%:thumb'"
+    ).bind(like).first(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM (
+         SELECT object_key FROM media_objects WHERE owner_user_id LIKE ?1
+          GROUP BY object_key HAVING COUNT(*)>1
+       )`
+    ).bind(like).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM teams WHERE id LIKE ?1')
+      .bind(`${context.teamPrefix}%`).first(),
+    env.DB.prepare('SELECT COUNT(*) AS total FROM tasks WHERE id=?1')
+      .bind(context.taskId).first(),
+    listAllR2Keys(env.UPLOADS, context.objectPrefix)
+  ]);
+  return {
+    runId: context.runId,
+    users: Number(users?.total || 0),
+    loadAdmins: Number(loadAdmins?.total || 0),
+    mediaObjects: Number(uploads?.total || 0),
+    memberCheckins: Number(checkins?.total || 0),
+    uploadIntents: Number(intents?.total || 0),
+    thumbMediaObjects: Number(thumbs?.total || 0),
+    duplicateMediaObjectKeys: Number(duplicateMedia?.total || 0),
+    teams: Number(teams?.total || 0),
+    tasks: Number(tasks?.total || 0),
+    r2Objects: r2Keys.length
+  };
+};
+
+const memberFastLoadInventory = async (request, env, url) => {
+  const context = await loadTestContext(request, env, url);
+  if (context.error) return context.error;
+  const inventory = await readMemberFastLoadInventory(env, context);
+  return json({ ok: true, ...inventory }, 200, { 'cache-control': 'no-store' });
+};
+
+const memberFastLoadCleanup = async (request, env, url) => {
+  const context = await loadTestContext(request, env, url);
+  if (context.error) return context.error;
+  const like = `${context.userPrefix}%`;
+  const r2Keys = await listAllR2Keys(env.UPLOADS, context.objectPrefix);
+  for (let offset = 0; offset < r2Keys.length; offset += 1000) {
+    await env.UPLOADS.delete(r2Keys.slice(offset, offset + 1000));
+  }
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `DELETE FROM image_variants
+        WHERE source_type='member_checkin'
+          AND source_id IN (SELECT id FROM member_checkins WHERE user_id LIKE ?1)`
+    ).bind(like),
+    env.DB.prepare('DELETE FROM member_checkins WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM media_objects WHERE owner_user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM media_upload_intents WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM team_members WHERE user_id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM teams WHERE id LIKE ?1').bind(`${context.teamPrefix}%`),
+    env.DB.prepare('DELETE FROM users WHERE id LIKE ?1').bind(like),
+    env.DB.prepare('DELETE FROM users WHERE id=?1').bind(context.adminId),
+    env.DB.prepare('DELETE FROM tasks WHERE id=?1').bind(context.taskId)
+  ]);
+  const inventoryAfter = await readMemberFastLoadInventory(env, context);
+  return json({
+    ok: true,
+    runId: context.runId,
+    deletedR2Objects: r2Keys.length,
+    d1Changes: results.map((result) => Number(result.meta?.changes || 0)),
+    inventoryAfter
+  }, 200, { 'cache-control': 'no-store' });
+};
+
 const memberFastUpload = async (request, env) => {
   const auth = await requireUser(request, env);
   if (auth.error) return auth.error;
@@ -492,6 +617,12 @@ const cleanupOrphanMedia = async (request, env) => {
 };
 
 export const handleMediaRoutes = async (request, env, ctx, url) => {
+  if (url.pathname === '/__load/member-checkin-fast/inventory' && request.method === 'GET') {
+    return memberFastLoadInventory(request, env, url);
+  }
+  if (url.pathname === '/__load/member-checkin-fast/cleanup' && request.method === 'POST') {
+    return memberFastLoadCleanup(request, env, url);
+  }
   if (url.pathname === '/api/admin/media/cleanup' && request.method === 'POST') {
     return cleanupOrphanMedia(request, env);
   }

@@ -2,48 +2,125 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { writeFile } = require('node:fs/promises');
+const sharp = require('sharp');
 
-test('历史广场缩略图脚本只允许测试资源且对象键幂等', async () => {
+const testTarget = {
+  environment: 'test',
+  database: 'jinshan20-test',
+  bucket: 'jinshan20-test',
+  config: 'cloudflare/pages-test/wrangler.jsonc'
+};
+
+test('read-only thumbnail audit inventories records and objects, not only missing D1 rows', async () => {
   const {
-    validateSafeTarget,
-    thumbnailObjectKey,
-    missingThumbnailSql
-  } = await import('../scripts/backfill-plaza-thumbnails.mjs');
-  const safe = {
-    environment: 'test',
-    database: 'jinshan20-test',
-    bucket: 'jinshan20-test',
-    config: 'cloudflare/pages-test/wrangler.jsonc'
-  };
-  assert.doesNotThrow(() => validateSafeTarget(safe));
-  assert.throws(
-    () => validateSafeTarget({ ...safe, database: 'jinshan20' }),
-    /数据库名称必须以 -test 结尾/
-  );
-  assert.throws(
-    () => validateSafeTarget({ ...safe, bucket: 'jinshan20' }),
-    /存储桶名称必须以 -test 结尾/
-  );
-  assert.throws(
-    () => validateSafeTarget({ ...safe, environment: 'production' }),
-    /只允许 environment=test/
-  );
-  assert.equal(
-    thumbnailObjectKey('test', 'media-1'),
-    'media/test/backfill/plaza-thumbs/media-1-thumb.webp'
-  );
-  assert.match(missingThumbnailSql, /JOIN plaza_posts/);
-  assert.match(missingThumbnailSql, /tv\.object_key IS NULL/);
-  assert.doesNotMatch(missingThumbnailSql, /p\.status='visible'/);
+    runThumbnailAudit,
+    thumbnailInventorySql,
+    validateReadOnlySql,
+    validateReadOnlyTarget
+  } = await import('../scripts/audit-plaza-thumbnails.mjs');
+
+  assert.match(thumbnailInventorySql, /LEFT JOIN image_variants tv/);
+  assert.match(thumbnailInventorySql, /LEFT JOIN image_variants dv/);
+  assert.doesNotMatch(thumbnailInventorySql, /WHERE\s+tv\.object_key\s+IS\s+NULL/i);
+  assert.doesNotThrow(() => validateReadOnlySql('SELECT 1'));
+  assert.throws(() => validateReadOnlySql('DELETE FROM image_variants'), /read-only|只读/i);
+  assert.doesNotThrow(() => validateReadOnlyTarget(testTarget));
+  assert.doesNotThrow(() => validateReadOnlyTarget({
+    environment: 'production',
+    database: 'jinshan20',
+    bucket: 'jinshan20',
+    config: 'cloudflare/pages-production/wrangler.jsonc'
+  }));
+
+  const validImage = await sharp({
+    create: {
+      width: 320,
+      height: 240,
+      channels: 3,
+      background: { r: 210, g: 120, b: 80 }
+    }
+  }).webp({ quality: 80 }).toBuffer();
+  const rows = [{
+    media_id: 'media-missing-thumb',
+    original_key: 'task-submissions/source.webp',
+    original_bytes: validImage.length,
+    original_content_type: 'image/webp',
+    post_id: 'post-1',
+    post_status: 'visible',
+    submission_id: 'submission-1',
+    is_public: 1,
+    thumb_key: null,
+    thumb_bytes: null,
+    thumb_content_type: null,
+    display_key: 'task-submissions/display.webp',
+    display_bytes: validImage.length,
+    display_content_type: 'image/webp'
+  }, {
+    media_id: 'media-missing-object',
+    original_key: 'task-submissions/source-2.webp',
+    original_bytes: validImage.length,
+    original_content_type: 'image/webp',
+    post_id: 'post-2',
+    post_status: 'visible',
+    submission_id: 'submission-2',
+    is_public: 1,
+    thumb_key: 'media/test/thumb-missing.webp',
+    thumb_bytes: validImage.length,
+    thumb_content_type: 'image/webp',
+    display_key: null,
+    display_bytes: null,
+    display_content_type: null
+  }];
+  const report = await runThumbnailAudit(testTarget, {
+    queryD1: async () => ({ results: rows }),
+    fetchR2Object: async (_options, key, destination) => {
+      if (key.includes('thumb-missing')) return false;
+      await writeFile(destination, validImage);
+      return true;
+    }
+  });
+  assert.equal(report.totals.plazaMedia, 2);
+  assert.equal(report.totals.issueCounts.thumbRecordMissing, 1);
+  assert.equal(report.totals.issueCounts.thumbObjectMissing, 1);
+  assert.equal(report.totals.issueCounts.displayObjectMissing, 1);
+  assert.equal(report.totals.affected, 2);
 });
 
-test('缩略图生成WebP、最长边不超过360px且小于120KB', async () => {
+test('backfill keeps test protection and requires all production confirmations', async () => {
+  const { parseBackfillArgs, validateSafeTarget } = await import(
+    '../scripts/backfill-plaza-thumbnails.mjs'
+  );
+  assert.doesNotThrow(() => validateSafeTarget({
+    ...testTarget,
+    apply: true,
+    confirmProduction: null
+  }));
+  assert.throws(() => validateSafeTarget(parseBackfillArgs([
+    '--environment', 'production'
+  ])), /--apply/);
+  assert.throws(() => validateSafeTarget(parseBackfillArgs([
+    '--environment', 'production', '--apply'
+  ])), /--confirm-production jinshan20/);
+  assert.doesNotThrow(() => validateSafeTarget(parseBackfillArgs([
+    '--environment', 'production',
+    '--apply',
+    '--confirm-production', 'jinshan20'
+  ])));
+  assert.throws(() => validateSafeTarget({
+    ...testTarget,
+    database: 'jinshan20',
+    apply: true,
+    confirmProduction: null
+  }), /D1/);
+});
+
+test('thumbnail generation is WebP, no longer than 360px and no larger than 120KB', async () => {
   const {
     createThumbnail,
     MAX_THUMB_EDGE,
     MAX_THUMB_BYTES
   } = await import('../scripts/backfill-plaza-thumbnails.mjs');
-  const sharp = require('sharp');
   const source = await sharp({
     create: {
       width: 1800,
@@ -59,13 +136,13 @@ test('缩略图生成WebP、最长边不超过360px且小于120KB', async () => 
   assert.ok(thumbnail.data.byteLength <= MAX_THUMB_BYTES);
 });
 
-test('广场列表与详情均优先返回thumb地址', () => {
+test('plaza responses prefer thumb URLs', () => {
   const plazaRoute = fs.readFileSync(
     path.join(__dirname, '..', 'cloudflare', 'routes', 'plaza.js'),
     'utf8'
   );
   const thumbUrls = plazaRoute.match(/thumbUrl:\s*`[^`]*variant=thumb[^`]*`/g) || [];
   const imageUrls = plazaRoute.match(/imageUrl:\s*`[^`]*variant=thumb[^`]*`/g) || [];
-  assert.ok(thumbUrls.length >= 2, '广场列表和详情都必须提供thumbUrl');
-  assert.ok(imageUrls.length >= 2, '兼容imageUrl也必须指向thumb');
+  assert.ok(thumbUrls.length >= 2);
+  assert.ok(imageUrls.length >= 2);
 });

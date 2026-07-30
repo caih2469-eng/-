@@ -3,81 +3,81 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import {
+  MAX_THUMB_BYTES,
+  MAX_THUMB_EDGE,
+  runThumbnailAudit,
+  validateObjectKey
+} from './audit-plaza-thumbnails.mjs';
 
-const DEFAULTS = Object.freeze({
-  database: 'jinshan20-test',
-  bucket: 'jinshan20-test',
-  config: 'cloudflare/pages-test/wrangler.jsonc',
-  environment: 'test'
+const TARGETS = Object.freeze({
+  test: Object.freeze({
+    database: 'jinshan20-test',
+    bucket: 'jinshan20-test',
+    config: 'cloudflare/pages-test/wrangler.jsonc'
+  }),
+  production: Object.freeze({
+    database: 'jinshan20',
+    bucket: 'jinshan20',
+    config: 'cloudflare/pages-production/wrangler.jsonc'
+  })
 });
 
-export const MAX_THUMB_EDGE = 360;
-export const MAX_THUMB_BYTES = 120 * 1024;
+export { MAX_THUMB_EDGE, MAX_THUMB_BYTES };
 
-export const missingThumbnailSql = `
-SELECT i.id AS media_id,
-       i.object_key AS original_key,
-       i.bytes AS original_bytes,
-       i.content_type AS original_content_type,
-       p.id AS post_id,
-       p.status AS post_status,
-       s.id AS submission_id,
-       s.is_public,
-       dv.object_key AS display_key,
-       dv.bytes AS display_bytes
-  FROM task_submission_images i
-  JOIN task_submissions s ON s.id=i.submission_id
-  JOIN plaza_posts p ON p.submission_id=s.id
-  LEFT JOIN image_variants tv
-    ON tv.source_type='task_submission_image'
-   AND tv.source_id=i.id
-   AND tv.variant='thumb'
-  LEFT JOIN image_variants dv
-    ON dv.source_type='task_submission_image'
-   AND dv.source_id=i.id
-   AND dv.variant='display'
- WHERE tv.object_key IS NULL
- ORDER BY p.published_at, i.sort_order, i.id
-`.trim();
-
-const stripAnsi = (value) => String(value || '').replace(
-  // eslint-disable-next-line no-control-regex
-  /\u001b\[[0-9;]*m/g,
-  ''
-);
-
-const parseArgs = (argv) => {
-  const options = { ...DEFAULTS, apply: false };
+export const parseBackfillArgs = (argv) => {
+  const values = {
+    environment: 'test',
+    apply: false,
+    confirmProduction: null
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const item = argv[index];
-    if (item === '--apply') options.apply = true;
-    else if (item === '--database') options.database = argv[++index];
-    else if (item === '--bucket') options.bucket = argv[++index];
-    else if (item === '--config') options.config = argv[++index];
-    else if (item === '--environment') options.environment = argv[++index];
+    if (item === '--environment') values.environment = argv[++index];
+    else if (item === '--database') values.database = argv[++index];
+    else if (item === '--bucket') values.bucket = argv[++index];
+    else if (item === '--config') values.config = argv[++index];
+    else if (item === '--confirm-production') values.confirmProduction = argv[++index];
+    else if (item === '--apply') values.apply = true;
     else throw new Error(`未知参数：${item}`);
   }
-  return options;
+  const target = TARGETS[values.environment];
+  if (!target) throw new Error('environment 只能是 test 或 production');
+  return { ...target, ...values };
 };
 
 export const validateSafeTarget = (options) => {
-  if (options.environment !== 'test') {
-    throw new Error('安全保护：该脚本只允许 environment=test。');
+  const target = TARGETS[options.environment];
+  if (!target) throw new Error('补全脚本仅支持 test 或 production');
+  if (options.database !== target.database) {
+    throw new Error(`安全保护：${options.environment} D1 必须是 ${target.database}`);
   }
-  if (!String(options.database || '').endsWith('-test')) {
-    throw new Error('安全保护：D1 数据库名称必须以 -test 结尾。');
+  if (options.bucket !== target.bucket) {
+    throw new Error(`安全保护：${options.environment} R2 必须是 ${target.bucket}`);
   }
-  if (!String(options.bucket || '').endsWith('-test')) {
-    throw new Error('安全保护：R2 存储桶名称必须以 -test 结尾。');
+  if (!path.normalize(String(options.config || '')).endsWith(path.normalize(target.config))) {
+    throw new Error(`安全保护：必须使用 ${target.config}`);
   }
-  if (!/pages-test[\\/]wrangler\.jsonc$/i.test(String(options.config || ''))) {
-    throw new Error('安全保护：必须使用 pages-test/wrangler.jsonc。');
+  if (options.environment === 'production') {
+    if (!options.apply) {
+      throw new Error('正式补全必须同时提供 --environment production 和 --apply');
+    }
+    if (options.confirmProduction !== 'jinshan20') {
+      throw new Error('正式补全必须提供 --confirm-production jinshan20');
+    }
+  } else if (options.confirmProduction) {
+    throw new Error('测试环境不得提供 --confirm-production');
   }
 };
 
 export const thumbnailObjectKey = (environment, mediaId) =>
   `media/${environment}/backfill/plaza-thumbs/${encodeURIComponent(mediaId)}-thumb.webp`;
 
+const stripAnsi = (value) => String(value || '').replace(
+  // eslint-disable-next-line no-control-regex
+  /\u001b\[[0-9;]*m/g,
+  ''
+);
 const wranglerCli = path.resolve('node_modules/wrangler/bin/wrangler.js');
 
 const runWrangler = (args, { allowMissingObject = false } = {}) => {
@@ -89,7 +89,9 @@ const runWrangler = (args, { allowMissingObject = false } = {}) => {
   });
   if (result.status === 0) return result.stdout;
   const message = stripAnsi(`${result.stderr || ''}\n${result.stdout || ''}`).trim();
-  if (allowMissingObject && /specified key does not exist/i.test(message)) return null;
+  if (allowMissingObject && /specified key does not exist|not found|does not exist/i.test(message)) {
+    return null;
+  }
   throw new Error(message || `Wrangler 执行失败，退出码 ${result.status}`);
 };
 
@@ -148,15 +150,22 @@ const fetchR2Object = async (options, objectKey, destination, allowMissing = fal
   return result !== null;
 };
 
-const uploadR2Object = (options, objectKey, source) => {
+const uploadNewR2Object = (options, objectKey, source) => {
   runWrangler([
     'r2', 'object', 'put', `${options.bucket}/${objectKey}`,
     '--remote',
     '--config', options.config,
     '--file', source,
     '--content-type', 'image/webp',
-    '--cache-control', 'public, max-age=31536000, immutable',
-    '--force'
+    '--cache-control', 'public, max-age=31536000, immutable'
+  ]);
+};
+
+const deleteR2Object = (options, objectKey) => {
+  runWrangler([
+    'r2', 'object', 'delete', `${options.bucket}/${objectKey}`,
+    '--remote',
+    '--config', options.config
   ]);
 };
 
@@ -164,18 +173,31 @@ const verifyExistingThumbnail = async (filePath) => {
   const file = await readFile(filePath);
   const metadata = await sharp(file).metadata();
   const longestEdge = Math.max(Number(metadata.width || 0), Number(metadata.height || 0));
-  if (metadata.format !== 'webp') throw new Error('已有对象不是 WebP');
-  if (longestEdge > MAX_THUMB_EDGE) throw new Error(`已有对象最长边为 ${longestEdge}px`);
-  if (file.byteLength > MAX_THUMB_BYTES) throw new Error(`已有对象为 ${file.byteLength} 字节`);
+  if (metadata.format !== 'webp') throw new Error('已有对象不是 WebP，拒绝覆盖');
+  if (longestEdge > MAX_THUMB_EDGE) {
+    throw new Error(`已有对象最长边为 ${longestEdge}px，拒绝覆盖`);
+  }
+  if (file.byteLength > MAX_THUMB_BYTES) {
+    throw new Error(`已有对象为 ${file.byteLength} 字节，拒绝覆盖`);
+  }
   return { bytes: file.byteLength, width: metadata.width, height: metadata.height };
 };
 
-const insertVariant = (options, row, objectKey, bytes) => queryD1(options, `
+const insertVariant = (options, item, objectKey, bytes) => queryD1(options, `
 INSERT OR IGNORE INTO image_variants
   (source_type,source_id,variant,object_key,content_type,bytes,created_at)
 VALUES
-  ('task_submission_image',${sqlText(row.media_id)},'thumb',
+  ('task_submission_image',${sqlText(item.mediaId)},'thumb',
    ${sqlText(objectKey)},'image/webp',${Number(bytes)},${sqlText(new Date().toISOString())})
+`.trim());
+
+const updateVariant = (options, item, bytes) => queryD1(options, `
+UPDATE image_variants
+   SET content_type='image/webp',bytes=${Number(bytes)}
+ WHERE source_type='task_submission_image'
+   AND source_id=${sqlText(item.mediaId)}
+   AND variant='thumb'
+   AND object_key=${sqlText(item.thumb.key)}
 `.trim());
 
 const readVariant = (options, mediaId) => queryD1(options, `
@@ -187,57 +209,88 @@ SELECT source_id AS media_id,object_key,content_type,bytes,created_at
  LIMIT 1
 `.trim()).results?.[0] || null;
 
+const issueCodes = (item) => new Set(item.issues.map((issue) => issue.code));
+
 export const runBackfill = async (options) => {
   validateSafeTarget(options);
-  const inventory = queryD1(options, missingThumbnailSql).results || [];
+  const before = await runThumbnailAudit(options);
+  const candidates = before.items.filter((item) => {
+    const codes = issueCodes(item);
+    return codes.has('thumbRecordMissing') || codes.has('thumbObjectMissing');
+  });
   const report = {
     mode: options.apply ? 'apply' : 'dry-run',
     environment: options.environment,
     database: options.database,
     bucket: options.bucket,
-    beforeMissing: inventory.length,
+    before: before.totals,
+    candidates: candidates.length,
     completed: 0,
     failed: 0,
+    skippedUnsafe: 0,
     r2ObjectsAdded: 0,
     d1RecordsAdded: 0,
-    items: inventory.map((row) => ({
-      mediaId: row.media_id,
-      postId: row.post_id,
-      postStatus: row.post_status,
-      originalBytes: Number(row.original_bytes || 0),
-      sourceBytes: Number(row.display_bytes || row.original_bytes || 0),
-      sourceKey: row.display_key || row.original_key
+    d1RecordsUpdated: 0,
+    rollback: {
+      r2ObjectKeysToDelete: [],
+      d1Statements: []
+    },
+    items: candidates.map((item) => ({
+      mediaId: item.mediaId,
+      postId: item.postId,
+      originalBytes: item.original.bytes,
+      sourceKey: item.display.exists ? item.display.key : item.original.key,
+      issuesBefore: item.issues
     }))
   };
-  if (!options.apply || inventory.length === 0) {
-    report.afterMissing = inventory.length;
+  if (!options.apply || candidates.length === 0) {
+    report.after = before.totals;
     return report;
   }
 
   const workDir = await mkdtemp(path.join(tmpdir(), 'jinshan20-thumb-backfill-'));
   try {
-    for (const row of inventory) {
-      const item = report.items.find((entry) => entry.mediaId === row.media_id);
-      const objectKey = thumbnailObjectKey(options.environment, row.media_id);
-      const sourcePath = path.join(workDir, `${row.media_id}-source`);
-      const outputPath = path.join(workDir, `${row.media_id}-thumb.webp`);
-      try {
-        const existingRecord = readVariant(options, row.media_id);
-        if (existingRecord) {
-          item.result = 'already-recorded';
-          item.thumbKey = existingRecord.object_key;
-          item.thumbBytes = Number(existingRecord.bytes);
-          report.completed += 1;
-          continue;
-        }
+    for (const candidate of candidates) {
+      const resultItem = report.items.find((entry) => entry.mediaId === candidate.mediaId);
+      const codes = issueCodes(candidate);
+      const unsafeExisting = [
+        'thumbNotWebP',
+        'thumbTooLarge',
+        'thumbEdgeTooLong',
+        'invalidObjectKey'
+      ].some((code) => codes.has(code));
+      if (unsafeExisting || (!candidate.display.exists && !candidate.original.exists)) {
+        resultItem.result = 'skipped-unsafe';
+        resultItem.error = unsafeExisting
+          ? '已有缩略图或对象键异常，拒绝覆盖'
+          : '原始图和display对象均不可用';
+        report.skippedUnsafe += 1;
+        report.failed += 1;
+        continue;
+      }
 
+      const missingRecord = codes.has('thumbRecordMissing');
+      const objectKey = missingRecord
+        ? thumbnailObjectKey(options.environment, candidate.mediaId)
+        : candidate.thumb.key;
+      if (!validateObjectKey(objectKey, options.environment, { thumbnail: true })) {
+        resultItem.result = 'skipped-unsafe';
+        resultItem.error = `缩略图对象键不安全：${objectKey}`;
+        report.skippedUnsafe += 1;
+        report.failed += 1;
+        continue;
+      }
+      const sourceKey = candidate.display.exists ? candidate.display.key : candidate.original.key;
+      const sourcePath = path.join(workDir, `${candidate.mediaId}-source`);
+      const outputPath = path.join(workDir, `${candidate.mediaId}-thumb.webp`);
+      let addedObjectKey = null;
+      try {
         const existingObject = await fetchR2Object(options, objectKey, outputPath, true);
         let thumbnail;
         if (existingObject) {
           thumbnail = await verifyExistingThumbnail(outputPath);
-          item.reusedExistingObject = true;
+          resultItem.reusedExistingObject = true;
         } else {
-          const sourceKey = row.display_key || row.original_key;
           await fetchR2Object(options, sourceKey, sourcePath);
           const generated = await createThumbnail(await readFile(sourcePath));
           await writeFile(outputPath, generated.data);
@@ -247,49 +300,90 @@ export const runBackfill = async (options) => {
             height: generated.info.height,
             quality: generated.quality
           };
-          uploadR2Object(options, objectKey, outputPath);
+          uploadNewR2Object(options, objectKey, outputPath);
+          addedObjectKey = objectKey;
           report.r2ObjectsAdded += 1;
+          report.rollback.r2ObjectKeysToDelete.push(objectKey);
         }
 
-        const insertion = insertVariant(options, row, objectKey, thumbnail.bytes);
-        report.d1RecordsAdded += Number(insertion.meta?.changes || 0);
-        const saved = readVariant(options, row.media_id);
-        if (!saved || saved.object_key !== objectKey) {
-          throw new Error('D1 缩略图变体记录校验失败');
+        if (missingRecord) {
+          const insertion = insertVariant(options, candidate, objectKey, thumbnail.bytes);
+          const changes = Number(insertion.meta?.changes || 0);
+          report.d1RecordsAdded += changes;
+          if (changes) {
+            report.rollback.d1Statements.push(
+              `DELETE FROM image_variants WHERE source_type='task_submission_image' `
+              + `AND source_id=${sqlText(candidate.mediaId)} AND variant='thumb';`
+            );
+          }
+        } else {
+          const oldType = candidate.thumb.contentType;
+          const oldBytes = candidate.thumb.bytes;
+          const update = updateVariant(options, candidate, thumbnail.bytes);
+          const changes = Number(update.meta?.changes || 0);
+          report.d1RecordsUpdated += changes;
+          if (changes) {
+            report.rollback.d1Statements.push(
+              `UPDATE image_variants SET content_type=${sqlText(oldType)},bytes=${Number(oldBytes)} `
+              + `WHERE source_type='task_submission_image' AND source_id=${sqlText(candidate.mediaId)} `
+              + `AND variant='thumb';`
+            );
+          }
         }
-        item.result = 'completed';
-        item.thumbKey = objectKey;
-        item.thumbBytes = thumbnail.bytes;
-        item.width = thumbnail.width;
-        item.height = thumbnail.height;
-        if (thumbnail.quality) item.quality = thumbnail.quality;
+
+        const saved = readVariant(options, candidate.mediaId);
+        if (!saved || saved.object_key !== objectKey) {
+          throw new Error('D1缩略图变体记录校验失败');
+        }
+        resultItem.result = 'completed';
+        resultItem.thumbKey = objectKey;
+        resultItem.thumbBytes = thumbnail.bytes;
+        resultItem.width = thumbnail.width;
+        resultItem.height = thumbnail.height;
+        if (thumbnail.quality) resultItem.quality = thumbnail.quality;
         report.completed += 1;
       } catch (error) {
-        item.result = 'failed';
-        item.error = error instanceof Error ? error.message : String(error);
+        if (addedObjectKey) {
+          try {
+            deleteR2Object(options, addedObjectKey);
+            report.r2ObjectsAdded -= 1;
+            report.rollback.r2ObjectKeysToDelete = report.rollback.r2ObjectKeysToDelete
+              .filter((key) => key !== addedObjectKey);
+            resultItem.rolledBackR2Object = true;
+          } catch (rollbackError) {
+            resultItem.rollbackError = rollbackError instanceof Error
+              ? rollbackError.message
+              : String(rollbackError);
+          }
+        }
+        resultItem.result = 'failed';
+        resultItem.error = error instanceof Error ? error.message : String(error);
         report.failed += 1;
       }
     }
   } finally {
     const resolved = path.resolve(workDir);
     const safePrefix = path.resolve(tmpdir()) + path.sep;
-    if (!resolved.startsWith(safePrefix) || !path.basename(resolved).startsWith('jinshan20-thumb-backfill-')) {
+    if (!resolved.startsWith(safePrefix)
+        || !path.basename(resolved).startsWith('jinshan20-thumb-backfill-')) {
       throw new Error(`拒绝清理非预期临时目录：${resolved}`);
     }
     await rm(resolved, { recursive: true, force: true });
   }
 
-  const remaining = queryD1(options, missingThumbnailSql).results || [];
-  report.afterMissing = remaining.length;
-  report.remainingMediaIds = remaining.map((row) => row.media_id);
+  const after = await runThumbnailAudit(options);
+  report.after = after.totals;
+  report.remainingAffectedMediaIds = after.items
+    .filter((item) => item.issues.length)
+    .map((item) => item.mediaId);
   return report;
 };
 
 const main = async () => {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseBackfillArgs(process.argv.slice(2));
   const report = await runBackfill(options);
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  if (report.failed || report.afterMissing) process.exitCode = 1;
+  if (report.failed || report.after.affected) process.exitCode = 1;
 };
 
 if (process.argv[1] && path.basename(process.argv[1]) === 'backfill-plaza-thumbnails.mjs') {
