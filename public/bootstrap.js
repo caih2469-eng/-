@@ -20,7 +20,6 @@
     console.debug('[perf]', metric);
   };
   const bootstrapStarted = performance.now();
-  const assetVersion = '20260730-admin-refactor1';
   const loadStylesheet = (href) => {
     const stylesheet = document.createElement('link');
     stylesheet.rel = 'stylesheet';
@@ -66,10 +65,10 @@
       window.__BOOTSTRAP_SESSION__ = session;
       window.__BOOTSTRAP_USER__ = session.user || null;
       window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;
-      loadStylesheet(`/style.css?v=${assetVersion}`);
-      loadStylesheet(`/admin-dashboard-refactor.css?v=${assetVersion}`);
-      await loadScript(`/site-path.js?v=${assetVersion}`);
-      await loadScript(`/app.js?v=${assetVersion}`);
+      loadStylesheet('/style.css?v=20260730-admin-refactor1');
+      loadStylesheet('/admin-dashboard-refactor.css?v=20260730-admin-refactor1');
+      await loadScript('/site-path.js?v=20260730-admin-refactor1');
+      await loadScript('/app.js?v=20260730-admin-refactor1');
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });
