@@ -35,8 +35,32 @@ updateTest('test/production-media-login-performance.test.js', (source) => source
   .replace(/MEDIA_THUMB_QUALITY = 0\\\.(?:72|78|82)/g, 'MEDIA_THUMB_QUALITY = 0\\.78')
   .replace(/THUMB_MAX_EDGE = (?:360|540)/g, 'THUMB_MAX_EDGE = 540'));
 
-updateTest('test/member-checkin-fast.test.js', (source) => source
-  .replace(/MEDIA_THUMB_QUALITY = 0\\\.(?:72|78|82)/g, 'MEDIA_THUMB_QUALITY = 0\\.78'));
+updateTest('test/member-checkin-fast.test.js', (source) => {
+  let next = source.replace(/MEDIA_THUMB_QUALITY = 0\\\.(?:72|78|82)/g, 'MEDIA_THUMB_QUALITY = 0\\.78');
+  const replacement = `test('单人打卡展示图使用fast接口并生成540px WebP缩略图', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const memberBody = app.match(
+    /function memberCheckinForm\\(task\\) \\{([\\s\\S]*?)\\r?\\n\\}\\r?\\n\\r?\\nfunction materialSubmissionForm/
+  )?.[1] || '';
+  assert.match(memberBody, /uploadMemberCheckinFast/);
+  assert.match(memberBody, /uploadCompressedImage/);
+  assert.match(memberBody, /variant:\\s*'thumb'/);
+  assert.match(memberBody, /parentMediaId:\\s*displayMediaId/);
+  assert.match(memberBody, /正在生成540px WebP缩略图/);
+  assert.match(memberBody, /const mediaIds = session\\?\\.items/);
+  assert.doesNotMatch(memberBody, /readFiles/);
+  assert.match(app, /const MEMBER_FAST_MAX_BYTES = 307_200/);
+  assert.match(app, /const MEDIA_THUMB_MAX_EDGE = 540/);
+  assert.match(app, /const MEDIA_THUMB_QUALITY = 0\\.78/);
+  assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.76, maxSizeMB: 0\\.25 \\}/);
+  assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.70, maxSizeMB: 0\\.30 \\}/);
+  assert.match(app, /\\{ maxWidthOrHeight: 800, initialQuality: 0\\.68, maxSizeMB: 0\\.30 \\}/);
+  assert.match(app, /图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。/);
+});`;
+  const pattern = /test\('单人打卡前端只使用fast接口、最多三轮压缩且不生成缩略图',[\s\S]*?\n\}\);/;
+  if (pattern.test(next)) next = next.replace(pattern, replacement);
+  return next;
+});
 
 app = fs.readFileSync(appPath, 'utf8');
 const bootstrap = fs.readFileSync('public/bootstrap.js', 'utf8');
