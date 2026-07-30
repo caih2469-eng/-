@@ -52,15 +52,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-flow-template.mjs
       - run: node --check scripts/apply-approved-backend.mjs
       - run: node --check scripts/apply-approved-frontend.mjs
       - run: node --check scripts/apply-approved-backfill.mjs
+      - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-flow-template.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - run: node scripts/finalize-mobile-admin-photo-fix.mjs
       - run: node scripts/apply-approved-backend.mjs
       - run: node scripts/apply-approved-frontend.mjs
       - run: node scripts/apply-approved-backfill.mjs
+      - run: node scripts/finalize-approved-experience.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -101,15 +105,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --check scripts/finalize-mobile-admin-photo-fix.mjs
+      - run: node --check scripts/apply-approved-flow-template.mjs
       - run: node --check scripts/apply-approved-backend.mjs
       - run: node --check scripts/apply-approved-frontend.mjs
       - run: node --check scripts/apply-approved-backfill.mjs
+      - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-flow-template.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
       - run: node scripts/finalize-mobile-admin-photo-fix.mjs
       - run: node scripts/apply-approved-backend.mjs
       - run: node scripts/apply-approved-frontend.mjs
       - run: node scripts/apply-approved-backfill.mjs
+      - run: node scripts/finalize-approved-experience.mjs
       - name: Verify generated assets use the latest cache version
         shell: bash
         run: |
