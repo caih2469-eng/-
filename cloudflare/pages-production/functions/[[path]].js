@@ -1,6 +1,8 @@
 import worker from '../../worker.js';
+import { withD1Session } from '../../lib/d1-session-wrapper.js';
+import { handleMemberFastV3Safe } from '../../routes/member-fast-v3-safe.js';
 
-export const onRequest = (context) => {
+export const onRequest = async (context) => {
   const incoming = new URL(context.request.url);
   const normalizedPath = `/${incoming.pathname.replace(/^\/+/, '').replace(/\/{2,}/g, '/')}`;
   let routedRequest = context.request;
@@ -10,7 +12,12 @@ export const onRequest = (context) => {
   }
   const pathname = normalizedPath;
   if (pathname === '/health' || pathname.startsWith('/api/') || pathname.startsWith('/__load/')) {
-    return worker.fetch(routedRequest, context.env, context);
+    return withD1Session(routedRequest, context.env, async (request, env) => {
+      if (pathname === '/api/media/member-checkin-fast' && request.method === 'POST') {
+        return handleMemberFastV3Safe(request, env);
+      }
+      return worker.fetch(request, env, context);
+    });
   }
   return context.next();
 };

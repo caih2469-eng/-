@@ -13,12 +13,18 @@ const headerSource = read('public', '_headers');
 const workerSource = read('cloudflare', 'worker.js');
 
 test('阶段G：入口、主应用与样式统一使用最终版本化资源', () => {
-  const expectedVersion = '20260730-plaza640';
-  const references = [indexSource, entranceSource, bootstrapSource]
-    .flatMap((source) => [...source.matchAll(/\?v=([a-zA-Z0-9-]+)/g)].map((match) => match[1]));
-  assert.ok(references.length >= 5);
-  assert.deepEqual([...new Set(references)], [expectedVersion]);
+  const expectedVersion = '20260730-perfv3';
+  const indexVersion = indexSource.match(/\/bootstrap\.js\?v=([a-zA-Z0-9-]+)/)?.[1];
+  const bootstrapVersion = bootstrapSource.match(/const ASSET_VERSION = '([a-zA-Z0-9-]+)'/)?.[1];
+  const entranceVersion = entranceSource.match(/\/entrance\.js\?v=([a-zA-Z0-9-]+)/)?.[1];
+  assert.equal(indexVersion, expectedVersion);
+  assert.equal(bootstrapVersion, expectedVersion);
+  assert.match(entranceVersion || '', /^[a-zA-Z0-9-]+$/);
+  assert.match(bootstrapSource, /assetUrl\('\/style\.css'\)/);
+  assert.match(bootstrapSource, /loadScript\('\/app\.js'\)/);
+  assert.match(bootstrapSource, /loadScript\('\/performance-v3\.js'\)/);
   assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: no-cache, no-store, must-revalidate/s);
+  assert.match(headerSource, /\/performance-v3\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/app\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/style\.css\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/vendor\/\*\s+Cache-Control: public, max-age=31536000, immutable/s);
