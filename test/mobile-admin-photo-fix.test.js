@@ -27,14 +27,14 @@ test('打卡抽屉仅显示打卡记录并提供一分钟缓存和请求去重',
   assert.doesNotMatch(drawer, /new Image\(\)/);
 });
 
-test('所有管理端缩略图限制为最长边540px并优先WebP', () => {
+test('所有管理端缩略图限制为最长边640px并优先WebP', () => {
   const app = read('public/app.js');
   const media = read('cloudflare/routes/media.js');
-  assert.match(app, /MEDIA_THUMB_MAX_EDGE = 540/);
+  assert.match(app, /MEDIA_THUMB_MAX_EDGE = 640/);
   assert.match(app, /MEDIA_THUMB_QUALITY = 0\.82/);
   assert.match(app, /正在生成540px WebP缩略图/);
   assert.match(app, /businessType: 'member-checkin'[\s\S]*variant: 'thumb'[\s\S]*parentMediaId: displayMediaId/);
-  assert.match(media, /THUMB_MAX_EDGE = 540/);
+  assert.match(media, /THUMB_MAX_EDGE = 640/);
 });
 
 test('手机管理端头部使用两列紧凑按钮并让退出独占一行', () => {
@@ -50,10 +50,11 @@ test('媒体签名复用导入后的HMAC密钥', () => {
   assert.match(signing, /if \(!hmacKeyPromise \|\| hmacKeySecret !== secret\)/);
 });
 
-test('540px缩略图回填脚本具备正式环境双重确认和原图保护', () => {
+test('640px缩略图回填脚本具备正式环境双重确认和原图保护', () => {
   const script = read('scripts/backfill-admin-thumbnails-540.mjs');
   assert.match(script, /--confirm-production jinshan20/);
   assert.match(script, /withoutEnlargement: true/);
   assert.match(script, /oldThumbObjectKeysPreserved/);
+  assert.match(script, /thumbs-640-v1/);
   assert.doesNotMatch(script, /r2', 'object', 'delete/);
 });
