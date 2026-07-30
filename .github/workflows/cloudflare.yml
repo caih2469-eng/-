@@ -57,6 +57,7 @@ jobs:
       - run: node --check scripts/apply-approved-frontend.mjs
       - run: node --check scripts/apply-approved-backfill.mjs
       - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node --check scripts/apply-approved-performance-diagnostics.mjs
       - run: node scripts/apply-approved-flow-template.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
@@ -65,6 +66,7 @@ jobs:
       - run: node scripts/apply-approved-frontend.mjs
       - run: node scripts/apply-approved-backfill.mjs
       - run: node scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-performance-diagnostics.mjs
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -110,6 +112,7 @@ jobs:
       - run: node --check scripts/apply-approved-frontend.mjs
       - run: node --check scripts/apply-approved-backfill.mjs
       - run: node --check scripts/finalize-approved-experience.mjs
+      - run: node --check scripts/apply-approved-performance-diagnostics.mjs
       - run: node scripts/apply-approved-flow-template.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
@@ -118,6 +121,7 @@ jobs:
       - run: node scripts/apply-approved-frontend.mjs
       - run: node scripts/apply-approved-backfill.mjs
       - run: node scripts/finalize-approved-experience.mjs
+      - run: node scripts/apply-approved-performance-diagnostics.mjs
       - name: Verify generated assets use the latest cache version
         shell: bash
         run: |
