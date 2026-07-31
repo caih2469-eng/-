@@ -1,0 +1,181 @@
+/* PICA_IMAGE_PIPELINE_V1 */
+const IMAGE_PIPELINE_SCRIPT = '/vendor/image-blob-reduce-5.0.1.min.js';
+const PICA_DISPLAY_MAX_EDGE = 2048;
+const PICA_THUMB_MAX_EDGE = 960;
+const PICA_DISPLAY_MAX_BYTES = 1468006;
+const PICA_THUMB_MAX_BYTES = 491520;
+
+const loadImagePipelineLibrary = () => {
+  if (typeof window.imageBlobReduce === 'function') return Promise.resolve(window.imageBlobReduce);
+  if (imagePipelineLibraryPromise) return imagePipelineLibraryPromise;
+  imagePipelineLibraryPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-image-pipeline-library]');
+    const script = existing || document.createElement('script');
+    const handleLoad = () => {
+      if (typeof window.imageBlobReduce === 'function') resolve(window.imageBlobReduce);
+      else reject(new Error('高清图片处理组件加载失败，请刷新后重试。'));
+    };
+    const handleError = () => reject(new Error('高清图片处理组件加载失败，请刷新后重试。'));
+    script.addEventListener('load', handleLoad, { once: true });
+    script.addEventListener('error', handleError, { once: true });
+    if (!existing) {
+      script.src = IMAGE_PIPELINE_SCRIPT;
+      script.async = true;
+      script.dataset.imagePipelineLibrary = 'true';
+      document.head.appendChild(script);
+    }
+  }).catch((error) => {
+    imagePipelineLibraryPromise = null;
+    throw error;
+  });
+  return imagePipelineLibraryPromise;
+};
+
+const getImagePipeline = async () => {
+  if (imagePipelineInstance) return imagePipelineInstance;
+  const factory = await loadImagePipelineLibrary();
+  const pica = factory.pica({ tile: 1024, concurrency: 1 });
+  const reducer = factory({ pica });
+  imagePipelineInstance = { pica, reducer };
+  return imagePipelineInstance;
+};
+
+const createPipelineCanvas = (width, height) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  return canvas;
+};
+
+const releasePipelineCanvas = (canvas) => {
+  if (!canvas) return;
+  canvas.width = 1;
+  canvas.height = 1;
+};
+
+const browserSupportsWebp = (() => {
+  try {
+    const canvas = createPipelineCanvas(1, 1);
+    const supported = canvas.toDataURL('image/webp').startsWith('data:image/webp');
+    releasePipelineCanvas(canvas);
+    return supported;
+  } catch {
+    return false;
+  }
+})();
+
+const encodePipelineCanvas = async (pica, canvas, profile) => {
+  let mimeType = browserSupportsWebp ? 'image/webp' : 'image/jpeg';
+  let blob = await pica.toBlob(canvas, mimeType, profile.quality);
+  let header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  if (!bytesMatchMime(header, mimeType)) {
+    mimeType = 'image/jpeg';
+    blob = await pica.toBlob(canvas, mimeType, profile.quality);
+    header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  }
+  if (!bytesMatchMime(header, mimeType)) throw new Error('当前浏览器无法稳定编码图片，请改用JPG后重试。');
+  if (blob.size > profile.maxBytes) {
+    blob = await pica.toBlob(canvas, mimeType, profile.fallbackQuality);
+  }
+  if (!blob?.size || blob.size > 1.5 * 1024 * 1024) {
+    throw new Error('图片处理后仍然过大，请在相册中裁剪后重新上传。');
+  }
+  const extension = mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const file = new File([blob], `${profile.baseName}-${profile.suffix}.${extension}`, {
+    type: mimeType,
+    lastModified: Date.now()
+  });
+  return {
+    file,
+    mimeType,
+    width: canvas.width,
+    height: canvas.height
+  };
+};
+
+const prepareImageVariants = async (file, options = {}) => {
+  const sourceFile = await normalizeSourceImage(file);
+  if (options.signal?.aborted) throw new DOMException('操作已取消', 'AbortError');
+  options.onProgress?.(5);
+  const { pica, reducer } = await getImagePipeline();
+  const screenshotLike = sourceFile.type === 'image/png';
+  let masterCanvas = null;
+  let thumbCanvas = null;
+  let smallerDisplayCanvas = null;
+  try {
+    masterCanvas = await reducer.toCanvas(sourceFile, {
+      max: PICA_DISPLAY_MAX_EDGE,
+      filter: 'mks2013'
+    });
+    if (options.signal?.aborted) throw new DOMException('操作已取消', 'AbortError');
+    options.onProgress?.(45);
+
+    const thumbScale = Math.min(1, PICA_THUMB_MAX_EDGE / Math.max(masterCanvas.width, masterCanvas.height));
+    if (thumbScale < 1) {
+      thumbCanvas = createPipelineCanvas(masterCanvas.width * thumbScale, masterCanvas.height * thumbScale);
+      await pica.resize(masterCanvas, thumbCanvas, { filter: 'mks2013' });
+    } else {
+      thumbCanvas = masterCanvas;
+    }
+    options.onProgress?.(65);
+
+    const baseName = sourceFile.name.replace(/\.[^.]+$/, '') || 'image';
+    let displayCanvas = masterCanvas;
+    let display = await encodePipelineCanvas(pica, displayCanvas, {
+      baseName,
+      suffix: 'display',
+      quality: screenshotLike ? 0.94 : 0.90,
+      fallbackQuality: screenshotLike ? 0.90 : 0.86,
+      maxBytes: PICA_DISPLAY_MAX_BYTES
+    });
+
+    if (display.file.size > PICA_DISPLAY_MAX_BYTES
+        && Math.max(masterCanvas.width, masterCanvas.height) > 1600) {
+      const scale = 1600 / Math.max(masterCanvas.width, masterCanvas.height);
+      smallerDisplayCanvas = createPipelineCanvas(masterCanvas.width * scale, masterCanvas.height * scale);
+      await pica.resize(masterCanvas, smallerDisplayCanvas, { filter: 'mks2013' });
+      displayCanvas = smallerDisplayCanvas;
+      display = await encodePipelineCanvas(pica, displayCanvas, {
+        baseName,
+        suffix: 'display',
+        quality: screenshotLike ? 0.91 : 0.87,
+        fallbackQuality: screenshotLike ? 0.88 : 0.84,
+        maxBytes: PICA_DISPLAY_MAX_BYTES
+      });
+    }
+
+    const thumb = await encodePipelineCanvas(pica, thumbCanvas, {
+      baseName,
+      suffix: 'thumb',
+      quality: screenshotLike ? 0.92 : 0.88,
+      fallbackQuality: screenshotLike ? 0.89 : 0.84,
+      maxBytes: PICA_THUMB_MAX_BYTES
+    });
+    const previewUrl = URL.createObjectURL(display.file);
+    mediaPreviewUrls.add(previewUrl);
+    display.previewUrl = previewUrl;
+    options.onProgress?.(100);
+    return { display, thumb };
+  } finally {
+    if (thumbCanvas && thumbCanvas !== masterCanvas) releasePipelineCanvas(thumbCanvas);
+    if (smallerDisplayCanvas) releasePipelineCanvas(smallerDisplayCanvas);
+    releasePipelineCanvas(masterCanvas);
+  }
+};
+
+const prepareImageVariantsMeasured = async (file, options = {}) => {
+  const startedAt = performance.now();
+  let output = null;
+  try {
+    output = await prepareImageVariants(file, options);
+    return output;
+  } finally {
+    recordPerf('compress', {
+      variant: 'display+thumb',
+      sourceBytes: Number(file?.size || 0),
+      outputBytes: Number(output?.display?.file?.size || 0) + Number(output?.thumb?.file?.size || 0),
+      duration: roundedDuration(startedAt),
+      navigationEpoch
+    });
+  }
+};
