@@ -1,0 +1,28 @@
+name: Generate image dependency lock
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lock:
+    if: github.head_ref == 'perf/pica-image-pipeline'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --lockfile-only --no-frozen-lockfile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pica-pnpm-lock
+          path: pnpm-lock.yaml
+          if-no-files-found: error
