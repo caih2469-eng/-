@@ -8,6 +8,10 @@ const memberTestPath = path.resolve('test/member-checkin-fast.test.js');
 const layoutTestPath = path.resolve('test/approved-layout-team-draft-720.test.js');
 const mobileTestPath = path.resolve('test/approved-mobile-experience.test.js');
 const studentFlowTestPath = path.resolve('test/student-admin-flow.test.js');
+const mobileAdminTestPath = path.resolve('test/mobile-admin-photo-fix.test.js');
+const productionPerformanceTestPath = path.resolve('test/production-media-login-performance.test.js');
+const stageECacheTestPath = path.resolve('test/stage-e-ui-cache-navigation.test.js');
+const stageFUploadTestPath = path.resolve('test/stage-f-r2-multi-upload.test.js');
 const pageTemplatePath = path.resolve('templates/plaza-mobile-page.txt');
 const styleTemplatePath = path.resolve('templates/plaza-mobile-style.css');
 const routeTemplatePath = path.resolve('templates/plaza-route-search.txt');
@@ -207,6 +211,99 @@ studentFlowTest = replaceNamedTest(
   '学生首页限定范围测试'
 );
 await writeFile(studentFlowTestPath, studentFlowTest, 'utf8');
+
+let mobileAdminTest = await readFile(mobileAdminTestPath, 'utf8');
+mobileAdminTest = replaceNamedTest(
+  mobileAdminTest,
+  '管理端列表图使用960px Pica/WebP并与媒体服务限制一致',
+  String.raw`test('管理端列表图使用960px Pica/WebP并与媒体服务限制一致', () => {
+  const app = read('public/app.js');
+  const media = read('cloudflare/routes/media.js');
+  assert.match(app, /\/\* PICA_IMAGE_PIPELINE_V1 \*\//);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /quality: screenshotLike \? 0\.92 : 0\.88/);
+  assert.match(app, /prepareImageVariantsMeasured\(selected\[index\]/);
+  assert.match(app, /uploadPreparedImagePair\(prepared,/);
+  assert.match(app, /confirmVariantUpload\(thumbIntent, prepared\.thumb, display\.mediaId, signal\)/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+});`,
+  '管理端Pica父子媒体测试'
+);
+await writeFile(mobileAdminTestPath, mobileAdminTest, 'utf8');
+
+let productionPerformanceTest = await readFile(productionPerformanceTestPath, 'utf8');
+productionPerformanceTest = replaceNamedTest(
+  productionPerformanceTest,
+  '图片列表在SQL层分页，首屏不超过20张且管理员每页不超过30人',
+  String.raw`test('图片列表在SQL层分页，首屏不超过20张且管理员每页不超过30人', () => {
+  const plaza = fs.readFileSync('cloudflare/routes/plaza.js', 'utf8');
+  const admin = fs.readFileSync('cloudflare/routes/admin.js', 'utf8');
+  const student = fs.readFileSync('cloudflare/routes/student.js', 'utf8');
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  assert.match(plaza, /Math\.min\(20/);
+  assert.match(plaza, /ORDER BY \$\{order\} LIMIT \?4 OFFSET \?5/);
+  assert.match(plaza, /env\.DB\.prepare\(query\)\.bind\(user\.id, searchLike, monthValue, limit, \(page - 1\) \* limit\)/);
+  assert.match(admin, /Math\.min\(30/);
+  assert.match(admin, /ORDER BY u\.name,u\.student_id LIMIT \?4 OFFSET \?5/);
+  assert.match(student, /Math\.min\(20/);
+  assert.doesNotMatch(app, /new MutationObserver/);
+  assert.match(app, /IntersectionObserver/);
+  assert.match(app, /data-src=/);
+  assert.match(app, /limit=20/);
+  assert.doesNotMatch(plaza + '\n' + admin + '\n' + student, /data:image\/[^;]+;base64/i);
+  assert.match(admin, /IN \('task:thumb','admin-makeup:thumb'\)/);
+  assert.match(student, /IN \('member-checkin:thumb','admin-makeup:thumb'\)/);
+  assert.match(admin, /COALESCE\(m\.object_key,i\.object_key\) AS objectKey/);
+  assert.match(student, /COALESCE\(m\.object_key,i\.object_key\) AS objectKey/);
+});`,
+  '活动广场SQL分页测试'
+);
+await writeFile(productionPerformanceTestPath, productionPerformanceTest, 'utf8');
+
+let stageECacheTest = await readFile(stageECacheTestPath, 'utf8');
+stageECacheTest = replaceNamedTest(
+  stageECacheTest,
+  '阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离',
+  String.raw`test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
+  assert.match(appSource, /const VIEW_CACHE_TTL_MS = 20_000;/);
+  assert.match(appSource, /const plazaViewCache = new Map\(\);/);
+  assert.match(appSource, /const adminCommentViewCache = new Map\(\);/);
+  assert.doesNotMatch(appSource, /const rankingViewCache = new Map\(\);/);
+  assert.match(appSource, /const scopedCacheKey = \(\.\.\.parts\) => \[/);
+  assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
+  assert.match(appSource, /\]\.join\('\|'\);/);
+  assert.match(appSource, /scopedCacheKey\('plaza', safeSort, page, safeQuery\)/);
+  assert.match(appSource, /q=\$\{encodeURIComponent\(safeQuery\)\}/);
+  assert.match(appSource, /scopedCacheKey\('admin-comments', page\)/);
+  const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
+  assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
+});`,
+  '活动广场搜索缓存键测试'
+);
+await writeFile(stageECacheTestPath, stageECacheTest, 'utf8');
+
+let stageFUploadTest = await readFile(stageFUploadTestPath, 'utf8');
+stageFUploadTest = replaceNamedTest(
+  stageFUploadTest,
+  '阶段F：多图并发受控，失败图可单独重试且成功图不重复上传',
+  String.raw`test('阶段F：多图并发受控，失败图可单独重试且成功图不重复上传', () => {
+  assert.match(appSource, /return isIOS \|\| embeddedBrowser \|\| lowMemory \? 1 : 2;/);
+  const sessionBlock = functionBlock('const createMediaUploadSession', 'const readFiles');
+  assert.match(sessionBlock, /if \(session\.results\[index\]\) return;/);
+  assert.match(sessionBlock, /let prepared = session\.partial\[index\]\?\.prepared;/);
+  assert.match(sessionBlock, /let pair = session\.partial\[index\]\?\.pair;/);
+  assert.match(sessionBlock, /session\.partial\[index\] = \{ prepared, pair \};/);
+  assert.match(sessionBlock, /session\.results\[index\] = \{ \.\.\.pair\.display, thumbMediaId: pair\.thumb\.mediaId \};/);
+  assert.match(sessionBlock, /const indexes = \[\.\.\.session\.errors\.keys\(\)\];/);
+  assert.match(sessionBlock, /Math\.min\(uploadConcurrency\(\), indexes\.length\)/);
+  assert.match(sessionBlock, /第 \$\{failed\} 张图片处理失败，可单独重试失败图片。/);
+});`,
+  '并行双版本上传重试测试'
+);
+await writeFile(stageFUploadTestPath, stageFUploadTest, 'utf8');
 
 if (!(await readFile(appPath, 'utf8')).includes(marker)
     || !(await readFile(stylePath, 'utf8')).includes(marker)
