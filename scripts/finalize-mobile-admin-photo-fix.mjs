@@ -106,30 +106,27 @@ const replaceOnce = (source, search, replacement, label) => {
 
 {
   const { file, source } = readRequired('test/member-checkin-fast.test.js');
-  const replacement = `test('单人打卡展示图使用fast接口并生成640px WebP缩略图', () => {
+  const replacement = String.raw`test('单人打卡使用Pica生成2048px高清图与960px列表图', () => {
   const app = fs.readFileSync('public/app.js', 'utf8');
   const memberBody = app.match(
-    /function memberCheckinForm\\(task\\) \\{([\\s\\S]*?)\\r?\\n\\}\\r?\\n\\r?\\nfunction materialSubmissionForm/
+    /function memberCheckinForm\(task\) \{([\s\S]*?)\r?\n\}\r?\n\r?\nfunction materialSubmissionForm/
   )?.[1] || '';
-  assert.match(memberBody, /uploadMemberCheckinFast/);
-  assert.match(memberBody, /uploadCompressedImage/);
-  assert.match(memberBody, /variant:\\s*'thumb'/);
-  assert.match(memberBody, /parentMediaId:\\s*displayMediaId/);
-  assert.match(memberBody, /正在生成540px WebP缩略图/);
-  assert.match(memberBody, /const mediaIds = session\\?\\.items/);
+  assert.match(memberBody, /prepareImageVariantsMeasured\(sourceFile/);
+  assert.match(memberBody, /uploadCompressedImage\(prepared\.display/);
+  assert.match(memberBody, /variant:\s*'display'/);
+  assert.match(memberBody, /uploadCompressedImage\(prepared\.thumb/);
+  assert.match(memberBody, /variant:\s*'thumb'/);
+  assert.match(memberBody, /parentMediaId:\s*display\.mediaId/);
+  assert.match(memberBody, /正在生成高清图和列表图/);
+  assert.match(memberBody, /正在上传列表图/);
   assert.doesNotMatch(memberBody, /readFiles/);
-  assert.match(app, /const MEMBER_FAST_MAX_BYTES = 307_200/);
-  assert.match(app, /const MEDIA_THUMB_MAX_EDGE = 640/);
-  assert.match(app, /const MEDIA_THUMB_QUALITY = 0\\.82/);
-  assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.76, maxSizeMB: 0\\.25 \\}/);
-  assert.match(app, /\\{ maxWidthOrHeight: 960, initialQuality: 0\\.70, maxSizeMB: 0\\.30 \\}/);
-  assert.match(app, /\\{ maxWidthOrHeight: 800, initialQuality: 0\\.68, maxSizeMB: 0\\.30 \\}/);
-  assert.match(app, /图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
 });`;
-  const pattern = /test\('单人打卡(?:前端只使用fast接口、最多三轮压缩且不生成缩略图|展示图使用fast接口并生成(?:540|640|720)px WebP缩略图)',[\s\S]*?\n\}\);/;
+  const pattern = /test\('(?:单人打卡前端只使用fast接口、最多三轮压缩且不生成缩略图|单人打卡展示图使用fast接口并生成(?:540|640|720)px WebP缩略图|单人打卡使用Pica生成2048px高清图与960px列表图)',[\s\S]*?\n\}\);/;
   const next = pattern.test(source) ? source.replace(pattern, replacement) : source;
-  if (!next.includes("test('单人打卡展示图使用fast接口并生成640px WebP缩略图'")) {
-    throw new Error('单人打卡测试标准更新失败');
+  if (!next.includes("test('单人打卡使用Pica生成2048px高清图与960px列表图'")) {
+    throw new Error('单人打卡Pica测试标准更新失败');
   }
   writeIfChanged(file, source, next);
 }
@@ -147,4 +144,4 @@ const replaceOnce = (source, search, replacement, label) => {
   writeIfChanged(file, source, next);
 }
 
-console.log('Finalized approved asset versions, first-thumbnail priority and test expectations.');
+console.log('Finalized approved asset versions, first-thumbnail priority and Pica-aware test expectations.');

@@ -38,6 +38,11 @@ test('公开队伍提交自动发帖、排行分页点赞浏览和管理员管�
   const uploadDir = path.join(temp, 'uploads');
   fs.mkdirSync(dataDir, { recursive: true });
   const now = new Date();
+  const shanghaiMonth = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit'
+  }).format(now);
   const user = (id, role, trackId) => ({ id, studentId: id, name: id, password: 'pass', role, campus: '旗山', trackId, status: 'active', createdAt: now.toISOString() });
   fs.writeFileSync(path.join(dataDir, 'db.json'), JSON.stringify({
     config: { activityName: '广场测试', maxTeams: 50, slots: [], activityEnabled: true, trackEnabled: { interaction: true, health: true } },
@@ -76,7 +81,7 @@ test('公开队伍提交自动发帖、排行分页点赞浏览和管理员管�
   assert.equal((await call(base, `/api/plaza/${postId}/like`, { method: 'POST', token: member, body: '{"liked":true}' })).body.likeCount, 1);
   assert.equal((await call(base, `/api/plaza/${postId}/like`, { method: 'POST', token: member, body: '{"liked":false}' })).body.likeCount, 0);
   assert.equal((await call(base, `/api/plaza/${postId}/like`, { method: 'POST', token: otherMember, body: '{"liked":true}' })).body.likeCount, 1);
-  const monthly = await call(base, `/api/plaza?sort=monthly&month=${now.toISOString().slice(0, 7)}&page=1&limit=6`, { token: member });
+  const monthly = await call(base, `/api/plaza?sort=monthly&month=${shanghaiMonth}&page=1&limit=6`, { token: member });
   assert.equal(monthly.body.total, 1);
   assert.equal((await call(base, '/api/plaza', { method: 'POST', token: member, body: '{}' })).status, 403);
 

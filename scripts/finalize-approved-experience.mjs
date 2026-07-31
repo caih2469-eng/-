@@ -98,4 +98,122 @@ for (const relativePath of target720TestFiles) {
   if (next !== source) write(file, next);
 }
 
-console.log('Aligned legacy media assertions with the approved 720px target while preserving the separate 640px plaza pipeline.');
+const replaceGeneratedTest = (relativePath, pattern, replacement, expectedTitle) => {
+  const { file, source } = read(relativePath);
+  const next = pattern.test(source) ? source.replace(pattern, replacement.trim()) : source;
+  if (!next.includes(expectedTitle)) {
+    throw new Error(`${relativePath}的Pica图片链路测试标准更新失败`);
+  }
+  if (next !== source) write(file, next);
+};
+
+const picaMemberTest = String.raw`test('单人打卡使用Pica生成2048px高清图与960px列表图', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const memberBody = app.match(
+    /function memberCheckinForm\(task\) \{([\s\S]*?)\r?\n\}\r?\n\r?\nfunction materialSubmissionForm/
+  )?.[1] || '';
+  assert.match(memberBody, /prepareImageVariantsMeasured\(sourceFile/);
+  assert.match(memberBody, /uploadCompressedImage\(prepared\.display/);
+  assert.match(memberBody, /variant:\s*'display'/);
+  assert.match(memberBody, /uploadCompressedImage\(prepared\.thumb/);
+  assert.match(memberBody, /variant:\s*'thumb'/);
+  assert.match(memberBody, /parentMediaId:\s*display\.mediaId/);
+  assert.match(memberBody, /正在生成高清图和列表图/);
+  assert.match(memberBody, /正在上传列表图/);
+  assert.doesNotMatch(memberBody, /readFiles/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+});`;
+
+replaceGeneratedTest(
+  'test/approved-layout-team-draft-720.test.js',
+  /test\('(?:本轮限定区域使用720px WebP缩略图且不再保留640px生成常量|图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填)',[\s\S]*?\n\}\);/,
+  String.raw`test('图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填', () => {
+  const app = read('public/app.js');
+  const media = read('cloudflare/routes/media.js');
+  const backfill = read('scripts/backfill-admin-thumbnails-540.mjs');
+  assert.match(app, /\/\* PICA_IMAGE_PIPELINE_V1 \*\//);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.match(backfill, /thumbs-720-v1/);
+  assert.match(backfill, /encode\(720, 84\)/);
+});`,
+  "test('图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填'"
+);
+
+replaceGeneratedTest(
+  'test/approved-mobile-experience.test.js',
+  /test\('(?:活动广场、历史打卡和管理员打卡统一(?:640|720)px WebP缩略图|活动广场、历史打卡和管理员列表图统一使用960px Pica链路)',[\s\S]*?\n\}\);/,
+  String.raw`test('活动广场、历史打卡和管理员列表图统一使用960px Pica链路', () => {
+  const app = read('public/app.js');
+  const media = read('cloudflare/routes/media.js');
+  const backfill = read('scripts/backfill-admin-thumbnails-540.mjs');
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /data-perf-image="history-thumb"/);
+  assert.match(app, /data-perf-image="plaza-thumb"/);
+  assert.match(app, /data-perf-image="admin-checkin-thumb"/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.match(backfill, /thumbs-720-v1/);
+  assert.match(backfill, /encode\(720, 84\)/);
+  assert.match(backfill, /'task'/);
+});`,
+  "test('活动广场、历史打卡和管理员列表图统一使用960px Pica链路'"
+);
+
+replaceGeneratedTest(
+  'test/member-checkin-fast.test.js',
+  /test\('(?:单人打卡前端只使用fast接口、最多三轮压缩且不生成缩略图|单人打卡展示图使用fast接口并生成(?:540|640|720)px WebP缩略图|单人打卡使用Pica生成2048px高清图与960px列表图)',[\s\S]*?\n\}\);/,
+  picaMemberTest,
+  "test('单人打卡使用Pica生成2048px高清图与960px列表图'"
+);
+
+replaceGeneratedTest(
+  'test/mobile-admin-photo-fix.test.js',
+  /test\('(?:所有管理端缩略图限制为最长边(?:640|720)px并优先WebP|管理端列表图使用960px Pica\/WebP并与媒体服务限制一致)',[\s\S]*?\n\}\);/,
+  String.raw`test('管理端列表图使用960px Pica/WebP并与媒体服务限制一致', () => {
+  const app = read('public/app.js');
+  const media = read('cloudflare/routes/media.js');
+  assert.match(app, /\/\* PICA_IMAGE_PIPELINE_V1 \*\//);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /quality: screenshotLike \? 0\.92 : 0\.88/);
+  assert.match(app, /prepareImageVariantsMeasured\(sourceFile/);
+  assert.match(app, /prepared\.thumb/);
+  assert.match(app, /parentMediaId:\s*display\.mediaId/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+});`,
+  "test('管理端列表图使用960px Pica/WebP并与媒体服务限制一致'"
+);
+
+replaceGeneratedTest(
+  'test/production-media-login-performance.test.js',
+  /test\('(?:二次提速参数前后端一致，并复用已加载缩略图|Pica图片参数前后端一致，并复用已加载缩略图)',[\s\S]*?\n\}\);/,
+  String.raw`test('Pica图片参数前后端一致，并复用已加载缩略图', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const media = fs.readFileSync('cloudflare/routes/media.js', 'utf8');
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /PICA_THUMB_MAX_BYTES = 491520/);
+  assert.match(app, /PICA_DISPLAY_MAX_BYTES = 1468006/);
+  assert.match(app, /quality: screenshotLike \? 0\.92 : 0\.88/);
+  assert.match(app, /quality: screenshotLike \? 0\.94 : 0\.90/);
+  assert.match(app, /prepareImageVariantsMeasured\(sourceFile/);
+  assert.match(app, /renderedImage\?\.complete/);
+  assert.match(app, /await displayImage\.decode\(\)/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.doesNotMatch(media, /variant === 'thumb' \? 480 : 1280/);
+});`,
+  "test('Pica图片参数前后端一致，并复用已加载缩略图'"
+);
+
+console.log('Aligned legacy media assertions with the Pica 960px list-image and 2048px display-image pipeline.');

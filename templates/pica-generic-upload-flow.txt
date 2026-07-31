@@ -1,0 +1,26 @@
+      let prepared = session.partial[index]?.prepared;
+      if (!prepared) {
+        setStatus(`${position}：正在生成高清图和列表图 0%`);
+        prepared = await prepareImageVariantsMeasured(selected[index], {
+          signal: controller.signal,
+          onProgress: (progress) => setStatus(`${position}：正在生成高清图和列表图 ${Math.round(Number(progress) || 0)}%`)
+        });
+        session.partial[index] = { prepared };
+      }
+      let display = session.partial[index]?.display;
+      if (!display) {
+        display = await uploadCompressedImage(prepared.display, {
+          ...context,
+          variant: 'display',
+          onStage: (stage) => setStatus(`${position}：${stage}`)
+        }, controller.signal);
+        session.partial[index] = { prepared, display };
+      }
+      setStatus(`${position}：正在上传列表图片…`);
+      const thumb = await uploadCompressedImage(prepared.thumb, {
+        ...context,
+        variant: 'thumb',
+        parentMediaId: display.mediaId,
+        onStage: (stage) => setStatus(`${position}：${stage}`)
+      }, controller.signal);
+      session.results[index] = { ...display, thumbMediaId: thumb.mediaId };
