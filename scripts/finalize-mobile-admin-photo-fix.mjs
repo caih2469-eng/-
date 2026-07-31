@@ -126,7 +126,7 @@ const replaceOnce = (source, search, replacement, label) => {
   assert.match(app, /\\{ maxWidthOrHeight: 800, initialQuality: 0\\.68, maxSizeMB: 0\\.30 \\}/);
   assert.match(app, /图片压缩后仍超过300KB，请先在相册中裁剪、截图或压缩后重新上传。/);
 });`;
-  const pattern = /test\('单人打卡(?:前端只使用fast接口、最多三轮压缩且不生成缩略图|展示图使用fast接口并生成(?:540|640)px WebP缩略图)',[\s\S]*?\n\}\);/;
+  const pattern = /test\('单人打卡(?:前端只使用fast接口、最多三轮压缩且不生成缩略图|展示图使用fast接口并生成(?:540|640|720)px WebP缩略图)',[\s\S]*?\n\}\);/;
   const next = pattern.test(source) ? source.replace(pattern, replacement) : source;
   if (!next.includes("test('单人打卡展示图使用fast接口并生成640px WebP缩略图'")) {
     throw new Error('单人打卡测试标准更新失败');
