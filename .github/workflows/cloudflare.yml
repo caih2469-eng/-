@@ -47,7 +47,8 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
       (github.event_name == 'pull_request' && github.head_ref == 'fix/approved-layout-team-draft-720') ||
-      (github.event_name == 'pull_request' && github.head_ref == 'perf/pica-image-pipeline')
+      (github.event_name == 'pull_request' && github.head_ref == 'perf/pica-image-pipeline') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'perf/upload-plaza-mobile')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -68,7 +69,11 @@ jobs:
       - run: node --check scripts/apply-approved-backfill.mjs
       - run: node --check scripts/finalize-approved-experience.mjs
       - run: node --check scripts/apply-approved-performance-diagnostics.mjs
+      - run: node --check scripts/apply-approved-plaza-prefetch.mjs
+      - run: node --check scripts/apply-pica-image-pipeline.mjs
+      - run: node --check scripts/apply-plaza-mobile-layout.mjs
       - run: node --check scripts/browser-approved-preview.mjs
+      - run: node --check scripts/browser-plaza-mobile-preview.mjs
       - run: node scripts/apply-approved-flow-template.mjs
       - run: node scripts/apply-admin-dashboard-refactor.mjs
       - run: node scripts/apply-mobile-admin-photo-fix.mjs
@@ -78,13 +83,21 @@ jobs:
       - run: node scripts/apply-approved-backfill.mjs
       - run: node scripts/finalize-approved-experience.mjs
       - run: node scripts/apply-approved-performance-diagnostics.mjs
-      - name: Verify preview asset version
+      - run: node scripts/apply-approved-plaza-prefetch.mjs
+      - run: node scripts/apply-pica-image-pipeline.mjs
+      - run: node scripts/apply-plaza-mobile-layout.mjs
+      - name: Verify preview asset version and PR generators
         shell: bash
         run: |
           set -euo pipefail
           grep -q '20260731-approved1' public/bootstrap.js
           grep -q '20260731-approved1' public/index.html
           grep -q '20260731-approved1' public/entrance.html
+          grep -q 'PICA_IMAGE_PIPELINE_V1' public/app.js
+          grep -q 'PLAZA_MOBILE_LAYOUT_V1' public/app.js
+          grep -q 'PLAZA_MOBILE_LAYOUT_V1' public/style.css
+          grep -q 'PLAZA_MOBILE_LAYOUT_V1' cloudflare/routes/plaza.js
+          grep -q 'uploadPreparedImagePair' public/app.js
           if grep -R -n -E '20260730-(flow2|adminphoto1|adminphoto2)' public/bootstrap.js public/index.html public/entrance.html; then
             echo '测试构建仍含旧资源版本。'
             exit 1
@@ -147,17 +160,26 @@ jobs:
           path.write_text(source, encoding='utf-8')
           PY
           node --check scripts/browser-approved-preview.mjs
-      - name: Run real Chrome browser acceptance
+      - name: Run existing Chrome browser acceptance
         run: node scripts/browser-approved-preview.mjs --base-url https://jinshan20-test.pages.dev
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Run plaza mobile Chrome acceptance
+        run: node scripts/browser-plaza-mobile-preview.mjs --base-url https://jinshan20-test.pages.dev
       - name: Upload browser acceptance report
         if: always() && hashFiles('reports/browser-approved-preview.json') != ''
         uses: actions/upload-artifact@v4
         with:
           name: browser-approved-preview-${{ github.run_id }}
           path: reports/browser-approved-preview.json
+          retention-days: 14
+      - name: Upload plaza mobile acceptance report
+        if: always() && hashFiles('reports/browser-plaza-mobile-preview.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-plaza-mobile-preview-${{ github.run_id }}
+          path: reports/browser-plaza-mobile-preview.json
           retention-days: 14
 
   deploy-production:
