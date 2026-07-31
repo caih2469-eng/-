@@ -21,8 +21,9 @@ if (!source.includes(marker)) {
     '      \'<div class="admin-post-grid">$1</div>\',',
     "      '管理端六列帖子容器'",
     '    );'
-  ].join('\n');
-  source = source.slice(0, start) + replacement + source.slice(end);
+  ];
+  replacement[3] += ',';
+  source = source.slice(0, start) + replacement.join('\n') + source.slice(end);
   fs.writeFileSync(file, source, 'utf8');
 }
 
