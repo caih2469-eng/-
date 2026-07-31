@@ -22,7 +22,8 @@
   "dependencies": {
     "aws4fetch": "1.0.20",
     "browser-image-compression": "2.0.2",
-    "exceljs": "4.4.0"
+    "exceljs": "4.4.0",
+    "image-blob-reduce": "5.0.1"
   },
   "engines": {
     "node": ">=18"
