@@ -1,0 +1,5 @@
+<div class="image-preview" id="taskPreview">${(current?.images || []).map((image) => {
+        const thumbUrl = image.thumbUrl || image.imageUrl || image.displayUrl || '';
+        const displayUrl = image.displayUrl || thumbUrl;
+        return `<button type="button" class="image-viewer-trigger" data-image-viewer="${escapeHtml(thumbUrl)}" data-image-thumb="${escapeHtml(thumbUrl)}" data-image-display="${escapeHtml(displayUrl)}" data-image-alt="已保存队伍作品"><span class="image-shell"><img src="${escapeHtml(thumbUrl)}" width="720" height="540" loading="eager" decoding="async" alt="已保存队伍作品"></span></button>`;
+      }).join('')}</div>
