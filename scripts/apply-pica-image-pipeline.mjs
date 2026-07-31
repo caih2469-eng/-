@@ -72,9 +72,9 @@ if (!app.includes(marker)) {
 
 let mediaRoute = await readFile(mediaRoutePath, 'utf8');
 mediaRoute = mediaRoute
-  .replace('const THUMB_MAX_EDGE = 360;', 'const THUMB_MAX_EDGE = 960;')
-  .replace('const PLAZA_THUMB_MAX_EDGE = 640;', 'const PLAZA_THUMB_MAX_EDGE = 960;')
-  .replace('const DISPLAY_MAX_EDGE = 960;', 'const DISPLAY_MAX_EDGE = 2048;');
+  .replace(/const THUMB_MAX_EDGE = \d+;/, 'const THUMB_MAX_EDGE = 960;')
+  .replace(/const PLAZA_THUMB_MAX_EDGE = \d+;/, 'const PLAZA_THUMB_MAX_EDGE = 960;')
+  .replace(/const DISPLAY_MAX_EDGE = \d+;/, 'const DISPLAY_MAX_EDGE = 2048;');
 if (!mediaRoute.includes('const THUMB_MAX_EDGE = 960;')
     || !mediaRoute.includes('const PLAZA_THUMB_MAX_EDGE = 960;')
     || !mediaRoute.includes('const DISPLAY_MAX_EDGE = 2048;')) {
