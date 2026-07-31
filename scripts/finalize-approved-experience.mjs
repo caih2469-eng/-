@@ -67,3 +67,4 @@ for (const relativePath of ['test/member-checkin-fast.test.js', 'test/mobile-adm
 }
 
 console.log('Finalized approved 640px media imports, labels, tests and check-in settings compatibility.');
+await import('./apply-approved-layout-team-draft-720.mjs');
