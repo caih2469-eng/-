@@ -1,5 +1,3 @@
-      const sourceFile = await normalizeSourceImage(item.file);
-      if (current !== session) return;
       const prepared = await prepareImageVariantsMeasured(sourceFile, {
         signal: current.controller.signal,
         onProgress: (progress) => {
