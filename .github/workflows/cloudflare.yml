@@ -46,7 +46,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
-      (github.event_name == 'pull_request' && github.head_ref == 'feature/mobile-home-checkin-settings-plaza640')
+      (github.event_name == 'pull_request' && github.head_ref == 'fix/approved-layout-team-draft-720')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -253,7 +253,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Backfill 640px WebP history, admin and plaza thumbnails
+      - name: Backfill 720px WebP history, admin and plaza thumbnails
         continue-on-error: true
         run: node scripts/backfill-admin-thumbnails-540.mjs --environment production --apply --confirm-production jinshan20 --limit 500
         env:

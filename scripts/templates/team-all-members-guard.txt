@@ -1,0 +1,17 @@
+    if (intent === 'submitted' && owner.type === 'team' && user.role !== 'admin') {
+      if (!owner.team || owner.team.captainId !== user.id) {
+        return json({ error: '只有队长可以提交队伍作品' }, 403);
+      }
+      const [memberTotal, memberCompleted] = await Promise.all([
+        env.DB.prepare('SELECT COUNT(*) AS total FROM team_members WHERE team_id=?1').bind(owner.id).first(),
+        env.DB.prepare(
+          `SELECT COUNT(DISTINCT user_id) AS completed FROM member_checkins
+            WHERE team_id=?1 AND task_id=?2 AND occurrence_date=?3`
+        ).bind(owner.id, task.id, occurrenceDate).first()
+      ]);
+      const total = Number(memberTotal?.total || 0);
+      const completed = Number(memberCompleted?.completed || 0);
+      if (!total || completed < total) {
+        return json({ error: `需所有队员完成当天个人打卡后才能汇总提交（${completed}/${total}）` }, 409);
+      }
+    }

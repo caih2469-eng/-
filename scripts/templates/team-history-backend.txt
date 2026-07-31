@@ -1,0 +1,53 @@
+  if (route === '/api/team-checkins/history' && request.method === 'GET') {
+    if (user.role !== 'student' || user.trackId !== 'interaction') return json({ error: '仅互动赛道可查看队伍记录' }, 403);
+    const team = await teamForUser(env, user.id);
+    if (!team) return json({ page: 1, limit: 20, total: 0, hasMore: false, records: [] });
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit') || 20)));
+    const offset = (page - 1) * limit;
+    const [count, pageResult, members] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) AS total FROM task_submissions WHERE owner_type='team' AND owner_id=?1 AND status IN ('submitted','approved')").bind(team.id).first(),
+      env.DB.prepare(
+        `SELECT s.id,s.task_id AS taskId,t.name AS taskName,s.occurrence_date AS date,
+                s.copy_text AS copy,s.status,s.submitted_at AS submittedAt
+           FROM task_submissions s JOIN tasks t ON t.id=s.task_id
+          WHERE s.owner_type='team' AND s.owner_id=?1 AND s.status IN ('submitted','approved')
+          ORDER BY s.occurrence_date DESC,s.submitted_at DESC LIMIT ?2 OFFSET ?3`
+      ).bind(team.id, limit, offset).all(),
+      membersForTeam(env, team.id)
+    ]);
+    const records = pageResult.results;
+    const imagesBySubmission = await submissionImagesForIds(env, records.map((record) => record.id), user);
+    let checkinRows = [];
+    if (records.length) {
+      const values = [team.id];
+      const conditions = records.map((record, index) => {
+        values.push(record.taskId, record.date || '');
+        const start = 2 + index * 2;
+        return `(task_id=?${start} AND occurrence_date=?${start + 1})`;
+      }).join(' OR ');
+      const result = await env.DB.prepare(
+        `SELECT task_id AS taskId,occurrence_date AS date,user_id AS userId
+           FROM member_checkins WHERE team_id=?1 AND (${conditions})`
+      ).bind(...values).all();
+      checkinRows = result.results;
+    }
+    const completedByKey = new Map();
+    for (const row of checkinRows) {
+      const key = `${row.taskId}|${row.date || ''}`;
+      if (!completedByKey.has(key)) completedByKey.set(key, new Set());
+      completedByKey.get(key).add(row.userId);
+    }
+    for (const record of records) {
+      const completed = completedByKey.get(`${record.taskId}|${record.date || ''}`) || new Set();
+      record.images = imagesBySubmission.get(record.id) || [];
+      record.teamProgress = {
+        total: members.length,
+        completed: completed.size,
+        members: members.map((member) => ({ ...member, checked: completed.has(member.id) }))
+      };
+    }
+    const total = Number(count?.total || 0);
+    return json({ page, limit, total, hasMore: offset + records.length < total, records });
+  }
+
