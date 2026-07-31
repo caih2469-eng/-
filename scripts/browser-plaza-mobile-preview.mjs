@@ -24,6 +24,8 @@ const parseArgs = (argv) => {
   return options;
 };
 
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 const findChrome = () => {
   for (const command of ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser']) {
     const result = spawnSync('which', [command], { encoding: 'utf8' });
@@ -31,8 +33,6 @@ const findChrome = () => {
   }
   throw new Error('GitHub Runner 未找到 Chrome/Chromium');
 };
-
-const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 class CdpClient {
   constructor(url) {
@@ -46,8 +46,14 @@ class CdpClient {
     this.socket = new WebSocket(this.url);
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('CDP WebSocket连接超时')), 10_000);
-      this.socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
-      this.socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP WebSocket连接失败')); }, { once: true });
+      this.socket.addEventListener('open', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+      this.socket.addEventListener('error', () => {
+        clearTimeout(timer);
+        reject(new Error('CDP WebSocket连接失败'));
+      }, { once: true });
     });
     this.socket.addEventListener('message', (event) => {
       const message = JSON.parse(event.data);
@@ -76,7 +82,10 @@ class CdpClient {
   waitEvent(method, timeoutMs = 20_000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`等待${method}超时`)), timeoutMs);
-      const handler = (params) => { clearTimeout(timer); resolve(params); };
+      const handler = (params) => {
+        clearTimeout(timer);
+        resolve(params);
+      };
       const handlers = this.listeners.get(method) || [];
       handlers.push(handler);
       this.listeners.set(method, handlers);
@@ -91,14 +100,17 @@ class CdpClient {
       userGesture: true
     });
     if (result.exceptionDetails) {
-      const description = result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'unknown';
-      throw new Error(`浏览器执行失败：${description}`);
+      const exception = result.exceptionDetails.exception || {};
+      const description = exception.description || result.exceptionDetails.text || 'unknown';
+      const line = Number(result.exceptionDetails.lineNumber || 0) + 1;
+      const column = Number(result.exceptionDetails.columnNumber || 0) + 1;
+      throw new Error(`浏览器执行失败（${line}:${column}）：${description}`);
     }
-    return result.result?.value;
+    return result.result ? result.result.value : undefined;
   }
 
   close() {
-    this.socket?.close();
+    if (this.socket) this.socket.close();
   }
 }
 
@@ -127,13 +139,13 @@ const login = async (baseUrl) => {
     signal: AbortSignal.timeout(20_000)
   });
   const body = await response.json().catch(() => null);
-  if (!response.ok || !body?.token || !body?.user) {
+  if (!response.ok || !body || !body.token || !body.user) {
     throw new Error(`测试学生登录失败（${response.status}）：${JSON.stringify(body)}`);
   }
   return body;
 };
 
-const openChrome = async (baseUrl) => {
+const openChrome = async () => {
   const chrome = findChrome();
   const userDataDir = await mkdtemp(path.join(tmpdir(), 'jinshan-plaza-mobile-'));
   const port = 9300 + Math.floor(Math.random() * 500);
@@ -156,7 +168,9 @@ const openChrome = async (baseUrl) => {
   let target = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1_000) });
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(1_000)
+      });
       const targets = await response.json();
       target = targets.find((item) => item.type === 'page' && item.webSocketDebuggerUrl);
       if (target) break;
@@ -196,16 +210,26 @@ const openChrome = async (baseUrl) => {
       processHandle.kill('SIGTERM');
       await sleep(200);
       if (!processHandle.killed) processHandle.kill('SIGKILL');
-      await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});
-    },
-    baseUrl
+      await rm(userDataDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 8,
+        retryDelay: 150
+      }).catch(() => {});
+    }
   };
 };
 
 const assertUploadTimeline = (upload) => {
-  if (!upload?.displayMediaId || !upload?.thumbMediaId) throw new Error('并行上传没有返回两种媒体编号');
-  if (upload.preparedDisplayEdge > 2048) throw new Error(`高清图最长边${upload.preparedDisplayEdge}px，超过2048px`);
-  if (upload.preparedThumbEdge > 960) throw new Error(`列表图最长边${upload.preparedThumbEdge}px，超过960px`);
+  if (!upload || !upload.displayMediaId || !upload.thumbMediaId) {
+    throw new Error('并行上传没有返回两种媒体编号');
+  }
+  if (upload.preparedDisplayEdge > 2048) {
+    throw new Error(`高清图最长边${upload.preparedDisplayEdge}px，超过2048px`);
+  }
+  if (upload.preparedThumbEdge > 960) {
+    throw new Error(`列表图最长边${upload.preparedThumbEdge}px，超过960px`);
+  }
   if (upload.intentStarts !== 2 || upload.putStarts !== 2) {
     throw new Error(`并行上传请求数量异常：intent=${upload.intentStarts}, put=${upload.putStarts}`);
   }
@@ -218,16 +242,28 @@ const assertUploadTimeline = (upload) => {
 
 const runAcceptance = async (baseUrl) => {
   const credentials = await login(baseUrl);
-  const browser = await openChrome(baseUrl);
+  const browser = await openChrome();
   const { client } = browser;
   try {
     await navigate(client, `${baseUrl}/entrance`);
-    await client.evaluate(`localStorage.setItem('token', ${JSON.stringify(credentials.token)}); localStorage.setItem('user', ${JSON.stringify(JSON.stringify(credentials.user))});`);
+    await client.evaluate(
+      `localStorage.setItem('token', ${JSON.stringify(credentials.token)});`
+      + `localStorage.setItem('user', ${JSON.stringify(JSON.stringify(credentials.user))});`
+    );
     await navigate(client, `${baseUrl}/?debugPerf=1&plazaMobileAcceptance=${Date.now()}`);
-    await waitFor(client, `Boolean(document.querySelector('#plaza') && document.body.dataset.view === 'student')`, 20_000, '学生首页');
+    await waitFor(
+      client,
+      `Boolean(document.querySelector('#plaza') && document.body.dataset.view === 'student')`,
+      20_000,
+      '学生首页'
+    );
 
     await client.call('Network.clearBrowserCache');
-    await client.evaluate(`window.__PLAZA_COLD_STARTED__ = performance.now(); window.__PERF_METRICS__ = []; document.querySelector('#plaza').click();`);
+    await client.evaluate(
+      `window.__PLAZA_COLD_STARTED__ = performance.now();`
+      + `window.__PERF_METRICS__ = [];`
+      + `document.querySelector('#plaza').click();`
+    );
     const cold = await waitFor(client, `(() => {
       const image = document.querySelector('img[data-perf-image="plaza-thumb"]');
       const grid = document.querySelector('.plaza-grid');
@@ -249,38 +285,57 @@ const runAcceptance = async (baseUrl) => {
       };
     })()`, 20_000, '活动广场冷缓存首图');
 
-    if (cold.visibleMs > 1000) throw new Error(`活动广场首张缩略图冷加载${cold.visibleMs}ms，超过1000ms`);
-    if (cold.columnCount !== '2') throw new Error(`活动广场不是双列瀑布流：column-count=${cold.columnCount}`);
-    if (!cold.hasBack || !cold.hasLatest || !cold.hasHot || !cold.hasSearch) throw new Error('顶部返回、最新发布、热门排行或搜索入口缺失');
+    if (cold.visibleMs > 1000) {
+      throw new Error(`活动广场首张缩略图冷加载${cold.visibleMs}ms，超过1000ms`);
+    }
+    if (cold.columnCount !== '2') {
+      throw new Error(`活动广场不是双列瀑布流：column-count=${cold.columnCount}`);
+    }
+    if (!cold.hasBack || !cold.hasLatest || !cold.hasHot || !cold.hasSearch) {
+      throw new Error('顶部返回、最新发布、热门排行或搜索入口缺失');
+    }
     if (cold.hasMonthSelector || cold.hasMonthlySort || cold.hasOldBanner || cold.hasMonthlyRanking) {
       throw new Error('旧大横幅、月份选择或月度排行仍存在');
     }
 
-    const upload = await client.evaluate(`(async () => {
+    const upload = await client.evaluate(`(async function () {
       const sourceResponse = await fetch('/api/public-images/${SOURCE_IMAGE_ID}?variant=display&v=plaza-mobile-acceptance');
       if (!sourceResponse.ok) throw new Error('验收源图片加载失败：' + sourceResponse.status);
       const sourceBlob = await sourceResponse.blob();
-      const sourceFile = new File([sourceBlob], 'plaza-mobile-acceptance.webp', { type: sourceBlob.type || 'image/webp' });
+      const sourceFile = new File([sourceBlob], 'plaza-mobile-acceptance.webp', {
+        type: sourceBlob.type || 'image/webp'
+      });
       const prepared = await prepareImageVariantsMeasured(sourceFile);
       const events = [];
       const originalFetch = window.fetch.bind(window);
-      window.fetch = async (input, init = {}) => {
+      window.fetch = async function (input, init) {
+        init = init || {};
         const rawUrl = typeof input === 'string' ? input : input.url;
-        const method = String(init.method || input?.method || 'GET').toUpperCase();
+        const inputMethod = input && input.method ? input.method : '';
+        const method = String(init.method || inputMethod || 'GET').toUpperCase();
         const parsed = new URL(rawUrl, location.href);
-        const kind = method === 'POST' && parsed.pathname === '/api/media/upload-intents'
-          ? 'intent'
-          : method === 'POST' && /\/api\/media\/upload-intents\/[^/]+\/confirm$/.test(parsed.pathname)
-            ? 'confirm'
-            : method === 'PUT' ? 'put' : '';
+        let kind = '';
+        if (method === 'POST' && parsed.pathname === '/api/media/upload-intents') kind = 'intent';
+        else if (method === 'POST'
+          && parsed.pathname.startsWith('/api/media/upload-intents/')
+          && parsed.pathname.endsWith('/confirm')) kind = 'confirm';
+        else if (method === 'PUT') kind = 'put';
         const startedAt = performance.now();
-        if (kind) events.push({ kind, phase: 'start', at: startedAt, body: typeof init.body === 'string' ? init.body : '' });
+        if (kind) {
+          events.push({
+            kind,
+            phase: 'start',
+            at: startedAt,
+            body: typeof init.body === 'string' ? init.body : ''
+          });
+        }
         try {
           const response = await originalFetch(input, init);
           if (kind) events.push({ kind, phase: 'end', at: performance.now(), status: response.status });
           return response;
         } catch (error) {
-          if (kind) events.push({ kind, phase: 'end', at: performance.now(), error: String(error?.message || error) });
+          const message = error && error.message ? error.message : String(error);
+          if (kind) events.push({ kind, phase: 'end', at: performance.now(), error: message });
           throw error;
         }
       };
@@ -288,19 +343,29 @@ const runAcceptance = async (baseUrl) => {
         const pair = await uploadPreparedImagePair(prepared, {
           taskId: '${TASK_ID}',
           businessType: 'task',
-          onStage: () => {}
+          onStage: function () {}
         }, new AbortController().signal);
-        const starts = (kind) => events.filter((event) => event.kind === kind && event.phase === 'start');
-        const ends = (kind) => events.filter((event) => event.kind === kind && event.phase === 'end');
-        const overlapped = (kind) => {
+        const starts = function (kind) {
+          return events.filter(function (event) {
+            return event.kind === kind && event.phase === 'start';
+          });
+        };
+        const ends = function (kind) {
+          return events.filter(function (event) {
+            return event.kind === kind && event.phase === 'end';
+          });
+        };
+        const overlapped = function (kind) {
           const kindStarts = starts(kind);
           const kindEnds = ends(kind);
-          return kindStarts.length === 2 && kindEnds.length === 2
-            && Math.max(...kindStarts.map((event) => event.at)) < Math.min(...kindEnds.map((event) => event.at));
+          if (kindStarts.length !== 2 || kindEnds.length !== 2) return false;
+          return Math.max.apply(null, kindStarts.map(function (event) { return event.at; }))
+            < Math.min.apply(null, kindEnds.map(function (event) { return event.at; }));
         };
-        const thumbConfirm = starts('confirm')
-          .map((event) => { try { return JSON.parse(event.body || '{}'); } catch { return {}; } })
-          .find((body) => body.parentMediaId);
+        const confirmBodies = starts('confirm').map(function (event) {
+          try { return JSON.parse(event.body || '{}'); } catch { return {}; }
+        });
+        const thumbConfirm = confirmBodies.find(function (body) { return Boolean(body.parentMediaId); });
         return {
           displayMediaId: pair.display.mediaId,
           thumbMediaId: pair.thumb.mediaId,
@@ -310,7 +375,7 @@ const runAcceptance = async (baseUrl) => {
           putStarts: starts('put').length,
           intentsOverlapped: overlapped('intent'),
           putsOverlapped: overlapped('put'),
-          thumbParentMediaId: thumbConfirm?.parentMediaId || '',
+          thumbParentMediaId: thumbConfirm ? thumbConfirm.parentMediaId : '',
           events
         };
       } finally {
@@ -327,31 +392,45 @@ const runAcceptance = async (baseUrl) => {
     ];
     const searchResults = [];
     for (const term of searchTerms) {
-      await client.evaluate(`(() => {
+      await client.evaluate(`(function () {
         const toggle = document.querySelector('#togglePlazaSearch');
         const panel = document.querySelector('#plazaSearchPanel');
-        if (panel?.hidden) toggle?.click();
+        if (panel && panel.hidden && toggle) toggle.click();
         const input = document.querySelector('#plazaSearchInput');
         input.value = ${JSON.stringify(term)};
         document.querySelector('#plazaSearchForm').requestSubmit();
       })()`);
-      const result = await waitFor(client, `(() => {
+      const result = await waitFor(client, `(function () {
         const input = document.querySelector('#plazaSearchInput');
         const cards = document.querySelectorAll('[data-post]');
-        return input?.value === ${JSON.stringify(term)} && cards.length > 0
-          ? { term: input.value, cards: cards.length, text: document.body.innerText.slice(0, 500) }
-          : null;
+        if (!input || input.value !== ${JSON.stringify(term)} || cards.length < 1) return null;
+        return { term: input.value, cards: cards.length };
       })()`, 15_000, `搜索：${term}`);
       searchResults.push({ term, cards: result.cards });
     }
 
-    await client.evaluate(`document.querySelector('[data-sort="hot"]')?.click()`);
-    await waitFor(client, `document.querySelector('[data-sort="hot"]')?.classList.contains('active')`, 15_000, '热门排行切换');
-    await client.evaluate(`document.querySelector('[data-sort="latest"]')?.click()`);
-    await waitFor(client, `document.querySelector('[data-sort="latest"]')?.classList.contains('active')`, 15_000, '最新发布切换');
+    await client.evaluate(`document.querySelector('[data-sort="hot"]').click()`);
+    await waitFor(
+      client,
+      `document.querySelector('[data-sort="hot"]') && document.querySelector('[data-sort="hot"]').classList.contains('active')`,
+      15_000,
+      '热门排行切换'
+    );
+    await client.evaluate(`document.querySelector('[data-sort="latest"]').click()`);
+    await waitFor(
+      client,
+      `document.querySelector('[data-sort="latest"]') && document.querySelector('[data-sort="latest"]').classList.contains('active')`,
+      15_000,
+      '最新发布切换'
+    );
 
-    await client.evaluate(`document.querySelector('#backHome')?.click()`);
-    await waitFor(client, `Boolean(document.querySelector('#plaza') && document.body.dataset.view === 'student')`, 15_000, '返回首页');
+    await client.evaluate(`document.querySelector('#backHome').click()`);
+    await waitFor(
+      client,
+      `Boolean(document.querySelector('#plaza') && document.body.dataset.view === 'student')`,
+      15_000,
+      '返回首页'
+    );
 
     return {
       baseUrl,
@@ -361,13 +440,9 @@ const runAcceptance = async (baseUrl) => {
       cold,
       upload,
       searchResults,
-      navigation: {
-        back: true,
-        latest: true,
-        hot: true,
-        search: true
-      },
-      removedLegacyElements: true
+      navigation: { back: true, latest: true, hot: true, search: true },
+      removedLegacyElements: true,
+      accepted: true
     };
   } finally {
     await browser.close();
@@ -387,7 +462,7 @@ runAcceptance(options.baseUrl)
       commit: process.env.GITHUB_SHA || '',
       runId: process.env.GITHUB_RUN_ID || '',
       generatedAt: new Date().toISOString(),
-      error: String(error?.stack || error)
+      error: String(error && error.stack ? error.stack : error)
     };
     await mkdir(path.dirname(REPORT_PATH), { recursive: true }).catch(() => {});
     await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, 'utf8').catch(() => {});
