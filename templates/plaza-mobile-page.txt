@@ -118,7 +118,9 @@ async function plaza(sort = 'latest', page = 1, month = '', query = '') {
       try {
         const result = await api(path);
         writeViewCache(plazaViewCache, cacheKey, result);
-        if (!isCurrentNavigation(pageEpoch) || document.body.dataset.view !== 'plaza') return;
+        if (!isCurrentNavigation(pageEpoch)
+            || document.body.dataset.view !== 'plaza'
+            || document.querySelector('.plaza-detail')) return;
         renderPlazaPage(result, safeSort, page, '', pageEpoch, { preserveScroll: true, query: safeQuery });
       } catch {
         if (!isCurrentNavigation(pageEpoch)) return;
