@@ -10,10 +10,13 @@ const styleTemplatePath = path.resolve('templates/plaza-mobile-style.css');
 const routeTemplatePath = path.resolve('templates/plaza-route-search.txt');
 const marker = '/* PLAZA_MOBILE_LAYOUT_V1 */';
 
-const replaceRegexOnce = (source, pattern, replacement, label) => {
-  const match = source.match(pattern);
-  if (!match) throw new Error(`${label}未找到，已停止以避免误改`);
-  return source.replace(pattern, replacement);
+const replaceBetween = (source, startAnchor, endAnchor, replacement, label) => {
+  const start = source.indexOf(startAnchor);
+  const end = source.indexOf(endAnchor, start + startAnchor.length);
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`${label}锚点未找到，已停止以避免误改（start=${start}, end=${end}）`);
+  }
+  return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
 };
 
 const [pageTemplate, styleTemplate, routeTemplate] = await Promise.all([
@@ -24,10 +27,11 @@ const [pageTemplate, styleTemplate, routeTemplate] = await Promise.all([
 
 let app = await readFile(appPath, 'utf8');
 if (!app.includes(marker)) {
-  app = replaceRegexOnce(
+  app = replaceBetween(
     app,
-    /const renderPlazaPage = [\s\S]*?\r?\nfunction rankingTable/,
-    `${pageTemplate.trimEnd()}\n\nfunction rankingTable`,
+    'const renderPlazaPage',
+    'function rankingTable',
+    `${pageTemplate.trimEnd()}\n\n`,
     '活动广场页面函数'
   );
   await writeFile(appPath, app, 'utf8');
@@ -41,10 +45,11 @@ if (!style.includes(marker)) {
 
 let plazaRoute = await readFile(plazaRoutePath, 'utf8');
 if (!plazaRoute.includes(marker)) {
-  plazaRoute = replaceRegexOnce(
+  plazaRoute = replaceBetween(
     plazaRoute,
-    /  if \(route === '\/api\/plaza' && request\.method === 'GET'\) \{[\s\S]*?\r?\n  \}\r?\n\r?\n  const detailMatch/,
-    `${routeTemplate.trimEnd()}\n\n  const detailMatch`,
+    "  if (route === '/api/plaza' && request.method === 'GET') {",
+    '  const detailMatch',
+    `${routeTemplate.trimEnd()}\n\n`,
     '活动广场查询路由'
   );
   await writeFile(plazaRoutePath, plazaRoute, 'utf8');
