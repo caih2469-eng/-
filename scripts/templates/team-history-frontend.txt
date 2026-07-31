@@ -1,0 +1,79 @@
+function openTeamCheckinHistory() {
+  const root = document.querySelector('#modalRoot');
+  if (!root) return;
+  let page = 1;
+  let loading = false;
+  root.innerHTML = `<div class="drawer-backdrop" id="teamHistoryDrawerBackdrop">
+    <section class="bottom-drawer history-drawer" role="dialog" aria-modal="true" aria-labelledby="teamHistoryDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-sticky-header row">
+        <div><small class="muted">队伍记录</small><h2 id="teamHistoryDrawerTitle">队伍累计打卡</h2></div>
+        <button class="secondary right" id="closeTeamHistoryDrawer">关闭</button>
+      </div>
+      <div id="teamHistoryList"><p class="muted">正在读取队伍打卡记录…</p></div>
+      <button class="secondary full-width" id="moreTeamHistory" hidden>加载更多</button>
+    </section>
+  </div>`;
+  const list = root.querySelector('#teamHistoryList');
+  const more = root.querySelector('#moreTeamHistory');
+  const close = () => { root.innerHTML = ''; };
+  root.querySelector('#closeTeamHistoryDrawer').onclick = close;
+  root.querySelector('#teamHistoryDrawerBackdrop').onclick = (event) => {
+    if (event.target.id === 'teamHistoryDrawerBackdrop') close();
+  };
+
+  const renderRecord = (record) => {
+    const images = (record.images || []).map((media, index) => {
+      const thumbUrl = media.thumbUrl || media.imageUrl || media.displayUrl || '';
+      const displayUrl = media.displayUrl || thumbUrl;
+      return `<button class="image-viewer-trigger" data-image-viewer="${escapeHtml(thumbUrl)}"
+        data-image-thumb="${escapeHtml(thumbUrl)}" data-image-display="${escapeHtml(displayUrl)}"
+        data-image-alt="${escapeHtml(record.taskName || '队伍打卡')}图片">
+        <span class="image-shell"><img data-perf-image="history-thumb" data-priority="${index ? 'low' : 'high'}"
+          data-src="${escapeHtml(thumbUrl)}" loading="${index ? 'lazy' : 'eager'}" width="720" height="540"
+          fetchpriority="${index ? 'low' : 'high'}" decoding="async" alt="${escapeHtml(record.taskName || '队伍打卡')}图片"
+          onload="this.parentElement.classList.add('loaded')"
+          onerror="this.hidden=true;this.parentElement.classList.add('failed')">
+          <span class="image-error">图片加载失败，点击重试</span></span></button>`;
+    }).join('');
+    const members = (record.teamProgress?.members || []).map((member) =>
+      `<span class="${member.checked ? 'checked-member' : ''}">${escapeHtml(member.name)} ${member.checked ? '✓' : '未完成'}</span>`
+    ).join('');
+    return `<article class="history-checkin-card">
+      <div class="row"><div><strong>${escapeHtml(record.taskName || '队伍打卡')}</strong><small>${escapeHtml(record.date || '')}</small></div>
+        <span class="pill done">已提交</span></div>
+      <p class="muted">${escapeHtml(formatDate(record.submittedAt))}</p>
+      <div class="team-progress compact"><div class="row"><strong>成员完成情况</strong><span class="right">${Number(record.teamProgress?.completed || 0)}/${Number(record.teamProgress?.total || 0)}</span></div>
+        <div class="member-list compact">${members || '<span>暂无成员数据</span>'}</div></div>
+      ${images ? `<div class="drawer-photo-grid compact">${images}</div>` : ''}
+      ${record.copy ? `<p>${escapeHtml(record.copy)}</p>` : ''}
+    </article>`;
+  };
+
+  const load = async () => {
+    if (loading) return;
+    loading = true;
+    more.disabled = true;
+    try {
+      const result = await api(`/api/team-checkins/history?page=${page}&limit=20`);
+      if (page === 1) list.innerHTML = '';
+      list.insertAdjacentHTML('beforeend', (result.records || []).map(renderRecord).join(''));
+      if (!(result.records || []).length && page === 1) list.innerHTML = '<p class="muted">暂无队伍打卡记录</p>';
+      const loaded = Math.min(Number(result.total || 0), page * Number(result.limit || 20));
+      prepareDynamicContent(list);
+      more.hidden = loaded >= Number(result.total || 0);
+      more.textContent = `加载更多（${loaded}/${Number(result.total || 0)}）`;
+      page += 1;
+    } catch (error) {
+      if (page === 1) list.innerHTML = `<p class="bad">${escapeHtml(error.message)}</p>`;
+      more.hidden = false;
+      more.textContent = '读取失败，点击重试';
+    } finally {
+      loading = false;
+      more.disabled = false;
+    }
+  };
+  more.onclick = load;
+  void load();
+}
+
