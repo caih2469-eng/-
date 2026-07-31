@@ -62,7 +62,7 @@ if (!app.includes(marker)) {
 
   app = replaceRegexOnce(
     app,
-    /      const sourceFile = await normalizeSourceImage\(item\.file\);[\s\S]*?      item\.mediaId = uploaded\.mediaId;/,
+    /      item\.compressed = await compressMemberCheckinImage\(sourceFile,[\s\S]*?      item\.mediaId = [^;]+;/,
     memberFlowTemplate,
     '个人打卡高清图与缩略图上传流程'
   );
