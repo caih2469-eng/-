@@ -10,15 +10,30 @@ const styleTemplatePath = path.resolve('templates/plaza-mobile-style.css');
 const routeTemplatePath = path.resolve('templates/plaza-route-search.txt');
 const marker = '/* PLAZA_MOBILE_LAYOUT_V1 */';
 
-const replaceBetween = (source, startAnchor, endAnchors, replacement, label) => {
+const replaceBetween = (source, startAnchor, endAnchor, replacement, label) => {
   const start = source.indexOf(startAnchor);
-  const candidates = (Array.isArray(endAnchors) ? endAnchors : [endAnchors])
-    .map((anchor) => ({ anchor, index: source.indexOf(anchor, start + startAnchor.length) }))
+  const end = source.indexOf(endAnchor, start + startAnchor.length);
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error(`${label}锚点未找到，已停止以避免误改（start=${start}, end=${end}）`);
+  }
+  return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
+};
+
+const findTopLevelDeclaration = (source, fromIndex) => {
+  const pattern = /^(?:async\s+function|function|const|let|class)\s+[A-Za-z_$][\w$]*/gm;
+  pattern.lastIndex = Math.max(0, fromIndex);
+  return pattern.exec(source)?.index ?? -1;
+};
+
+const replaceTopLevelDeclaration = (source, startAnchors, replacement, label) => {
+  const candidates = (Array.isArray(startAnchors) ? startAnchors : [startAnchors])
+    .map((anchor) => ({ anchor, index: source.indexOf(anchor) }))
     .filter((entry) => entry.index >= 0)
     .sort((a, b) => a.index - b.index);
-  const end = candidates[0]?.index ?? -1;
+  const start = candidates[0]?.index ?? -1;
+  const end = start >= 0 ? findTopLevelDeclaration(source, start + 1) : -1;
   if (start < 0 || end < 0 || end <= start) {
-    throw new Error(`${label}锚点未找到，已停止以避免误改（start=${start}, ends=${JSON.stringify(candidates)}）`);
+    throw new Error(`${label}顶层边界未找到，已停止以避免误改（start=${start}, end=${end}）`);
   }
   return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
 };
@@ -28,15 +43,24 @@ const [pageTemplate, styleTemplate, routeTemplate] = await Promise.all([
   readFile(styleTemplatePath, 'utf8'),
   readFile(routeTemplatePath, 'utf8')
 ]);
+const plazaTemplateStart = pageTemplate.indexOf('\nasync function plaza');
+if (plazaTemplateStart < 0) throw new Error('活动广场模板缺少plaza函数');
+const renderTemplate = pageTemplate.slice(0, plazaTemplateStart).trimEnd();
+const plazaTemplate = pageTemplate.slice(plazaTemplateStart + 1).trimEnd();
 
 let app = await readFile(appPath, 'utf8');
 if (!app.includes(marker)) {
-  app = replaceBetween(
+  app = replaceTopLevelDeclaration(
     app,
     'const renderPlazaPage',
-    ['function rankingTable', 'const rankingTable', 'const renderRankingsPage'],
-    `${pageTemplate.trimEnd()}\n\n`,
-    '活动广场页面函数'
+    `${renderTemplate}\n\n`,
+    '活动广场渲染函数'
+  );
+  app = replaceTopLevelDeclaration(
+    app,
+    ['async function plaza', 'const plaza = async'],
+    `${plazaTemplate}\n\n`,
+    '活动广场加载函数'
   );
   await writeFile(appPath, app, 'utf8');
 }
