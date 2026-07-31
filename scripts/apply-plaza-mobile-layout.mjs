@@ -4,6 +4,7 @@ import path from 'node:path';
 const appPath = path.resolve('public/app.js');
 const stylePath = path.resolve('public/style.css');
 const plazaRoutePath = path.resolve('cloudflare/routes/plaza.js');
+const memberTestPath = path.resolve('test/member-checkin-fast.test.js');
 const pageTemplatePath = path.resolve('templates/plaza-mobile-page.txt');
 const styleTemplatePath = path.resolve('templates/plaza-mobile-style.css');
 const routeTemplatePath = path.resolve('templates/plaza-route-search.txt');
@@ -49,10 +50,35 @@ if (!plazaRoute.includes(marker)) {
   await writeFile(plazaRoutePath, plazaRoute, 'utf8');
 }
 
-if (!(await readFile(appPath, 'utf8')).includes(marker)
-    || !(await readFile(stylePath, 'utf8')).includes(marker)
-    || !(await readFile(plazaRoutePath, 'utf8')).includes(marker)) {
-  throw new Error('活动广场移动端布局生成不完整');
+let memberTest = await readFile(memberTestPath, 'utf8');
+const pairedUploadTest = String.raw`test('单人打卡使用Pica生成2048px高清图与960px列表图', () => {
+  const app = fs.readFileSync('public/app.js', 'utf8');
+  const memberBody = app.match(
+    /function memberCheckinForm\(task\) \{([\s\S]*?)\r?\n\}\r?\n\r?\nfunction materialSubmissionForm/
+  )?.[1] || '';
+  assert.match(memberBody, /prepareImageVariantsMeasured\(sourceFile/);
+  assert.match(memberBody, /uploadPreparedImagePair\(prepared/);
+  assert.match(memberBody, /businessType:\s*'member-checkin'/);
+  assert.match(memberBody, /item\.mediaId = pair\.display\.mediaId/);
+  assert.match(memberBody, /item\.thumbMediaId = pair\.thumb\.mediaId/);
+  assert.doesNotMatch(memberBody, /uploadCompressedImage\(prepared\.(?:display|thumb)/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /Promise\.all\(\[\s*requestVariantUploadIntent\(prepared\.display/);
+  assert.match(app, /const displayPut = putVariantToR2/);
+  assert.match(app, /const thumbPut = putVariantToR2/);
+});`;
+const memberPattern = /test\('单人打卡使用Pica生成2048px高清图与960px列表图',[\s\S]*?\n\}\);/;
+if (memberPattern.test(memberTest)) {
+  memberTest = memberTest.replace(memberPattern, pairedUploadTest);
+  await writeFile(memberTestPath, memberTest, 'utf8');
 }
 
-process.stdout.write('Applied mobile plaza layout, search and masonry feed.\n');
+if (!(await readFile(appPath, 'utf8')).includes(marker)
+    || !(await readFile(stylePath, 'utf8')).includes(marker)
+    || !(await readFile(plazaRoutePath, 'utf8')).includes(marker)
+    || !(await readFile(memberTestPath, 'utf8')).includes('uploadPreparedImagePair')) {
+  throw new Error('活动广场移动端布局或并行上传测试生成不完整');
+}
+
+process.stdout.write('Applied mobile plaza layout, search, masonry feed and paired upload assertions.\n');
