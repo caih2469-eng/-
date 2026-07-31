@@ -5,11 +5,14 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
   document.body.dataset.view = 'plaza';
   const preservedScroll = options.preserveScroll ? window.scrollY : 0;
   const query = String(options.query ?? result.query ?? '').trim();
-  const cards = result.posts.map((post) => `
+  const cards = result.posts.map((post, cardIndex) => `
     <article class="plaza-card" data-post="${post.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(post.teamName)}的活动内容">
       <div class="image-shell plaza-card-cover">
         ${post.images[0]
-          ? `<img loading="lazy" decoding="async" fetchpriority="low" width="480" height="360"
+          ? `<img loading="${cardIndex === 0 ? 'eager' : 'lazy'}" decoding="async"
+              fetchpriority="${cardIndex === 0 ? 'high' : 'low'}"
+              data-priority="${cardIndex === 0 ? 'high' : 'low'}"
+              data-perf-image="plaza-thumb" width="480" height="360"
               data-src="${escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}"
               alt="${escapeHtml(post.teamName)}活动图片"
               onload="this.parentElement.style.aspectRatio=this.naturalWidth+'/'+this.naturalHeight;this.parentElement.classList.add('loaded')"
