@@ -46,7 +46,8 @@ jobs:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
-      (github.event_name == 'pull_request' && github.head_ref == 'fix/approved-layout-team-draft-720')
+      (github.event_name == 'pull_request' && github.head_ref == 'fix/approved-layout-team-draft-720') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'perf/pica-image-pipeline')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 30
