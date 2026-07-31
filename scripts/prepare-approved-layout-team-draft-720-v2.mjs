@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const file = path.resolve('scripts/apply-approved-layout-team-draft-720-v2.mjs');
 const adminMarker = '/* PREPARED_ADMIN_POST_GRID_MATCH_V3 */';
-const historyMarker = '/* PREPARED_TEAM_HISTORY_ANCHOR_V1 */';
+const historyMarker = '/* PREPARED_TEAM_HISTORY_ANCHOR_V2 */';
 let source = fs.readFileSync(file, 'utf8');
 
 if (!source.includes(adminMarker)) {
@@ -28,10 +28,11 @@ if (!source.includes(historyMarker)) {
   const label = "'队伍历史接口位置'";
   const labelIndex = source.indexOf(label);
   if (labelIndex < 0) throw new Error('未找到队伍历史接口补丁标签');
-  const start = source.lastIndexOf('    next = replaceOnce(', labelIndex);
-  const closeStart = source.indexOf('    );', labelIndex);
-  if (start < 0 || closeStart < 0) throw new Error('无法定位队伍历史接口补丁边界');
-  const end = closeStart + '    );'.length;
+  const lineStart = source.lastIndexOf('\n', labelIndex) + 1;
+  const rawLineEnd = source.indexOf('\n', labelIndex);
+  const lineEnd = rawLineEnd < 0 ? source.length : rawLineEnd;
+  const originalLine = source.slice(lineStart, lineEnd);
+  if (!originalLine.includes('replaceOnce')) throw new Error('队伍历史接口补丁不是预期的单行调用');
   const replacement = [
     `    ${historyMarker}`,
     '    next = replaceOnce(',
@@ -41,7 +42,7 @@ if (!source.includes(historyMarker)) {
     "      '队伍历史接口位置'",
     '    );'
   ].join('\n');
-  source = source.slice(0, start) + replacement + source.slice(end);
+  source = source.slice(0, lineStart) + replacement + source.slice(lineEnd);
 }
 
 fs.writeFileSync(file, source, 'utf8');
