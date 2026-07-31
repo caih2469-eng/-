@@ -1,0 +1,31 @@
+      const sourceFile = await normalizeSourceImage(item.file);
+      if (current !== session) return;
+      const prepared = await prepareImageVariantsMeasured(sourceFile, {
+        signal: current.controller.signal,
+        onProgress: (progress) => {
+          if (current !== session) return;
+          const percent = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+          status.textContent = `第 ${index + 1}/${current.items.length} 张：正在生成高清图和列表图 ${percent}%`;
+        }
+      });
+      if (current !== session) return;
+      status.textContent = `第 ${index + 1}/${current.items.length} 张：正在上传高清图…`;
+      item.uploadPromise = uploadCompressedImage(prepared.display, {
+        taskId: task.id,
+        businessType: 'member-checkin',
+        variant: 'display'
+      }, current.controller.signal);
+      updateReadyState();
+      const display = await item.uploadPromise;
+      if (current !== session) return;
+      status.textContent = `第 ${index + 1}/${current.items.length} 张：正在上传列表图…`;
+      const thumb = await uploadCompressedImage(prepared.thumb, {
+        taskId: task.id,
+        businessType: 'member-checkin',
+        variant: 'thumb',
+        parentMediaId: display.mediaId
+      }, current.controller.signal);
+      if (current !== session) return;
+      item.compressed = prepared.display;
+      item.mediaId = display.mediaId;
+      item.thumbMediaId = thumb.mediaId;
