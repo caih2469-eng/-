@@ -26,7 +26,7 @@ let app = await readFile(appPath, 'utf8');
 if (!app.includes(marker)) {
   app = replaceRegexOnce(
     app,
-    /const renderPlazaPage = \(result, sort, page, month, pageEpoch, options = \{\}\) => \{[\s\S]*?\n\}\n\nfunction rankingTable/,
+    /const renderPlazaPage = [\s\S]*?\r?\nfunction rankingTable/,
     `${pageTemplate.trimEnd()}\n\nfunction rankingTable`,
     '活动广场页面函数'
   );
@@ -43,7 +43,7 @@ let plazaRoute = await readFile(plazaRoutePath, 'utf8');
 if (!plazaRoute.includes(marker)) {
   plazaRoute = replaceRegexOnce(
     plazaRoute,
-    /  if \(route === '\/api\/plaza' && request\.method === 'GET'\) \{[\s\S]*?\n  \}\n\n  const detailMatch/,
+    /  if \(route === '\/api\/plaza' && request\.method === 'GET'\) \{[\s\S]*?\r?\n  \}\r?\n\r?\n  const detailMatch/,
     `${routeTemplate.trimEnd()}\n\n  const detailMatch`,
     '活动广场查询路由'
   );
@@ -68,7 +68,7 @@ const pairedUploadTest = String.raw`test('单人打卡使用Pica生成2048px高�
   assert.match(app, /const displayPut = putVariantToR2/);
   assert.match(app, /const thumbPut = putVariantToR2/);
 });`;
-const memberPattern = /test\('单人打卡使用Pica生成2048px高清图与960px列表图',[\s\S]*?\n\}\);/;
+const memberPattern = /test\('单人打卡使用Pica生成2048px高清图与960px列表图',[\s\S]*?\r?\n\}\);/;
 if (memberPattern.test(memberTest)) {
   memberTest = memberTest.replace(memberPattern, pairedUploadTest);
   await writeFile(memberTestPath, memberTest, 'utf8');
