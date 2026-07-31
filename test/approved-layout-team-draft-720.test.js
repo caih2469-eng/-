@@ -50,7 +50,7 @@ test('队伍草稿可继续编辑并删除广场二次文案字段', () => {
 test('管理端打卡设置紧凑且帖子固定六列', () => {
   const app = read('public/app.js');
   const style = read('public/style.css');
-  assert.match(app, /class="admin-post-grid"/);
+  assert.match(app, /class="[^"]*\badmin-post-grid\b[^"]*"/);
   assert.match(style, /\.admin-post-grid[\s\S]*grid-template-columns:\s*repeat\(6,minmax\(0,1fr\)\)/);
   assert.match(style, /checkin-settings-form input\[type="checkbox"\][\s\S]*width:\s*18px/);
   assert.match(style, /weekday-options[\s\S]*repeat\(7,minmax\(0,1fr\)\)/);
