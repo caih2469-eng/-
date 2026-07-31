@@ -10,11 +10,15 @@ const styleTemplatePath = path.resolve('templates/plaza-mobile-style.css');
 const routeTemplatePath = path.resolve('templates/plaza-route-search.txt');
 const marker = '/* PLAZA_MOBILE_LAYOUT_V1 */';
 
-const replaceBetween = (source, startAnchor, endAnchor, replacement, label) => {
+const replaceBetween = (source, startAnchor, endAnchors, replacement, label) => {
   const start = source.indexOf(startAnchor);
-  const end = source.indexOf(endAnchor, start + startAnchor.length);
+  const candidates = (Array.isArray(endAnchors) ? endAnchors : [endAnchors])
+    .map((anchor) => ({ anchor, index: source.indexOf(anchor, start + startAnchor.length) }))
+    .filter((entry) => entry.index >= 0)
+    .sort((a, b) => a.index - b.index);
+  const end = candidates[0]?.index ?? -1;
   if (start < 0 || end < 0 || end <= start) {
-    throw new Error(`${label}锚点未找到，已停止以避免误改（start=${start}, end=${end}）`);
+    throw new Error(`${label}锚点未找到，已停止以避免误改（start=${start}, ends=${JSON.stringify(candidates)}）`);
   }
   return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
 };
@@ -30,7 +34,7 @@ if (!app.includes(marker)) {
   app = replaceBetween(
     app,
     'const renderPlazaPage',
-    'function rankingTable',
+    ['function rankingTable', 'const rankingTable', 'const renderRankingsPage'],
     `${pageTemplate.trimEnd()}\n\n`,
     '活动广场页面函数'
   );
