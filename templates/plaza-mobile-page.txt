@@ -19,6 +19,19 @@ const rebalancePlazaColumns = () => {
   grid.dataset.rebalancing = 'false';
 };
 
+const applyPlazaCoverRatio = (image) => {
+  const shell = image?.closest?.('.plaza-card-cover');
+  if (!shell) return;
+  const naturalRatio = Number(image.naturalWidth) / Number(image.naturalHeight);
+  const feedRatio = Number.isFinite(naturalRatio) && naturalRatio > 0
+    ? Math.min(4 / 3, Math.max(3 / 4, naturalRatio))
+    : 4 / 3;
+  shell.style.aspectRatio = String(feedRatio);
+  shell.dataset.feedRatio = feedRatio.toFixed(3);
+  shell.classList.add('loaded');
+  requestAnimationFrame(rebalancePlazaColumns);
+};
+
 const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => {
   const renderStartedAt = performance.now();
   if (!isCurrentNavigation(pageEpoch)) return;
@@ -35,7 +48,7 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
               data-perf-image="plaza-thumb" width="480" height="360"
               data-src="${escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}"
               alt="活动图片"
-              onload="this.parentElement.style.aspectRatio=this.naturalWidth+'/'+this.naturalHeight;this.parentElement.classList.add('loaded');requestAnimationFrame(rebalancePlazaColumns)"
+              onload="applyPlazaCoverRatio(this)"
               onerror="this.hidden=true;this.parentElement.classList.add('failed');requestAnimationFrame(rebalancePlazaColumns)">`
           : '<span class="image-fallback">暂无图片</span>'}
         <span class="image-error">图片加载失败</span>
@@ -46,7 +59,10 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
         <div class="plaza-card-meta">
           <span class="plaza-avatar" aria-hidden="true">${escapeHtml((post.publisherName || '同').slice(-1))}</span>
           <span class="plaza-publisher">${escapeHtml(post.publisherName || '匿名发布者')}</span>
-          <span class="plaza-like" aria-label="点赞${post.likeCount}">♡ ${post.likeCount}</span>
+          <span class="plaza-like" aria-label="点赞${post.likeCount}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.7a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.5 1-1a5.5 5.5 0 0 0 0-7.8Z"/></svg>
+            <span>${post.likeCount}</span>
+          </span>
         </div>
       </div>
     </article>`);
