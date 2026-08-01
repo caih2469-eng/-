@@ -122,6 +122,6 @@ const replaceOnce = (input, search, replacement, label) => {
   }
 }
 
-await import('./apply-track-admin-settings.mjs');
+await import('./apply-track-admin-settings-compat.mjs');
 
 console.log('Applied bootstrap, student-home plaza prefetch and track-aware admin settings.');
