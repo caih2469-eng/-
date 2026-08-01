@@ -19,9 +19,24 @@ test('阶段G：入口、主应用与样式统一使用最终版本化资源', (
   assert.ok(references.length >= 5);
   assert.deepEqual([...new Set(references)], [expectedVersion]);
   assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: no-cache, no-store, must-revalidate/s);
-  assert.match(headerSource, /\/app\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
-  assert.match(headerSource, /\/style\.css\s+Cache-Control: public, max-age=31536000, immutable/s);
-  assert.match(headerSource, /\/vendor\/\*\s+Cache-Control: public, max-age=31536000, immutable/s);
+  for (const asset of [
+    '/site-path.js',
+    '/app.js',
+    '/style.css',
+    '/admin-dashboard-refactor.css',
+    '/plaza-auto-masonry.js',
+    '/plaza-comment-mode.js',
+    '/vendor/*',
+    '/entrance.js'
+  ]) {
+    const escaped = asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(
+      headerSource,
+      new RegExp(`${escaped}\\s+Cache-Control: no-cache, max-age=0, must-revalidate`, 's'),
+      `${asset} 应在每次进入时向服务器确认最新版本`
+    );
+  }
+  assert.doesNotMatch(headerSource, /Cache-Control: public, max-age=31536000, immutable/);
 });
 
 test('阶段G：性能指标只在调试模式记录且不包含凭据或图片内容', () => {
