@@ -33,6 +33,7 @@ try {
 
 const originalPath = path.resolve('scripts/browser-approved-preview-original.mjs');
 let originalSource = await readFile(originalPath, 'utf8');
+let originalChanged = false;
 const originalCleanup = [
   'await rm(userDataDir, { recursive: true, force:',
   ' true });'
@@ -41,8 +42,27 @@ const resilientCleanup = 'await rm(userDataDir, { recursive: true, force: true, 
 if (!originalSource.includes(resilientCleanup)) {
   if (!originalSource.includes(originalCleanup)) throw new Error('未找到原浏览器验收临时目录清理语句');
   originalSource = originalSource.replace(originalCleanup, resilientCleanup);
-  await writeFile(originalPath, originalSource, 'utf8');
+  originalChanged = true;
 }
+
+const originalDetailOpen = [
+  "    await client.evaluate(`document.querySelector('[data-post]')?.click()`);",
+  "    await waitFor(client, `Boolean(document.querySelector('.plaza-detail .image-viewer-trigger'))`, 15_000, '活动详情');"
+].join('\n');
+const resilientDetailOpen = [
+  '    let detailOpened = false;',
+  '    for (let attempt = 0; attempt < 4 && !detailOpened; attempt += 1) {',
+  "      await client.evaluate(`document.querySelector('[data-post]')?.click()`);",
+  "      detailOpened = await waitFor(client, `Boolean(document.querySelector('.plaza-detail .image-viewer-trigger'))`, 5_000, '活动详情').then(() => true).catch(() => false);",
+  '    }',
+  "    if (!detailOpened) throw new Error('活动详情多次打开失败');"
+].join('\n');
+if (!originalSource.includes('let detailOpened = false;')) {
+  if (!originalSource.includes(originalDetailOpen)) throw new Error('未找到原浏览器验收活动详情打开片段');
+  originalSource = originalSource.replace(originalDetailOpen, resilientDetailOpen);
+  originalChanged = true;
+}
+if (originalChanged) await writeFile(originalPath, originalSource, 'utf8');
 
 /* Workflow compatibility anchors. The deployment binder replaces these comment contents before syntax checking.
   const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);
