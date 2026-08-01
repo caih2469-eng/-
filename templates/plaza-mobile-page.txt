@@ -1,4 +1,183 @@
 /* PLAZA_MOBILE_LAYOUT_V1 */
+const PLAZA_LAYOUT_TUNER_KEY = 'plazaLayoutTunerV1';
+const PLAZA_LAYOUT_TUNER_FIELDS = [
+  { key: 'sidePadding', label: '页面左右边距', css: '--plaza-side-padding', min: 0, max: 20, step: 1, unit: 'px', defaultValue: 5 },
+  { key: 'columnGap', label: '两列间距', css: '--plaza-column-gap', min: 0, max: 20, step: 1, unit: 'px', defaultValue: 5 },
+  { key: 'cardGap', label: '卡片底部间距', css: '--plaza-card-gap', min: 0, max: 30, step: 1, unit: 'px', defaultValue: 10 },
+  { key: 'navHeight', label: '顶部导航高度', css: '--plaza-nav-height', min: 42, max: 64, step: 1, unit: 'px', defaultValue: 50 },
+  { key: 'tabFontSize', label: '未选中项字号', css: '--plaza-tab-font-size', min: 12, max: 20, step: 1, unit: 'px', defaultValue: 16 },
+  { key: 'activeTabFontSize', label: '选中项字号', css: '--plaza-active-tab-font-size', min: 13, max: 22, step: 1, unit: 'px', defaultValue: 17 },
+  { key: 'underlineWidth', label: '下划线宽度', css: '--plaza-underline-width', min: 10, max: 44, step: 1, unit: 'px', defaultValue: 22 },
+  { key: 'underlineHeight', label: '下划线高度', css: '--plaza-underline-height', min: 1, max: 6, step: 1, unit: 'px', defaultValue: 3 },
+  { key: 'imageRadius', label: '图片圆角', css: '--plaza-image-radius', min: 0, max: 18, step: 1, unit: 'px', defaultValue: 6 },
+  { key: 'coverMinRatio', label: '图片最小宽高比', css: '--plaza-cover-min-ratio', min: 0.55, max: 1, step: 0.01, unit: '', defaultValue: 0.75 },
+  { key: 'coverMaxRatio', label: '图片最大宽高比', css: '--plaza-cover-max-ratio', min: 1, max: 1.8, step: 0.01, unit: '', defaultValue: 1.33 },
+  { key: 'titleFontSize', label: '文案字号', css: '--plaza-title-font-size', min: 11, max: 22, step: 1, unit: 'px', defaultValue: 15 },
+  { key: 'titleLineHeight', label: '文案行高', css: '--plaza-title-line-height', min: 15, max: 32, step: 1, unit: 'px', defaultValue: 21 },
+  { key: 'titleWeight', label: '文案字重', css: '--plaza-title-weight', min: 400, max: 700, step: 100, unit: '', defaultValue: 500 },
+  { key: 'titlePadding', label: '文字左右内边距', css: '--plaza-title-padding', min: 0, max: 18, step: 1, unit: 'px', defaultValue: 10 },
+  { key: 'titleTopGap', label: '文案顶部间距', css: '--plaza-title-top-gap', min: 0, max: 18, step: 1, unit: 'px', defaultValue: 8 },
+  { key: 'authorHeight', label: '作者区域高度', css: '--plaza-author-height', min: 24, max: 48, step: 1, unit: 'px', defaultValue: 34 },
+  { key: 'avatarSize', label: '头像尺寸', css: '--plaza-avatar-size', min: 14, max: 30, step: 1, unit: 'px', defaultValue: 20 },
+  { key: 'authorFontSize', label: '作者与数字字号', css: '--plaza-author-font-size', min: 9, max: 16, step: 1, unit: 'px', defaultValue: 12 },
+  { key: 'likeIconSize', label: '点赞图标尺寸', css: '--plaza-like-icon-size', min: 12, max: 28, step: 1, unit: 'px', defaultValue: 18 }
+];
+
+const plazaLayoutTunerEnabled = () => {
+  try {
+    return new URLSearchParams(location.search).get('layoutDebug') === '1';
+  } catch {
+    return false;
+  }
+};
+
+const defaultPlazaLayoutConfig = () => Object.fromEntries(
+  PLAZA_LAYOUT_TUNER_FIELDS.map((field) => [field.key, field.defaultValue])
+);
+
+const normalizePlazaLayoutConfig = (candidate = {}) => Object.fromEntries(
+  PLAZA_LAYOUT_TUNER_FIELDS.map((field) => {
+    const parsed = Number(candidate[field.key]);
+    const value = Number.isFinite(parsed) ? parsed : field.defaultValue;
+    const clamped = Math.min(field.max, Math.max(field.min, value));
+    const decimals = String(field.step).includes('.') ? String(field.step).split('.')[1].length : 0;
+    return [field.key, Number(clamped.toFixed(decimals))];
+  })
+);
+
+const loadPlazaLayoutConfig = () => {
+  try {
+    return normalizePlazaLayoutConfig(JSON.parse(localStorage.getItem(PLAZA_LAYOUT_TUNER_KEY) || '{}'));
+  } catch {
+    return defaultPlazaLayoutConfig();
+  }
+};
+
+const clearPlazaLayoutTunerStyles = () => {
+  PLAZA_LAYOUT_TUNER_FIELDS.forEach((field) => document.body.style.removeProperty(field.css));
+};
+
+const readPlazaLayoutNumber = (cssName, fallback) => {
+  const value = Number.parseFloat(getComputedStyle(document.body).getPropertyValue(cssName));
+  return Number.isFinite(value) ? value : fallback;
+};
+
+const applyPlazaLayoutConfig = (candidate, options = {}) => {
+  const config = normalizePlazaLayoutConfig(candidate);
+  PLAZA_LAYOUT_TUNER_FIELDS.forEach((field) => {
+    document.body.style.setProperty(field.css, `${config[field.key]}${field.unit}`);
+  });
+  if (options.persist) {
+    try { localStorage.setItem(PLAZA_LAYOUT_TUNER_KEY, JSON.stringify(config)); } catch {}
+  }
+  requestAnimationFrame(() => {
+    document.querySelectorAll('.plaza-card-cover img').forEach((image) => {
+      if (image.complete && image.naturalWidth) applyPlazaCoverRatio(image);
+    });
+    rebalancePlazaColumns();
+  });
+  return config;
+};
+
+const copyPlazaLayoutConfig = async (config) => {
+  const payload = JSON.stringify({ version: 1, mode: 'plaza-layout', values: normalizePlazaLayoutConfig(config) }, null, 2);
+  try {
+    await navigator.clipboard.writeText(payload);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = payload;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.append(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  }
+  if (typeof showToast === 'function') showToast('布局参数已复制');
+};
+
+const installPlazaLayoutTuner = () => {
+  const existingButton = document.querySelector('.plaza-layout-tuner-button');
+  const existingPanel = document.querySelector('.plaza-layout-tuner');
+  if (!plazaLayoutTunerEnabled()) {
+    clearPlazaLayoutTunerStyles();
+    existingButton?.remove();
+    existingPanel?.remove();
+    return;
+  }
+
+  let currentConfig = applyPlazaLayoutConfig(loadPlazaLayoutConfig());
+  if (existingButton && existingPanel) return;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'plaza-layout-tuner-button';
+  button.textContent = '调布局';
+  button.setAttribute('aria-controls', 'plazaLayoutTuner');
+  button.setAttribute('aria-expanded', 'false');
+
+  const panel = document.createElement('section');
+  panel.id = 'plazaLayoutTuner';
+  panel.className = 'plaza-layout-tuner';
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="plaza-layout-tuner-header">
+      <div><strong>活动广场布局调试</strong><br><span>只影响当前浏览器，不会直接改正式样式</span></div>
+      <button class="plaza-layout-tuner-close" type="button" aria-label="关闭布局面板">×</button>
+    </div>
+    <div class="plaza-layout-tuner-grid">
+      ${PLAZA_LAYOUT_TUNER_FIELDS.map((field) => `
+        <div class="plaza-layout-control">
+          <label for="plazaLayout_${field.key}">${field.label}</label>
+          <input id="plazaLayout_${field.key}" type="range" min="${field.min}" max="${field.max}" step="${field.step}" value="${currentConfig[field.key]}" data-layout-key="${field.key}">
+          <output for="plazaLayout_${field.key}" data-layout-output="${field.key}">${currentConfig[field.key]}${field.unit}</output>
+        </div>`).join('')}
+    </div>
+    <div class="plaza-layout-tuner-actions">
+      <button type="button" class="secondary" data-layout-reset>恢复默认</button>
+      <button type="button" data-layout-copy>复制配置</button>
+      <button type="button" class="secondary" data-layout-exit>退出调试</button>
+    </div>`;
+
+  const syncControls = () => {
+    PLAZA_LAYOUT_TUNER_FIELDS.forEach((field) => {
+      const input = panel.querySelector(`[data-layout-key="${field.key}"]`);
+      const output = panel.querySelector(`[data-layout-output="${field.key}"]`);
+      if (input) input.value = String(currentConfig[field.key]);
+      if (output) output.textContent = `${currentConfig[field.key]}${field.unit}`;
+    });
+  };
+  const closePanel = () => {
+    panel.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+  };
+
+  button.onclick = () => {
+    panel.hidden = !panel.hidden;
+    button.setAttribute('aria-expanded', String(!panel.hidden));
+  };
+  panel.querySelector('.plaza-layout-tuner-close').onclick = closePanel;
+  panel.querySelectorAll('[data-layout-key]').forEach((input) => {
+    input.oninput = () => {
+      currentConfig = applyPlazaLayoutConfig({ ...currentConfig, [input.dataset.layoutKey]: Number(input.value) }, { persist: true });
+      syncControls();
+    };
+  });
+  panel.querySelector('[data-layout-reset]').onclick = () => {
+    try { localStorage.removeItem(PLAZA_LAYOUT_TUNER_KEY); } catch {}
+    currentConfig = applyPlazaLayoutConfig(defaultPlazaLayoutConfig());
+    syncControls();
+    if (typeof showToast === 'function') showToast('已恢复默认布局');
+  };
+  panel.querySelector('[data-layout-copy]').onclick = () => { void copyPlazaLayoutConfig(currentConfig); };
+  panel.querySelector('[data-layout-exit]').onclick = () => {
+    const url = new URL(location.href);
+    url.searchParams.delete('layoutDebug');
+    location.href = url.toString();
+  };
+  document.body.append(button, panel);
+};
+
 const rebalancePlazaColumns = () => {
   const grid = document.querySelector('.plaza-grid');
   const columns = [...(grid?.querySelectorAll('[data-plaza-column]') || [])];
@@ -23,9 +202,12 @@ const applyPlazaCoverRatio = (image) => {
   const shell = image?.closest?.('.plaza-card-cover');
   if (!shell) return;
   const naturalRatio = Number(image.naturalWidth) / Number(image.naturalHeight);
+  const defaultFeedRatio = Math.min(4 / 3, Math.max(3 / 4, naturalRatio));
+  const minRatio = readPlazaLayoutNumber('--plaza-cover-min-ratio', 3 / 4);
+  const maxRatio = Math.max(minRatio, readPlazaLayoutNumber('--plaza-cover-max-ratio', 4 / 3));
   const feedRatio = Number.isFinite(naturalRatio) && naturalRatio > 0
-    ? Math.min(4 / 3, Math.max(3 / 4, naturalRatio))
-    : 4 / 3;
+    ? Math.min(maxRatio, Math.max(minRatio, naturalRatio))
+    : Number.isFinite(defaultFeedRatio) ? defaultFeedRatio : 4 / 3;
   shell.style.aspectRatio = String(feedRatio);
   shell.dataset.feedRatio = feedRatio.toFixed(3);
   shell.classList.add('loaded');
@@ -99,6 +281,7 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
     <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>
     <div id="modalRoot"></div>`;
   prepareDynamicContent(app);
+  installPlazaLayoutTuner();
   requestAnimationFrame(rebalancePlazaColumns);
   recordPerf('page-render', {
     page: 'plaza',
