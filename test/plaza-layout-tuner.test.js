@@ -15,7 +15,11 @@ test('活动广场布局调试通过显式参数开启并跨登录保存在当�
   assert.match(bootstrap, /url\.searchParams\.get\('layoutDebug'\)/);
   assert.match(bootstrap, /localStorage\.setItem\('plazaLayoutDebugEnabled', '1'\)/);
   assert.match(bootstrap, /history\.replaceState/);
-  assert.match(bootstrap, /plaza-layout-card-tuner\.js\?v=20260730-flow2/);
+  const appVersion = bootstrap.match(/await loadScript\('\/app\.js\?v=([^']+)'\)/)?.[1];
+  const tunerVersion = bootstrap.match(/await loadScript\('\/plaza-layout-card-tuner\.js\?v=([^']+)'\)/)?.[1];
+  assert.ok(appVersion);
+  assert.ok(tunerVersion);
+  assert.equal(tunerVersion, appVersion);
   assert.doesNotMatch(page + bootstrap, /api\([^)]*layout|fetch\([^)]*layout|\/api\/.*layout/i);
 });
 
