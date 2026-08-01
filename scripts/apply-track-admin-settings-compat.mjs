@@ -14,6 +14,7 @@ if (restoreConfigured) {
 try {
   await import('./apply-track-admin-settings.mjs');
   await import('./apply-health-client-checkin.mjs');
+  await import('./apply-login-bootstrap-handoff.mjs');
 } finally {
   if (restoreConfigured) {
     runtime = fs.readFileSync(runtimePath, 'utf8');
@@ -31,4 +32,4 @@ try {
   }
 }
 
-console.log('Applied track-aware settings and health client check-in with generated-runtime compatibility.');
+console.log('Applied track-aware settings, stable health return and login bootstrap handoff.');
