@@ -17,16 +17,25 @@
   Cache-Control: no-cache, no-store, must-revalidate
 
 /site-path.js
-  Cache-Control: public, max-age=3600
+  Cache-Control: no-cache, max-age=0, must-revalidate
 
 /app.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, max-age=0, must-revalidate
 
 /style.css
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, max-age=0, must-revalidate
+
+/admin-dashboard-refactor.css
+  Cache-Control: no-cache, max-age=0, must-revalidate
+
+/plaza-auto-masonry.js
+  Cache-Control: no-cache, max-age=0, must-revalidate
+
+/plaza-comment-mode.js
+  Cache-Control: no-cache, max-age=0, must-revalidate
 
 /vendor/*
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, max-age=0, must-revalidate
 
 /entrance.js
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache, max-age=0, must-revalidate
