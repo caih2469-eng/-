@@ -5,6 +5,7 @@ const fs = require('node:fs');
 test('活动广场卡片只显示文案并采用独立双列最短列布局', () => {
   const page = fs.readFileSync('templates/plaza-mobile-page.txt', 'utf8');
   const style = fs.readFileSync('templates/plaza-mobile-style.css', 'utf8');
+  const gridBody = style.match(/\.plaza-grid\s*\{([^}]*)\}/)?.[1] || '';
 
   assert.match(page, /const rebalancePlazaColumns = \(\) =>/);
   assert.match(page, /data-plaza-column="0"/);
@@ -15,8 +16,10 @@ test('活动广场卡片只显示文案并采用独立双列最短列布局', ()
   assert.match(page, /requestAnimationFrame\(rebalancePlazaColumns\)/);
 
   assert.match(style, /body\[data-view="plaza"\] main\s*\{[\s\S]*padding:\s*0 5px 24px;/);
-  assert.match(style, /\.plaza-grid\s*\{[\s\S]*display:\s*flex;[\s\S]*gap:\s*5px;[\s\S]*margin:\s*0;/);
-  assert.doesNotMatch(style, /\.plaza-grid\s*\{[\s\S]*grid-template-columns/);
+  assert.match(gridBody, /display:\s*flex;/);
+  assert.match(gridBody, /gap:\s*5px;/);
+  assert.match(gridBody, /margin:\s*0;/);
+  assert.doesNotMatch(gridBody, /grid-template-columns/);
   assert.match(style, /\.plaza-column\s*\{[\s\S]*flex:\s*0 0 calc\(\(100vw - 15px\) \/ 2\);[\s\S]*width:\s*calc\(\(100vw - 15px\) \/ 2\);[\s\S]*gap:\s*10px;/);
   assert.match(style, /\.plaza-card\s*\{[\s\S]*border:\s*0;[\s\S]*background:\s*#fff;[\s\S]*box-shadow:\s*none;/);
   assert.match(style, /\.plaza-card-copy\s*\{[\s\S]*margin:\s*8px 0 0;[\s\S]*padding:\s*0 10px;[\s\S]*font-size:\s*15px;[\s\S]*line-height:\s*21px;[\s\S]*font-weight:\s*500;/);
