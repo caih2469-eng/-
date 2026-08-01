@@ -1,0 +1,106 @@
+async function refreshCompactCheckinSettings() {
+  const panel = document.querySelector('#adminPanel-checkin');
+  if (!panel || panel.hidden) return;
+  panel.innerHTML = '<div class="admin-panel-loading">正在读取打卡设置…</div>';
+  try {
+    const selectedTrack = ['health', 'interaction'].includes(sessionStorage.getItem('adminCheckinTrack'))
+      ? sessionStorage.getItem('adminCheckinTrack') : 'health';
+    const result = await api(`/api/admin/checkin-settings?track=${selectedTrack}`);
+    const settings = result.settings || {};
+    const weekdays = new Set((settings.weekdays || [1, 2, 3, 4, 5, 6, 7]).map(Number));
+    const defaultSlots = [
+      { id: 'breakfast', label: '早餐', start: '06:50', end: '10:00' },
+      { id: 'lunch', label: '午餐', start: '10:30', end: '14:00' },
+      { id: 'dinner', label: '晚餐', start: '16:30', end: '19:30' }
+    ];
+    const slots = selectedTrack === 'health'
+      ? defaultSlots.map((fallback) => ({
+          ...fallback,
+          ...(settings.slots || []).find((item) => item.id === fallback.id)
+        }))
+      : [];
+    const healthFields = selectedTrack === 'health' ? `
+      <div class="settings-grid">
+        <label>开始日期<input name="activeStartDate" type="date" value="${escapeHtml(settings.activeStartDate || '')}" required></label>
+        <label>结束日期<input name="activeEndDate" type="date" value="${escapeHtml(settings.activeEndDate || '')}" required></label>
+        <label>每餐照片数<input name="personalImageLimit" type="number" min="1" max="8" value="${Number(settings.personalImageLimit || 3)}" required></label>
+      </div>
+      <fieldset class="health-slot-settings"><legend>早餐、午餐、晚餐时段</legend>
+        <div class="health-slot-grid">${slots.map((slot) => `
+          <div class="health-slot-row" data-slot="${slot.id}">
+            <strong>${escapeHtml(slot.label)}</strong>
+            <label>开始<input name="${slot.id}Start" type="time" value="${escapeHtml(slot.start)}" required></label>
+            <label>结束<input name="${slot.id}End" type="time" value="${escapeHtml(slot.end)}" required></label>
+          </div>`).join('')}</div>
+      </fieldset>` : `
+      <div class="settings-grid">
+        <label>开始日期<input name="activeStartDate" type="date" value="${escapeHtml(settings.activeStartDate || '')}" required></label>
+        <label>结束日期<input name="activeEndDate" type="date" value="${escapeHtml(settings.activeEndDate || '')}" required></label>
+        <label>每日开始<input name="dailyStart" type="time" value="${escapeHtml(settings.dailyStart || '00:00')}" required></label>
+        <label>每日结束<input name="dailyEnd" type="time" value="${escapeHtml(settings.dailyEnd || '23:59')}" required></label>
+        <label>个人打卡照片数<input name="personalImageLimit" type="number" min="1" max="8" value="${Number(settings.personalImageLimit || 3)}" required></label>
+        <label>队伍汇总照片数<input name="teamImageLimit" type="number" min="1" max="8" value="${Number(settings.teamImageLimit || 3)}" required></label>
+      </div>`;
+    panel.innerHTML = `
+      <div class="checkin-track-tabs" role="tablist" aria-label="选择打卡赛道">
+        <button type="button" role="tab" class="secondary ${selectedTrack === 'health' ? 'active' : ''}" data-checkin-track="health" aria-selected="${selectedTrack === 'health'}">健康自律赛道</button>
+        <button type="button" role="tab" class="secondary ${selectedTrack === 'interaction' ? 'active' : ''}" data-checkin-track="interaction" aria-selected="${selectedTrack === 'interaction'}">四校区赛道</button>
+      </div>
+      <p class="muted checkin-track-note">${selectedTrack === 'health'
+        ? '设置健康自律赛道的活动日期、每餐照片数与三餐时段。'
+        : '设置四校区赛道的活动日期、每日时段及个人与队伍照片数。'}</p>
+      <form id="compactCheckinSettings" class="admin-compact-form checkin-settings-form" data-track="${selectedTrack}">
+        <label class="switch-line"><input name="enabled" type="checkbox" ${settings.enabled !== false ? 'checked' : ''}>开放${selectedTrack === 'health' ? '健康自律' : '四校区'}赛道打卡</label>
+        ${healthFields}
+        <fieldset><legend>允许打卡的星期</legend><div class="weekday-options">${[1,2,3,4,5,6,7].map((day) => `<label><input type="checkbox" name="weekdays" value="${day}" ${weekdays.has(day) ? 'checked' : ''}>周${day}</label>`).join('')}</div></fieldset>
+        <button>保存${selectedTrack === 'health' ? '健康自律' : '四校区'}赛道设置</button>
+      </form>`;
+    panel.querySelectorAll('[data-checkin-track]').forEach((button) => {
+      button.onclick = () => {
+        sessionStorage.setItem('adminCheckinTrack', button.dataset.checkinTrack);
+        refreshCompactCheckinSettings();
+      };
+    });
+    panel.querySelector('#compactCheckinSettings').onsubmit = async (event) => {
+      event.preventDefault();
+      const restore = beginButtonLoading(event.submitter, '保存中…');
+      const form = event.target;
+      const values = Object.fromEntries(new FormData(form));
+      const trackId = form.dataset.track;
+      const weekdays = [...form.querySelectorAll('[name=weekdays]:checked')].map((input) => Number(input.value));
+      const payload = {
+        trackId,
+        enabled: form.enabled.checked,
+        activeStartDate: values.activeStartDate,
+        activeEndDate: values.activeEndDate,
+        weekdays,
+        personalImageLimit: Number(values.personalImageLimit)
+      };
+      if (trackId === 'health') {
+        payload.slots = defaultSlots.map((slot) => ({
+          id: slot.id,
+          label: slot.label,
+          start: values[`${slot.id}Start`],
+          end: values[`${slot.id}End`]
+        }));
+      } else {
+        payload.dailyStart = values.dailyStart;
+        payload.dailyEnd = values.dailyEnd;
+        payload.teamImageLimit = Number(values.teamImageLimit);
+      }
+      try {
+        await api('/api/admin/checkin-settings', { method: 'PUT', body: JSON.stringify(payload) });
+        studentDashboardDirty = true;
+        studentViewState.dirty = true;
+        showToast(`${trackId === 'health' ? '健康自律' : '四校区'}赛道设置已保存`);
+        await refreshCompactCheckinSettings();
+      } catch (error) {
+        restore();
+        alert(error.message);
+      }
+    };
+  } catch (error) {
+    panel.innerHTML = `<div class="admin-inline-error"><p>${escapeHtml(error.message)}</p><button id="retryCheckinSettings">重新加载</button></div>`;
+    panel.querySelector('#retryCheckinSettings').onclick = refreshCompactCheckinSettings;
+  }
+}
