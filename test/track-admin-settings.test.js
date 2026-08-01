@@ -7,6 +7,7 @@ const read = (file) => fs.readFileSync(file, 'utf8');
 
 test('分赛道后台生成器与前端模板语法有效', () => {
   execFileSync(process.execPath, ['--check', 'scripts/apply-track-admin-settings.mjs']);
+  execFileSync(process.execPath, ['--check', 'scripts/apply-track-admin-settings-compat.mjs']);
   const frontend = read('templates/track-admin-settings-frontend.txt');
   assert.doesNotThrow(() => new Function(frontend));
 });
@@ -35,7 +36,9 @@ test('健康自律和四校区打卡设置分别保存且复用现有配置表',
   assert.doesNotMatch(generator, /CREATE TABLE|ALTER TABLE|DROP TABLE/);
 });
 
-test('正式和隔离构建都会调用分赛道生成器', () => {
+test('正式和隔离构建都会调用兼容包装后的分赛道生成器', () => {
   const hook = read('scripts/apply-approved-plaza-prefetch.mjs');
-  assert.match(hook, /await import\('\.\/apply-track-admin-settings\.mjs'\)/);
+  const compat = read('scripts/apply-track-admin-settings-compat.mjs');
+  assert.match(hook, /apply-track-admin-settings-compat\.mjs/);
+  assert.match(compat, /apply-track-admin-settings\.mjs/);
 });
