@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -29,6 +29,19 @@ try {
   if (result.status !== 0) throw new Error(`${result.stderr || ''}\n${result.stdout || ''}`.trim());
 } finally {
   await rm(workDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});
+}
+
+const originalPath = path.resolve('scripts/browser-approved-preview-original.mjs');
+let originalSource = await readFile(originalPath, 'utf8');
+const originalCleanup = [
+  'await rm(userDataDir, { recursive: true, force:',
+  ' true });'
+].join('');
+const resilientCleanup = 'await rm(userDataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {});';
+if (!originalSource.includes(resilientCleanup)) {
+  if (!originalSource.includes(originalCleanup)) throw new Error('未找到原浏览器验收临时目录清理语句');
+  originalSource = originalSource.replace(originalCleanup, resilientCleanup);
+  await writeFile(originalPath, originalSource, 'utf8');
 }
 
 /* Workflow compatibility anchors. The deployment binder replaces these comment contents before syntax checking.
