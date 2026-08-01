@@ -3,10 +3,12 @@
 ## Jamailar/Beav
 
 The activity-plaza masonry allocation and card-height measurement in
-`public/plaza-auto-masonry.js` are adapted from:
+`public/plaza-auto-masonry.js`, together with the comment snapshot presentation
+fields adapted in `public/plaza-comment-mode.js`, are based on:
 
 - Project: `Jamailar/Beav`
-- Source file: `desktop/src/pages/MediaLibrary.tsx`
+- Masonry source: `desktop/src/pages/MediaLibrary.tsx`
+- Comment source: `Plugin/src/background.js`
 - Repository: `https://github.com/Jamailar/Beav`
 - Use in this repository: non-commercial
 
