@@ -6,11 +6,12 @@ const read = (path) => fs.readFileSync(path, 'utf8');
 
 test('活动广场使用5px边距和独立双列瀑布流', () => {
   const css = read('templates/plaza-mobile-style.css');
+  const gridBody = css.match(/\.plaza-grid\s*\{([^}]*)\}/)?.[1] || '';
   assert.match(css, /padding:\s*0 5px 24px/);
   assert.match(css, /height:\s*50px/);
-  assert.match(css, /\.plaza-grid\s*\{[\s\S]*?display:\s*flex/);
-  assert.match(css, /\.plaza-grid\s*\{[\s\S]*?gap:\s*5px/);
-  assert.doesNotMatch(css, /\.plaza-grid\s*\{[\s\S]*?grid-template-columns/);
+  assert.match(gridBody, /display:\s*flex/);
+  assert.match(gridBody, /gap:\s*5px/);
+  assert.doesNotMatch(gridBody, /grid-template-columns/);
   assert.match(css, /\.plaza-column\s*\{[\s\S]*?calc\(\(100vw - 15px\) \/ 2\)/);
   assert.match(css, /\.plaza-column\s*\{[\s\S]*?gap:\s*10px/);
 });
