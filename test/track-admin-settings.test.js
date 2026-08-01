@@ -12,7 +12,7 @@ test('分赛道后台生成器与前端模板语法有效', () => {
   const frontend = read('templates/track-admin-settings-frontend.txt');
   const healthHome = read('templates/health-client-checkin-home.txt');
   assert.doesNotThrow(() => new Function(frontend));
-  assert.doesNotThrow(() => new Function(`async function renderHealthHome() {\n${healthHome}\n}`));
+  assert.doesNotThrow(() => new Function(healthHome));
 });
 
 test('用户列表按健康自律和四校区赛道独立筛选', () => {
@@ -44,16 +44,21 @@ test('健康自律客户端直接显示餐次打卡且沿用后台配置', () =>
   const homeTemplate = read('templates/health-client-checkin-home.txt');
   const compat = read('scripts/apply-track-admin-settings-compat.mjs');
   assert.match(compat, /apply-health-client-checkin\.mjs/);
-  assert.match(generator, /buildHealthCheckins/);
-  assert.match(generator, /healthCheckins/);
-  assert.match(generator, /healthSettings\.personalImageLimit/);
-  assert.match(generator, /data-health-slot/);
-  assert.match(generator, /patchStudentHealthCheckin/);
+  assert.match(generator, /public\/app\.js/);
+  assert.match(generator, /health-client-checkin-home\.txt/);
+  assert.match(generator, /HEALTH_CLIENT_CHECKIN_V1/);
+  assert.match(homeTemplate, /data-health-client-slot/);
+  assert.match(homeTemplate, /\/api\/checkins\?date=/);
+  assert.match(homeTemplate, /api\('\/api\/checkins'/);
+  assert.match(homeTemplate, /settings\.personalImageLimit/);
+  assert.match(homeTemplate, /settings\.activeStartDate/);
+  assert.match(homeTemplate, /settings\.weekdays/);
   assert.match(homeTemplate, /开始打卡/);
   assert.match(homeTemplate, /更新打卡/);
+  assert.match(homeTemplate, /MutationObserver/);
   assert.match(homeTemplate, /健康自律赛道当前未开放/);
   assert.match(homeTemplate, /今天不开放健康自律赛道打卡/);
-  assert.doesNotMatch(generator, /CREATE TABLE|ALTER TABLE|DROP TABLE/);
+  assert.doesNotMatch(generator + homeTemplate, /CREATE TABLE|ALTER TABLE|DROP TABLE/);
 });
 
 test('正式和隔离构建都会调用兼容包装后的分赛道生成器', () => {
