@@ -1,0 +1,141 @@
+/* PLAZA_MOBILE_LAYOUT_V1 */
+const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => {
+  const renderStartedAt = performance.now();
+  if (!isCurrentNavigation(pageEpoch)) return;
+  document.body.dataset.view = 'plaza';
+  const preservedScroll = options.preserveScroll ? window.scrollY : 0;
+  const query = String(options.query ?? result.query ?? '').trim();
+  const cards = result.posts.map((post, cardIndex) => `
+    <article class="plaza-card" data-post="${post.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(post.teamName)}的活动内容">
+      <div class="image-shell plaza-card-cover">
+        ${post.images[0]
+          ? `<img loading="${cardIndex === 0 ? 'eager' : 'lazy'}" decoding="async"
+              fetchpriority="${cardIndex === 0 ? 'high' : 'low'}"
+              data-priority="${cardIndex === 0 ? 'high' : 'low'}"
+              data-perf-image="plaza-thumb" width="480" height="360"
+              data-src="${escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}"
+              alt="${escapeHtml(post.teamName)}活动图片"
+              onload="this.parentElement.style.aspectRatio=this.naturalWidth+'/'+this.naturalHeight;this.parentElement.classList.add('loaded')"
+              onerror="this.hidden=true;this.parentElement.classList.add('failed')">`
+          : '<span class="image-fallback">暂无图片</span>'}
+        <span class="image-error">图片加载失败</span>
+      </div>
+      <div class="plaza-body">
+        <h2>${escapeHtml(post.teamName)}</h2>
+        <p class="plaza-card-copy">${escapeHtml(post.copy || post.taskName)}</p>
+        <div class="plaza-card-meta">
+          <span class="plaza-avatar" aria-hidden="true">${escapeHtml((post.publisherName || post.teamName || '同').slice(-1))}</span>
+          <span class="plaza-publisher">${escapeHtml(post.publisherName || post.teamName)}</span>
+          <span class="plaza-like" aria-label="点赞${post.likeCount}">♡ ${post.likeCount}</span>
+        </div>
+      </div>
+    </article>`).join('');
+  app.innerHTML = `
+    <header class="plaza-appbar">
+      <button class="plaza-icon-button" id="backHome" type="button" aria-label="返回首页">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <nav class="plaza-channel-tabs" aria-label="活动广场排序">
+        <button class="${sort === 'latest' ? 'active' : ''}" data-sort="latest" type="button">最新发布</button>
+        <button class="${sort === 'hot' ? 'active' : ''}" data-sort="hot" type="button">热门排行</button>
+      </nav>
+      <button class="plaza-icon-button" id="togglePlazaSearch" type="button" aria-label="搜索活动内容" aria-expanded="${query ? 'true' : 'false'}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      </button>
+    </header>
+    <section class="plaza-search-panel" id="plazaSearchPanel" ${query ? '' : 'hidden'}>
+      <form id="plazaSearchForm" role="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="plazaSearchInput" type="search" value="${escapeHtml(query)}" maxlength="40" autocomplete="off" placeholder="搜索队伍、任务、发布人或内容">
+        <button class="plaza-search-clear" id="clearPlazaSearch" type="button" ${query ? '' : 'hidden'} aria-label="清空搜索">×</button>
+      </form>
+    </section>
+    ${query ? `<p class="plaza-search-summary">“${escapeHtml(query)}”的搜索结果 · ${result.total}条</p>` : ''}
+    <section class="plaza-grid">${cards || `<div class="plaza-empty"><strong>${query ? '没有找到相关内容' : '当前没有公开内容'}</strong><span>${query ? '换一个关键词试试' : '公开提交后会显示在这里'}</span></div>`}</section>
+    <div class="plaza-pager" ${result.total > result.limit ? '' : 'hidden'}>
+      <button class="plaza-page-button" id="prevPage" type="button" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+      <span>${page} / ${Math.max(1, Math.ceil(result.total / result.limit))}</span>
+      <button class="plaza-page-button" id="nextPage" type="button" ${!result.hasMore ? 'disabled' : ''}>下一页</button>
+    </div>
+    <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>
+    <div id="modalRoot"></div>`;
+  prepareDynamicContent(app);
+  recordPerf('page-render', {
+    page: 'plaza',
+    duration: roundedDuration(renderStartedAt),
+    navigationEpoch: pageEpoch
+  });
+
+  const searchPanel = document.querySelector('#plazaSearchPanel');
+  const searchInput = document.querySelector('#plazaSearchInput');
+  const searchToggle = document.querySelector('#togglePlazaSearch');
+  document.querySelector('#backHome').onclick = home;
+  searchToggle.onclick = () => {
+    const opening = searchPanel.hidden;
+    searchPanel.hidden = !opening;
+    searchToggle.setAttribute('aria-expanded', String(opening));
+    if (opening) requestAnimationFrame(() => searchInput.focus());
+  };
+  document.querySelector('#plazaSearchForm').onsubmit = (event) => {
+    event.preventDefault();
+    plaza(sort, 1, '', searchInput.value);
+  };
+  document.querySelector('#clearPlazaSearch').onclick = () => {
+    if (query) plaza(sort, 1, '', '');
+    else {
+      searchInput.value = '';
+      searchInput.focus();
+    }
+  };
+  document.querySelectorAll('[data-sort]').forEach((button) => {
+    button.onclick = () => plaza(button.dataset.sort, 1, '', query);
+  });
+  document.querySelector('#prevPage').onclick = () => plaza(sort, page - 1, '', query);
+  document.querySelector('#nextPage').onclick = () => plaza(sort, page + 1, '', query);
+  document.querySelectorAll('[data-post]').forEach((card) => {
+    const open = () => openPlazaPost(card.dataset.post, sort, page, '');
+    card.onclick = open;
+    card.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    };
+  });
+  if (options.preserveScroll) requestAnimationFrame(() => window.scrollTo(0, preservedScroll));
+};
+
+async function plaza(sort = 'latest', page = 1, month = '', query = '') {
+  const pageEpoch = beginNavigation();
+  const safeSort = sort === 'hot' ? 'hot' : 'latest';
+  const safeQuery = String(query || '').trim().slice(0, 40);
+  const cacheKey = scopedCacheKey('plaza', safeSort, page, safeQuery);
+  const cached = readViewCache(plazaViewCache, cacheKey);
+  const path = `/api/plaza?sort=${safeSort}&page=${page}&limit=20${safeQuery ? `&q=${encodeURIComponent(safeQuery)}` : ''}`;
+  if (cached) {
+    renderPlazaPage(cached.data, safeSort, page, '', pageEpoch, { query: safeQuery });
+    const refresh = async () => {
+      try {
+        const result = await api(path);
+        writeViewCache(plazaViewCache, cacheKey, result);
+        if (!isCurrentNavigation(pageEpoch)
+            || document.body.dataset.view !== 'plaza'
+            || document.querySelector('.plaza-detail')) return;
+        renderPlazaPage(result, safeSort, page, '', pageEpoch, { preserveScroll: true, query: safeQuery });
+      } catch {
+        if (!isCurrentNavigation(pageEpoch)) return;
+        const status = document.querySelector('#viewCacheStatus');
+        if (status) {
+          status.hidden = false;
+          status.textContent = '当前显示的是已缓存内容，最新数据刷新失败。';
+        }
+      }
+    };
+    if (cacheIsFresh(cached)) queueMicrotask(() => { void refresh(); });
+    else void refresh();
+    return;
+  }
+  const result = await api(path);
+  writeViewCache(plazaViewCache, cacheKey, result);
+  renderPlazaPage(result, safeSort, page, '', pageEpoch, { query: safeQuery });
+}

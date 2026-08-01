@@ -7,23 +7,16 @@
         }
       });
       if (current !== session) return;
-      status.textContent = `第 ${index + 1}/${current.items.length} 张：正在上传高清图…`;
-      item.uploadPromise = uploadCompressedImage(prepared.display, {
+      item.uploadPromise = uploadPreparedImagePair(prepared, {
         taskId: task.id,
         businessType: 'member-checkin',
-        variant: 'display'
+        onStage: (stage) => {
+          if (current === session) status.textContent = `第 ${index + 1}/${current.items.length} 张：${stage}`;
+        }
       }, current.controller.signal);
       updateReadyState();
-      const display = await item.uploadPromise;
-      if (current !== session) return;
-      status.textContent = `第 ${index + 1}/${current.items.length} 张：正在上传列表图…`;
-      const thumb = await uploadCompressedImage(prepared.thumb, {
-        taskId: task.id,
-        businessType: 'member-checkin',
-        variant: 'thumb',
-        parentMediaId: display.mediaId
-      }, current.controller.signal);
+      const pair = await item.uploadPromise;
       if (current !== session) return;
       item.compressed = prepared.display;
-      item.mediaId = display.mediaId;
-      item.thumbMediaId = thumb.mediaId;
+      item.mediaId = pair.display.mediaId;
+      item.thumbMediaId = pair.thumb.mediaId;

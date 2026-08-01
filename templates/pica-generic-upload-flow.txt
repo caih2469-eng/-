@@ -7,20 +7,12 @@
         });
         session.partial[index] = { prepared };
       }
-      let display = session.partial[index]?.display;
-      if (!display) {
-        display = await uploadCompressedImage(prepared.display, {
+      let pair = session.partial[index]?.pair;
+      if (!pair) {
+        pair = await uploadPreparedImagePair(prepared, {
           ...context,
-          variant: 'display',
           onStage: (stage) => setStatus(`${position}：${stage}`)
         }, controller.signal);
-        session.partial[index] = { prepared, display };
+        session.partial[index] = { prepared, pair };
       }
-      setStatus(`${position}：正在上传列表图片…`);
-      const thumb = await uploadCompressedImage(prepared.thumb, {
-        ...context,
-        variant: 'thumb',
-        parentMediaId: display.mediaId,
-        onStage: (stage) => setStatus(`${position}：${stage}`)
-      }, controller.signal);
-      session.results[index] = { ...display, thumbMediaId: thumb.mediaId };
+      session.results[index] = { ...pair.display, thumbMediaId: pair.thumb.mediaId };
