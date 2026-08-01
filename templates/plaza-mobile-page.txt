@@ -1,12 +1,32 @@
 /* PLAZA_MOBILE_LAYOUT_V1 */
+const rebalancePlazaColumns = () => {
+  const grid = document.querySelector('.plaza-grid');
+  const columns = [...(grid?.querySelectorAll('[data-plaza-column]') || [])];
+  if (!grid || columns.length !== 2 || grid.dataset.rebalancing === 'true') return;
+  const cards = [...grid.querySelectorAll('.plaza-card')]
+    .sort((left, right) => Number(left.dataset.cardIndex || 0) - Number(right.dataset.cardIndex || 0));
+  if (!cards.length) return;
+  grid.dataset.rebalancing = 'true';
+  columns.forEach((column) => column.replaceChildren());
+  cards.forEach((card, index) => {
+    const target = index < 2
+      ? columns[index]
+      : columns[0].getBoundingClientRect().height <= columns[1].getBoundingClientRect().height
+        ? columns[0]
+        : columns[1];
+    target.append(card);
+  });
+  grid.dataset.rebalancing = 'false';
+};
+
 const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => {
   const renderStartedAt = performance.now();
   if (!isCurrentNavigation(pageEpoch)) return;
   document.body.dataset.view = 'plaza';
   const preservedScroll = options.preserveScroll ? window.scrollY : 0;
   const query = String(options.query ?? result.query ?? '').trim();
-  const cards = result.posts.map((post, cardIndex) => `
-    <article class="plaza-card" data-post="${post.id}" tabindex="0" role="button" aria-label="查看${escapeHtml(post.teamName)}的活动内容">
+  const cardMarkup = result.posts.map((post, cardIndex) => `
+    <article class="plaza-card" data-post="${post.id}" data-card-index="${cardIndex}" tabindex="0" role="button" aria-label="查看活动内容">
       <div class="image-shell plaza-card-cover">
         ${post.images[0]
           ? `<img loading="${cardIndex === 0 ? 'eager' : 'lazy'}" decoding="async"
@@ -14,22 +34,25 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
               data-priority="${cardIndex === 0 ? 'high' : 'low'}"
               data-perf-image="plaza-thumb" width="480" height="360"
               data-src="${escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}"
-              alt="${escapeHtml(post.teamName)}活动图片"
-              onload="this.parentElement.style.aspectRatio=this.naturalWidth+'/'+this.naturalHeight;this.parentElement.classList.add('loaded')"
-              onerror="this.hidden=true;this.parentElement.classList.add('failed')">`
+              alt="活动图片"
+              onload="this.parentElement.style.aspectRatio=this.naturalWidth+'/'+this.naturalHeight;this.parentElement.classList.add('loaded');requestAnimationFrame(rebalancePlazaColumns)"
+              onerror="this.hidden=true;this.parentElement.classList.add('failed');requestAnimationFrame(rebalancePlazaColumns)">`
           : '<span class="image-fallback">暂无图片</span>'}
         <span class="image-error">图片加载失败</span>
       </div>
       <div class="plaza-body">
         <h2>${escapeHtml(post.teamName)}</h2>
-        <p class="plaza-card-copy">${escapeHtml(post.copy || post.taskName)}</p>
+        <p class="plaza-card-copy">${escapeHtml(post.copy || '')}</p>
         <div class="plaza-card-meta">
-          <span class="plaza-avatar" aria-hidden="true">${escapeHtml((post.publisherName || post.teamName || '同').slice(-1))}</span>
-          <span class="plaza-publisher">${escapeHtml(post.publisherName || post.teamName)}</span>
+          <span class="plaza-avatar" aria-hidden="true">${escapeHtml((post.publisherName || '同').slice(-1))}</span>
+          <span class="plaza-publisher">${escapeHtml(post.publisherName || '匿名发布者')}</span>
           <span class="plaza-like" aria-label="点赞${post.likeCount}">♡ ${post.likeCount}</span>
         </div>
       </div>
-    </article>`).join('');
+    </article>`);
+  const cards = cardMarkup.length
+    ? `<div class="plaza-column" data-plaza-column="0">${cardMarkup.filter((_, index) => index % 2 === 0).join('')}</div><div class="plaza-column" data-plaza-column="1">${cardMarkup.filter((_, index) => index % 2 === 1).join('')}</div>`
+    : `<div class="plaza-empty"><strong>${query ? '没有找到相关内容' : '当前没有公开内容'}</strong><span>${query ? '换一个关键词试试' : '公开提交后会显示在这里'}</span></div>`;
   app.innerHTML = `
     <header class="plaza-appbar">
       <button class="plaza-icon-button" id="backHome" type="button" aria-label="返回首页">
@@ -51,7 +74,7 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
       </form>
     </section>
     ${query ? `<p class="plaza-search-summary">“${escapeHtml(query)}”的搜索结果 · ${result.total}条</p>` : ''}
-    <section class="plaza-grid">${cards || `<div class="plaza-empty"><strong>${query ? '没有找到相关内容' : '当前没有公开内容'}</strong><span>${query ? '换一个关键词试试' : '公开提交后会显示在这里'}</span></div>`}</section>
+    <section class="plaza-grid">${cards}</section>
     <div class="plaza-pager" ${result.total > result.limit ? '' : 'hidden'}>
       <button class="plaza-page-button" id="prevPage" type="button" ${page <= 1 ? 'disabled' : ''}>上一页</button>
       <span>${page} / ${Math.max(1, Math.ceil(result.total / result.limit))}</span>
@@ -60,6 +83,7 @@ const renderPlazaPage = (result, sort, page, month, pageEpoch, options = {}) => 
     <p class="view-cache-status muted" id="viewCacheStatus" hidden></p>
     <div id="modalRoot"></div>`;
   prepareDynamicContent(app);
+  requestAnimationFrame(rebalancePlazaColumns);
   recordPerf('page-render', {
     page: 'plaza',
     duration: roundedDuration(renderStartedAt),
