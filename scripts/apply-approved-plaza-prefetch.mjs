@@ -123,5 +123,6 @@ const replaceOnce = (input, search, replacement, label) => {
 }
 
 await import('./apply-track-admin-settings-compat.mjs');
+await import('./apply-build-asset-version.mjs');
 
-console.log('Applied bootstrap, student-home plaza prefetch and track-aware admin settings.');
+console.log('Applied bootstrap, student-home plaza prefetch, track-aware settings and commit-scoped asset versions.');
