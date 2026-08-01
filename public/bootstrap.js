@@ -1,20 +1,4 @@
 (() => {
-  const layoutDebugEnabled = (() => {
-    try {
-      const url = new URL(location.href);
-      const requested = url.searchParams.get('layoutDebug');
-      if (requested === '1') localStorage.setItem('plazaLayoutDebugEnabled', '1');
-      if (requested === '0') localStorage.removeItem('plazaLayoutDebugEnabled');
-      const enabled = localStorage.getItem('plazaLayoutDebugEnabled') === '1';
-      if (enabled && requested !== '1') {
-        url.searchParams.set('layoutDebug', '1');
-        history.replaceState(null, '', url.toString());
-      }
-      return enabled;
-    } catch {
-      return false;
-    }
-  })();
   const perfEnabled = (() => {
     try {
       return new URLSearchParams(location.search).get('debugPerf') === '1'
@@ -86,9 +70,6 @@
       await loadScript('/site-path.js?v=20260730-flow2');
       await loadScript('/app.js?v=20260730-flow2');
       await loadScript('/plaza-auto-masonry.js?v=20260730-flow2');
-      if (layoutDebugEnabled) {
-        await loadScript('/plaza-layout-card-tuner.js?v=20260730-flow2');
-      }
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
       });
