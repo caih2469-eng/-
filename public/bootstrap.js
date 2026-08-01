@@ -85,6 +85,7 @@
       loadStylesheet('/admin-dashboard-refactor.css?v=20260730-flow2');
       await loadScript('/site-path.js?v=20260730-flow2');
       await loadScript('/app.js?v=20260730-flow2');
+      await loadScript('/plaza-auto-masonry.js?v=20260730-flow2');
       if (layoutDebugEnabled) {
         await loadScript('/plaza-layout-card-tuner.js?v=20260730-flow2');
       }
