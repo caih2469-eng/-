@@ -99,4 +99,27 @@ ${marker}
 }
 
 await import('./apply-approved-plaza-prefetch.mjs');
+
+if (process.env.GITHUB_JOB === 'deploy-production') {
+  await import('./apply-pica-image-pipeline.mjs');
+  await import('./apply-plaza-mobile-layout.mjs');
+
+  const productionAssetVersion = '20260731-approved1-plaza1';
+  for (const relativePath of ['public/bootstrap.js', 'public/index.html', 'public/entrance.html']) {
+    const { file, source } = read(relativePath);
+    write(file, source.replaceAll('20260731-approved1', productionAssetVersion));
+  }
+
+  const app = read('public/app.js').source;
+  const style = read('public/style.css').source;
+  const plazaRoute = read('cloudflare/routes/plaza.js').source;
+  if (!app.includes('PICA_IMAGE_PIPELINE_V1') || !app.includes('PLAZA_MOBILE_LAYOUT_V1') || !app.includes('uploadPreparedImagePair')) {
+    throw new Error('正式构建缺少图片并行上传或活动广场移动布局代码');
+  }
+  if (!style.includes('PLAZA_MOBILE_LAYOUT_V1') || !plazaRoute.includes('PLAZA_MOBILE_LAYOUT_V1')) {
+    throw new Error('正式构建缺少活动广场样式或搜索路由');
+  }
+  console.log(`Prepared production plaza release with cache version ${productionAssetVersion}.`);
+}
+
 console.log('Installed real-device photo timing diagnostics behind debugPerf=1.');
