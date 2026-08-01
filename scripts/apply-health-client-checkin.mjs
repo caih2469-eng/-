@@ -32,14 +32,14 @@ const replaceSection = (source, startText, endText, replacement, label) => {
     );
     next = replaceOnce(
       next,
-      `  const [teamSummary, taskResult, materialTasks] = await Promise.all([\n    buildTeamSummary(env, user, config),\n    buildStudentTasks(env, user, { config, date }),\n    buildStudentMaterialTasks(env, user)\n  ]);`,
-      `  const [teamSummary, taskResult, materialTasks, healthCheckins] = await Promise.all([\n    buildTeamSummary(env, user, config),\n    buildStudentTasks(env, user, { config, date }),\n    buildStudentMaterialTasks(env, user),\n    buildHealthCheckins(env, user, date)\n  ]);`,
+      `  const [teamSummary, taskResult] = await Promise.all([\n    buildTeamSummary(env, user, config),\n    buildStudentTasks(env, user, { config, date })\n  ]);\n  const checkinStats = await buildCheckinStats(env, user, teamSummary);`,
+      `  const [teamSummary, taskResult, healthCheckins] = await Promise.all([\n    buildTeamSummary(env, user, config),\n    buildStudentTasks(env, user, { config, date }),\n    buildHealthCheckins(env, user, date)\n  ]);\n  const checkinStats = await buildCheckinStats(env, user, teamSummary);`,
       '学生首页健康打卡并行读取'
     );
     next = replaceOnce(
       next,
-      `    tasks: taskResult.tasks,\n    materialTasks,\n    switches: taskResult.switches`,
-      `    tasks: taskResult.tasks,\n    materialTasks,\n    healthCheckins,\n    switches: taskResult.switches`,
+      `    tasks: taskResult.tasks,\n    materialTasks: [],\n    checkinStats,\n    switches: taskResult.switches`,
+      `    tasks: taskResult.tasks,\n    materialTasks: [],\n    healthCheckins,\n    checkinStats,\n    switches: taskResult.switches`,
       '学生首页健康打卡返回值'
     );
     write(file, next);
