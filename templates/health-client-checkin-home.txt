@@ -67,6 +67,7 @@
         healthDataVersion += 1;
         studentViewState.dirty = true;
         returnToCachedStudentHome('个人打卡成功');
+        scheduleHealthClientRender();
       } catch (error) {
         restoreButton();
         alert(error.message);
@@ -168,11 +169,22 @@
       void renderHealthClientCheckin();
     });
   };
-  const healthObserver = new MutationObserver(scheduleHealthClientRender);
-  healthObserver.observe(app, { childList: true, subtree: true });
+
+  // MutationObserver is intentionally avoided: lifecycle hooks keep the app-wide DOM performance guard intact.
+  const originalHealthHome = home;
+  home = async function healthClientAwareHome(options = {}) {
+    const result = await originalHealthHome(options);
+    scheduleHealthClientRender();
+    return result;
+  };
+
+  const pendingHealthRefresh = studentViewState?.refreshPromise;
+  if (pendingHealthRefresh?.finally) pendingHealthRefresh.finally(scheduleHealthClientRender);
+  scheduleHealthClientRender();
+  setTimeout(scheduleHealthClientRender, 0);
   window.addEventListener('focus', scheduleHealthClientRender);
+  window.addEventListener('pageshow', scheduleHealthClientRender);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) scheduleHealthClientRender();
   });
-  scheduleHealthClientRender();
 })();
