@@ -2,8 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
+execFileSync(process.execPath, ['scripts/apply-build-asset-version.mjs'], {
+  cwd: root,
+  stdio: 'pipe'
+});
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 const indexSource = read('public', 'index.html');
 const entranceSource = read('public', 'entrance.html');
@@ -24,6 +29,7 @@ test('阶段G：入口资源按当前Git提交自动更新且保留同版本缓�
   assert.match(buildVersionSource, /GITHUB_SHA/);
   assert.match(buildVersionSource, /CF_PAGES_COMMIT_SHA/);
   assert.match(buildVersionSource, /BUILD_ASSET_VERSION_V1/);
+  assert.match(buildVersionSource, /beforeExit/);
   assert.match(buildVersionSource, /public\/index\.html/);
   assert.match(buildVersionSource, /public\/entrance\.html/);
   assert.match(buildVersionSource, /public\/bootstrap\.js/);
