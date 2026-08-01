@@ -7,13 +7,16 @@ const masonry = read('public/plaza-auto-masonry.js');
 const bootstrap = read('public/bootstrap.js');
 
 test('活动广场自动排版脚本与主资源使用同一缓存版本', () => {
-  assert.match(bootstrap, /await loadScript\('\/plaza-auto-masonry\.js\?v=20260730-flow2'\)/);
-  assert.match(bootstrap, /await loadScript\('\/app\.js\?v=20260730-flow2'\)/);
+  const appVersion = bootstrap.match(/await loadScript\('\/app\.js\?v=([^']+)'\)/)?.[1];
+  const masonryVersion = bootstrap.match(/await loadScript\('\/plaza-auto-masonry\.js\?v=([^']+)'\)/)?.[1];
+  assert.ok(appVersion);
+  assert.ok(masonryVersion);
+  assert.equal(masonryVersion, appVersion);
 });
 
 test('图片自动排版先估算高度再按真实高度二次校正', () => {
   assert.match(masonry, /estimateCardHeight/);
-  assert.match(masonry, /measuredHeights = new Map\(\)/);
+  assert.match(masonry, /measuredHeights:\s*new Map\(\)/);
   assert.match(masonry, /measureCard\(card, state\)/);
   assert.match(masonry, /const columnHeights = \[0, 0\]/);
   assert.match(masonry, /columnHeights\[1\] < columnHeights\[0\] \? 1 : 0/);
@@ -24,8 +27,8 @@ test('图片自动排版先估算高度再按真实高度二次校正', () => {
 test('图片加载和尺寸变化会自动重排并限制展示比例', () => {
   assert.match(masonry, /new ResizeObserver/);
   assert.match(masonry, /grid\.addEventListener\('load'/);
-  assert.match(masonry, /image\.naturalWidth/);
-  assert.match(masonry, /image\.naturalHeight/);
+  assert.match(masonry, /image\?\.naturalWidth/);
+  assert.match(masonry, /image\?\.naturalHeight/);
   assert.match(masonry, /--plaza-cover-min-ratio/);
   assert.match(masonry, /--plaza-cover-max-ratio/);
   assert.match(masonry, /object-fit', 'cover'/);
