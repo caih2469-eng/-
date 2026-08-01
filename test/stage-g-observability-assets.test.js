@@ -2,8 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
+execFileSync(process.execPath, ['scripts/apply-build-asset-version.mjs'], {
+  cwd: root,
+  stdio: 'pipe'
+});
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 const indexSource = read('public', 'index.html');
 const entranceSource = read('public', 'entrance.html');
@@ -11,13 +16,27 @@ const bootstrapSource = read('public', 'bootstrap.js');
 const appSource = read('public', 'app.js');
 const headerSource = read('public', '_headers');
 const workerSource = read('cloudflare', 'worker.js');
+const buildVersionSource = read('scripts', 'apply-build-asset-version.mjs');
+const plazaPrefetchSource = read('scripts', 'apply-approved-plaza-prefetch.mjs');
 
-test('阶段G：入口、主应用与样式统一使用最终版本化资源', () => {
-  const expectedVersion = '20260730-flow2';
+test('阶段G：入口资源按当前Git提交自动更新且保留同版本缓存', () => {
   const references = [indexSource, entranceSource, bootstrapSource]
-    .flatMap((source) => [...source.matchAll(/\?v=([a-zA-Z0-9-]+)/g)].map((match) => match[1]));
+    .flatMap((source) => [...source.matchAll(/\?v=([a-zA-Z0-9._-]+)/g)].map((match) => match[1]));
   assert.ok(references.length >= 5);
-  assert.deepEqual([...new Set(references)], [expectedVersion]);
+  const versions = [...new Set(references)];
+  assert.equal(versions.length, 1);
+  assert.match(versions[0], /^(?:[0-9a-f]{40}|20260731-approved1(?:-plaza1)?)$/);
+  assert.match(buildVersionSource, /GITHUB_SHA/);
+  assert.match(buildVersionSource, /CF_PAGES_COMMIT_SHA/);
+  assert.match(buildVersionSource, /BUILD_ASSET_VERSION_V1/);
+  assert.match(buildVersionSource, /beforeExit/);
+  assert.match(buildVersionSource, /public\/index\.html/);
+  assert.match(buildVersionSource, /public\/entrance\.html/);
+  assert.match(buildVersionSource, /public\/bootstrap\.js/);
+  assert.match(plazaPrefetchSource, /apply-build-asset-version\.mjs/);
+  assert.match(indexSource, /BUILD_ASSET_VERSION_V1/);
+  assert.match(entranceSource, /BUILD_ASSET_VERSION_V1/);
+  assert.match(bootstrapSource, /BUILD_ASSET_VERSION_V1/);
   assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: no-cache, no-store, must-revalidate/s);
   assert.match(headerSource, /\/app\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/style\.css\s+Cache-Control: public, max-age=31536000, immutable/s);
