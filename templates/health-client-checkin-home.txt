@@ -1,0 +1,58 @@
+  const mealNames = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐' };
+  const submissionNames = { draft: '草稿', submitted: '已提交', returned: '退回', approved: '通过' };
+  const healthStatusNames = { pending: '待审核', approved: '已通过', rejected: '未通过' };
+  const healthWeekday = new Date(`${dashboard.date}T12:00:00+08:00`).getUTCDay() || 7;
+  const healthTrackOpen = Boolean(
+    config.activityEnabled && config.trackEnabled?.health && healthSettings.enabled !== false
+  );
+  const healthDateOpen = (!healthSettings.activeStartDate || dashboard.date >= healthSettings.activeStartDate)
+    && (!healthSettings.activeEndDate || dashboard.date <= healthSettings.activeEndDate);
+  const healthWeekdayOpen = !Array.isArray(healthSettings.weekdays)
+    || !healthSettings.weekdays.length || healthSettings.weekdays.includes(healthWeekday);
+  const healthGlobalError = !healthTrackOpen
+    ? '健康自律赛道当前未开放'
+    : !healthDateOpen
+      ? '当前不在健康自律赛道活动日期内'
+      : !healthWeekdayOpen
+        ? '今天不开放健康自律赛道打卡'
+        : '';
+  const healthCards = healthSlots.map((slot) => {
+    const checkin = healthCheckins.find((item) => item.slotId === slot.id) || null;
+    const slotTimeError = dashboard.time < slot.start
+      ? `${slot.label}打卡将于 ${slot.start} 开始`
+      : dashboard.time > slot.end
+        ? `${slot.label}打卡已于 ${slot.end} 结束`
+        : '';
+    const availabilityError = healthGlobalError || slotTimeError;
+    return `
+      <article class="slot activity-task-card">
+        <span class="task-kicker">健康自律</span>
+        <div class="row"><h2>${escapeHtml(slot.label)}</h2><span class="pill ${checkin ? 'done' : 'pending'}">${checkin ? (healthStatusNames[checkin.status] || '已提交') : '未打卡'}</span></div>
+        <p class="task-requirement">今日 ${escapeHtml(slot.start)}–${escapeHtml(slot.end)} · 最多 ${healthSettings.personalImageLimit || 3} 张餐食图片</p>
+        ${checkin?.reviewNote ? `<p class="bad">审核意见：${escapeHtml(checkin.reviewNote)}</p>` : ''}
+        <button data-health-slot="${escapeHtml(slot.id)}" ${availabilityError ? 'disabled' : ''}>${checkin ? '更新打卡' : '开始打卡'}</button>
+        ${availabilityError ? `<p class="bad">${escapeHtml(availabilityError)}</p>` : ''}
+      </article>`;
+  }).join('');
+  const taskCards = taskResult.tasks.map((task) => `
+    <article class="slot activity-task-card">
+      <span class="task-kicker">团队活动</span>
+      <div class="row"><h2>${escapeHtml(task.name)}</h2><span class="pill ${task.submission?.status === 'approved' ? 'done' : 'pending'}">${submissionNames[task.submission?.status] || '未提交'}</span></div>
+      <p>${escapeHtml(task.description)}</p>
+      <p class="task-requirement">${task.scheduleType === 'activityDays' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 活动第 ${task.refreshDays.join('、')} 天自动刷新` : task.scheduleType === 'weekly' ? `${escapeHtml(task.occurrenceDate)} 当天 ${task.dailyStart}–${task.dailyEnd} · 周${task.weekdays.join('、周')}自动刷新` : `${formatDate(task.startAt)} 至 ${formatDate(task.endAt)}`} · 最多 ${task.imageLimit} 张图 · ${task.allowLate ? '允许补交' : '不允许补交'}</p>
+      ${task.copyRequirement ? `<div class="notice">文案要求：${escapeHtml(task.copyRequirement)}</div>` : ''}
+      ${task.submission?.reviewNote ? `<p class="bad">审核意见：${escapeHtml(task.submission.reviewNote)}</p>` : ''}
+      <div class="team-progress">
+        <div class="row"><strong>队伍个人打卡</strong><span class="right">${task.teamProgress?.completed || 0}/${task.teamProgress?.total || 0}</span></div>
+        <div class="member-list compact">${(task.teamProgress?.members || []).map((member) => `<span class="${member.checked ? 'checked-member' : ''}">${escapeHtml(member.name)} · ${escapeHtml(member.studentId)} ${member.checked ? '✓ 已打卡' : '未打卡'}</span>`).join('')}</div>
+      </div>
+      <button data-member-task="${task.id}" ${task.availabilityError ? 'disabled' : ''}>${task.memberCheckin ? '更新个人打卡' : '个人打卡'}</button>
+      ${task.isCaptain ? `<button class="secondary" data-task="${task.id}" ${task.availabilityError || ['submitted','approved'].includes(task.submission?.status) ? 'disabled' : ''}>${task.submission ? '继续编辑队伍作品' : '队长汇总提交'}</button>` : '<p class="muted">队伍作品由管理员指定的队长汇总提交。</p>'}
+      ${task.availabilityError ? `<p class="bad">${escapeHtml(task.availabilityError)}</p>` : ''}
+    </article>`).join('');
+  const todayCards = isInteraction ? taskCards : healthCards;
+  app.insertAdjacentHTML('beforeend', `
+    <section class="card" id="activityTasks"><div class="row"><h2>今日打卡</h2><span class="right muted">${isInteraction ? '个人打卡后由队长汇总' : `${healthCompleted}/${healthSlots.length} 餐已提交`}</span></div>
+      <div class="grid">${todayCards || `<p class="muted">${isInteraction ? '当前没有已发布任务' : '管理员尚未配置健康自律餐次'}</p>`}</div>
+    </section>
+    `);
