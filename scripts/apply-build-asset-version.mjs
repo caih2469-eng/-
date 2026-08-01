@@ -17,35 +17,52 @@ const targets = [
   { relativePath: 'public/bootstrap.js', type: 'javascript' }
 ];
 
-for (const target of targets) {
-  const file = path.join(root, target.relativePath);
-  if (!fs.existsSync(file)) throw new Error(`${target.relativePath}不存在`);
+const applyBuildAssetVersion = () => {
+  let changedFiles = 0;
 
-  const source = fs.readFileSync(file, 'utf8');
-  const references = [...source.matchAll(/\?v=([a-zA-Z0-9._-]+)/g)];
-  if (!references.length) {
-    throw new Error(`${target.relativePath}没有可更新的版本化资源地址`);
+  for (const target of targets) {
+    const file = path.join(root, target.relativePath);
+    if (!fs.existsSync(file)) throw new Error(`${target.relativePath}不存在`);
+
+    const source = fs.readFileSync(file, 'utf8');
+    const references = [...source.matchAll(/\?v=([a-zA-Z0-9._-]+)/g)];
+    if (!references.length) {
+      throw new Error(`${target.relativePath}没有可更新的版本化资源地址`);
+    }
+
+    let next = source.replace(
+      /\?v=[a-zA-Z0-9._-]+/g,
+      `?v=${buildVersion}`
+    );
+
+    if (!next.includes(marker)) {
+      const markerText = target.type === 'html'
+        ? `  <!-- ${marker} fallback=${fallbackVersion} -->\n`
+        : `/* ${marker} fallback=${fallbackVersion} */\n`;
+      next = target.type === 'html'
+        ? next.replace('</head>', `${markerText}</head>`)
+        : `${markerText}${next}`;
+    }
+
+    if (!next.includes(`?v=${buildVersion}`)) {
+      throw new Error(`${target.relativePath}资源版本写入失败`);
+    }
+
+    if (next !== source) {
+      fs.writeFileSync(file, next, 'utf8');
+      changedFiles += 1;
+    }
   }
 
-  let next = source.replace(
-    /\?v=[a-zA-Z0-9._-]+/g,
-    `?v=${buildVersion}`
-  );
-
-  if (!next.includes(marker)) {
-    const markerText = target.type === 'html'
-      ? `  <!-- ${marker} fallback=${fallbackVersion} -->\n`
-      : `/* ${marker} fallback=${fallbackVersion} */\n`;
-    next = target.type === 'html'
-      ? next.replace('</head>', `${markerText}</head>`)
-      : `${markerText}${next}`;
+  if (changedFiles) {
+    console.log(`Applied commit-scoped asset version ${buildVersion} to ${changedFiles} files.`);
   }
+};
 
-  if (!next.includes(`?v=${buildVersion}`)) {
-    throw new Error(`${target.relativePath}资源版本写入失败`);
-  }
+applyBuildAssetVersion();
 
-  if (next !== source) fs.writeFileSync(file, next, 'utf8');
+const hookKey = Symbol.for('jinshan20.buildAssetVersionBeforeExit');
+if (!globalThis[hookKey]) {
+  globalThis[hookKey] = true;
+  process.once('beforeExit', applyBuildAssetVersion);
 }
-
-console.log(`Applied commit-scoped asset version ${buildVersion}.`);
