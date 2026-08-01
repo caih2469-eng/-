@@ -86,7 +86,7 @@
       await loadScript('/site-path.js?v=20260730-flow2');
       await loadScript('/app.js?v=20260730-flow2');
       if (layoutDebugEnabled) {
-        await loadScript('/plaza-layout-card-tuner.js?v=20260801-card2');
+        await loadScript('/plaza-layout-card-tuner.js?v=20260730-flow2');
       }
       window.__RECORD_PERF__('bootstrap-complete', {
         duration: Math.round((performance.now() - bootstrapStarted) * 10) / 10
