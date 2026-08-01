@@ -171,6 +171,13 @@
   };
 
   // MutationObserver is intentionally avoided: lifecycle hooks keep the app-wide DOM performance guard intact.
+  const originalHealthStudent = student;
+  student = async function healthClientAwareStudent(...args) {
+    const result = await originalHealthStudent(...args);
+    scheduleHealthClientRender();
+    return result;
+  };
+
   const originalHealthHome = home;
   home = async function healthClientAwareHome(options = {}) {
     const result = await originalHealthHome(options);
