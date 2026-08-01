@@ -25,7 +25,11 @@ test('admin dashboard patch is idempotent and removes retired admin entry points
   assert.ok(start >= 0 && end > start);
   const compact = first.slice(start, end);
 
-  assert.match(compact, /全部赛道用户/);
+  assert.match(compact, /健康自律赛道/);
+  assert.match(compact, /四校区赛道/);
+  assert.match(compact, /data-track-filter="health"/);
+  assert.match(compact, /data-track-filter="interaction"/);
+  assert.match(compact, /track=\$\{adminDashboardState\.userTrack\}/);
   assert.match(compact, /队伍管理/);
   assert.match(compact, /用户管理/);
   assert.match(compact, /活动广场管理/);
