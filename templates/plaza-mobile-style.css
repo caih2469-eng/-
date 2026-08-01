@@ -5,26 +5,26 @@ body[data-view="plaza"] {
 body[data-view="plaza"] main {
   width: 100%;
   max-width: 720px;
-  padding: 0 10px 28px;
+  padding: 0 6px 24px;
 }
 .plaza-appbar {
   position: sticky;
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: 40px minmax(0,1fr) 40px;
+  grid-template-columns: 36px minmax(0,1fr) 36px;
   align-items: center;
-  min-height: 52px;
-  margin: 0 -10px;
-  padding: max(3px,env(safe-area-inset-top)) 10px 3px;
+  min-height: 48px;
+  margin: 0 -6px;
+  padding: max(1px,env(safe-area-inset-top)) 8px 1px;
   background: rgba(255,255,255,.97);
-  border-bottom: 1px solid rgba(20,24,32,.055);
+  border-bottom: 1px solid rgba(20,24,32,.05);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
 .plaza-icon-button {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -37,44 +37,45 @@ body[data-view="plaza"] main {
 .plaza-icon-button:active { background: #f4f4f5; }
 .plaza-icon-button svg,
 .plaza-search-panel svg {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.05;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 .plaza-channel-tabs {
-  height: 44px;
+  height: 42px;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  gap: 20px;
+  gap: 16px;
 }
 .plaza-channel-tabs button {
   position: relative;
-  min-width: 68px;
-  padding: 0 2px;
+  min-width: 58px;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  color: #96979d;
-  font-weight: 550;
-  font-size: 14px;
+  color: #9a9ba0;
+  font-weight: 500;
+  font-size: 13px;
   line-height: 1;
+  letter-spacing: 0;
 }
 .plaza-channel-tabs button.active {
   color: #17191f;
-  font-weight: 650;
+  font-weight: 600;
 }
 .plaza-channel-tabs button.active::after {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: 1px;
-  width: 22px;
+  bottom: 0;
+  width: 18px;
   height: 3px;
   transform: translateX(-50%);
   border-radius: 999px;
@@ -82,63 +83,63 @@ body[data-view="plaza"] main {
 }
 .plaza-search-panel {
   position: sticky;
-  top: 52px;
+  top: 48px;
   z-index: 29;
-  margin: 0 -10px;
-  padding: 7px 12px 9px;
+  margin: 0 -6px;
+  padding: 6px 8px 8px;
   background: rgba(255,255,255,.98);
 }
 .plaza-search-panel[hidden] { display: none; }
 .plaza-search-panel form {
   display: grid;
-  grid-template-columns: 22px minmax(0,1fr) 30px;
+  grid-template-columns: 20px minmax(0,1fr) 28px;
   align-items: center;
-  min-height: 40px;
-  padding: 0 7px 0 11px;
-  border-radius: 20px;
+  min-height: 36px;
+  padding: 0 6px 0 10px;
+  border-radius: 18px;
   background: #f5f5f6;
   color: #8b8d94;
 }
-.plaza-search-panel svg { width: 18px; height: 18px; }
+.plaza-search-panel svg { width: 17px; height: 17px; }
 .plaza-search-panel input {
   min-width: 0;
   margin: 0;
-  padding: 8px;
+  padding: 7px;
   border: 0;
   outline: 0;
   background: transparent;
   color: #17191f;
   box-shadow: none;
-  font-size: 14px;
+  font-size: 13px;
 }
 .plaza-search-clear {
-  width: 27px;
-  height: 27px;
+  width: 25px;
+  height: 25px;
   padding: 0;
   border-radius: 50%;
   background: #d7d8dc;
   color: #fff;
-  font-size: 19px;
+  font-size: 18px;
   line-height: 1;
 }
 .plaza-search-summary {
-  margin: 9px 2px 3px;
+  margin: 7px 3px 2px;
   color: #7b7d84;
-  font-size: 12px;
+  font-size: 11px;
 }
 .plaza-grid {
   display: grid;
   grid-template-columns: repeat(2,minmax(0,1fr));
   align-items: start;
   column-count: 2;
-  column-gap: 10px;
-  margin: 8px 0 0;
+  column-gap: 4px;
+  margin: 5px 0 0;
 }
 .plaza-column {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 .plaza-card {
   display: block;
@@ -160,9 +161,10 @@ body[data-view="plaza"] main {
 }
 .plaza-card-cover {
   width: 100%;
-  min-height: 112px;
+  min-height: 94px;
+  max-height: calc((100vw - 16px) * .6667);
   aspect-ratio: 4/3;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
   background: #f3f3f4;
 }
@@ -172,57 +174,67 @@ body[data-view="plaza"] main {
   height: 100%;
   display: block;
   object-fit: cover;
+  object-position: center;
 }
 .plaza-body {
-  padding: 8px 2px 0;
+  padding: 6px 4px 0;
 }
 .plaza-body h2 {
   display: none;
 }
 .plaza-card-copy {
-  margin: 0 0 8px;
+  margin: 0 0 7px;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  color: #303137;
-  font-size: 14px;
-  line-height: 1.42;
+  color: #25262b;
+  font-size: 13px;
+  line-height: 1.38;
   font-weight: 500;
   letter-spacing: 0;
+  word-break: break-word;
 }
 .plaza-card-copy:empty { display: none; }
 .plaza-card-meta {
   display: grid;
-  grid-template-columns: 20px minmax(0,1fr) auto;
+  grid-template-columns: 18px minmax(0,1fr) auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
-  color: #92939a;
-  font-size: 12px;
+  min-height: 18px;
+  color: #8b8d93;
+  font-size: 11px;
   line-height: 1;
 }
 .plaza-avatar {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border-radius: 50%;
   background: linear-gradient(135deg,#ffcf7c,#ff647e);
   color: #fff;
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 9px;
+  font-weight: 600;
 }
 .plaza-publisher {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  line-height: 18px;
 }
 .plaza-like {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 24px;
   white-space: nowrap;
-  color: #777980;
-  font-size: 12px;
+  color: #8a8c92;
+  font-size: 11px;
+  line-height: 18px;
 }
 .plaza-empty {
   grid-column: 1 / -1;
@@ -239,7 +251,7 @@ body[data-view="plaza"] main {
   align-items: center;
   justify-content: center;
   gap: 14px;
-  margin: 18px 0 4px;
+  margin: 14px 0 4px;
   color: #8b8d94;
   font-size: 13px;
 }
@@ -256,6 +268,7 @@ body[data-view="plaza"] main {
 .plaza-page-button:disabled { color: #b7b8bd; background: #f7f7f8; }
 @media (min-width: 721px) {
   body[data-view="plaza"] main { max-width: 920px; }
-  .plaza-grid { column-gap: 14px; }
-  .plaza-column { gap: 16px; }
+  .plaza-grid { column-gap: 6px; }
+  .plaza-column { gap: 12px; }
+  .plaza-card-cover { max-height: 560px; }
 }
