@@ -1,0 +1,1 @@
+"""Excel cloud merger application."""
