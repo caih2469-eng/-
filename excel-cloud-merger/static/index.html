@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f4c81">
+  <title>Excel 云端自动汇总</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <span class="badge">手机 / 电脑通用</span>
+      <h1>Excel 云端自动汇总</h1>
+      <p>上传多个 Excel、CSV 或 ZIP，自动识别表头、统一字段、合并去重并生成总表。</p>
+    </header>
+
+    <section class="card">
+      <label class="field" id="accessField">
+        <span>访问密码（服务器配置后才需要）</span>
+        <input id="accessKey" type="password" autocomplete="current-password" placeholder="未设置可留空">
+      </label>
+
+      <label class="drop-zone" id="dropZone">
+        <input id="fileInput" type="file" accept=".xlsx,.xls,.csv,.zip" multiple hidden>
+        <strong>选择或拖入文件</strong>
+        <span>支持 .xlsx、.xls、.csv、.zip</span>
+        <small>单次上传总大小默认不超过 50 MB</small>
+      </label>
+
+      <div id="fileList" class="file-list empty">尚未选择文件</div>
+
+      <label class="field">
+        <span>重复数据判断依据</span>
+        <select id="dedupeKey">
+          <option value="学号">学号（推荐）</option>
+          <option value="姓名">姓名</option>
+          <option value="联系电话">联系电话</option>
+          <option value="不去重">不去重，仅合并</option>
+        </select>
+      </label>
+
+      <button id="startButton" class="primary" type="button">开始汇总</button>
+      <p class="privacy">原始文件仅用于本次任务。下载数据完整传到浏览器后，页面会立即请求删除云端临时文件；未完成下载的任务也会在默认 30 分钟后自动清理。</p>
+    </section>
+
+    <section id="progressCard" class="card hidden" aria-live="polite">
+      <div class="spinner"></div>
+      <h2 id="progressTitle">正在处理文件</h2>
+      <p id="progressText">请保持页面开启，文件较多时可能需要一些时间。</p>
+    </section>
+
+    <section id="resultCard" class="card hidden">
+      <div class="success-mark">✓</div>
+      <h2>汇总完成</h2>
+      <div id="stats" class="stats"></div>
+      <button id="downloadButton" class="primary" type="button">下载总汇总表</button>
+      <button id="deleteButton" class="secondary" type="button">不下载，立即删除云端文件</button>
+      <p id="deleteState" class="state"></p>
+    </section>
+
+    <section id="errorCard" class="card error hidden" aria-live="assertive">
+      <h2>处理失败</h2>
+      <p id="errorText"></p>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
