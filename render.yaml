@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: excel-cloud-merger
+    runtime: python
+    plan: free
+    region: singapore
+    branch: excel-cloud-merger
+    rootDir: excel-cloud-merger
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: JOB_TTL_MINUTES
+        value: 30
+      - key: MAX_UPLOAD_BYTES
+        value: 52428800
+      - key: MAX_ZIP_UNCOMPRESSED_BYTES
+        value: 209715200
+      - key: APP_ACCESS_KEY
+        generateValue: true
