@@ -1,0 +1,233 @@
+async function openPlazaPost(postId, sort, page, month, countView = true) {
+  const root = document.querySelector('#modalRoot');
+  if (!root) return;
+  const modalEpoch = ++plazaModalEpoch;
+  const plazaScrollY = window.scrollY;
+  const detailStartedAt = performance.now();
+  const cacheKey = plazaPostCacheKey(postId);
+  const cachedEntry = plazaPostCache.get(cacheKey);
+  const detailCacheHit = Boolean(
+    cachedEntry && Date.now() - cachedEntry.savedAt <= PLAZA_POST_CACHE_TTL_MS
+  );
+  let post = null;
+  let commentPage = 1;
+
+  root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail" aria-busy="true">
+    <div class="row"><h2>正在读取作品…</h2><button class="secondary right" id="closePost">关闭</button></div>
+    <div class="plaza-detail-placeholder"></div>
+  </section></div>`;
+
+  const closePost = () => {
+    if (modalEpoch !== plazaModalEpoch) return;
+    plazaModalEpoch += 1;
+    root.innerHTML = '';
+    requestAnimationFrame(() => window.scrollTo(0, plazaScrollY));
+  };
+  root.querySelector('#closePost').onclick = closePost;
+
+  const commentsPromise = api(`/api/plaza/${postId}/comments?page=1&limit=10`);
+
+  try {
+    post = await loadPlazaPost(postId);
+  } catch (error) {
+    if (modalEpoch !== plazaModalEpoch) return;
+    root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail">
+      <div class="row"><h2>作品读取失败</h2><button class="secondary right" id="closePost">关闭</button></div>
+      <p class="bad">${escapeHtml(error.message)}</p>
+    </section></div>`;
+    root.querySelector('#closePost').onclick = closePost;
+    return;
+  }
+  if (modalEpoch !== plazaModalEpoch) return;
+
+  root.innerHTML = `<div class="modal-backdrop"><section class="card modal plaza-detail">
+    <div class="row"><div><span class="eyebrow dark">${escapeHtml(post.taskName)}</span><h2>${escapeHtml(post.teamName)}</h2></div><button class="secondary right" id="closePost">关闭</button></div>
+    <p class="muted">成员：${post.members.map((member) => `${escapeHtml(member.name)}（${escapeHtml(member.campus)}）`).join('、')}</p>
+    <div class="plaza-photos">${post.images.map((image, imageIndex) => `
+        <button class="image-viewer-trigger" data-image-viewer="${escapeHtml(image.thumbUrl || image.imageUrl)}"
+          data-image-thumb="${escapeHtml(image.thumbUrl || image.imageUrl)}"
+          data-image-display="${escapeHtml(image.displayUrl || image.imageUrl)}" data-image-alt="活动图片">
+        <div class="image-shell">
+          <img data-perf-image="plaza-detail-thumb" data-priority="${imageIndex === 0 ? 'high' : 'low'}"
+            loading="${imageIndex === 0 ? 'eager' : 'lazy'}" decoding="async"
+            fetchpriority="${imageIndex === 0 ? 'high' : 'low'}" width="640" height="480"
+            data-src="${escapeHtml(image.thumbUrl || image.imageUrl)}" alt="活动图片"
+            onload="this.parentElement.classList.add('loaded')"
+            onerror="this.hidden=true;this.parentElement.classList.add('failed')">
+          <span class="image-error">图片加载失败</span>
+        </div>
+      </button>`).join('')}</div>
+    <p>${escapeHtml(post.copy)}</p>
+    <div class="row"><span class="muted">${formatDate(post.publishedAt)} · 浏览 <span data-detail-views>${post.viewCount}</span> · 今日剩余 ${post.likeQuota.remaining}/5 个赞</span><button class="right ${post.liked ? '' : 'secondary'}" id="likePost">${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span></button></div>
+    <section class="comments-panel">
+      <h3>评论 <span id="commentCount">${post.commentCount}</span></h3>
+      <form id="commentForm"><textarea name="content" maxlength="500" required placeholder="写下你的评论（最多500字）"></textarea><button disabled>发布评论</button></form>
+      <div id="commentList"><p class="muted comments-loading">评论加载中…</p></div>
+      <button class="secondary" id="moreComments" hidden>加载更多评论</button>
+    </section>
+  </section></div>`;
+  prepareDynamicContent(root);
+  root.querySelector('#closePost').onclick = closePost;
+  recordPerf('plaza-detail-visible', {
+    duration: roundedDuration(detailStartedAt),
+    cacheHit: detailCacheHit,
+    postId
+  });
+
+  const bindDeleteComments = () => root.querySelectorAll('.delete-comment').forEach((button) => {
+    if (button.dataset.bound === 'true') return;
+    button.dataset.bound = 'true';
+    button.onclick = async (event) => {
+      const item = button.closest('[data-comment]');
+      const restoreButton = beginButtonLoading(event.currentTarget, '删除中…');
+      try {
+        await api(`/api/plaza/${postId}/comments/${item.dataset.comment}`, { method: 'DELETE' });
+        item.remove();
+        post.commentCount = Math.max(0, Number(post.commentCount || 0) - 1);
+        root.querySelector('#commentCount').textContent = post.commentCount;
+        patchPlazaPostCache(postId, { commentCount: post.commentCount });
+        updatePlazaCachePost(postId, { commentCount: post.commentCount });
+        updateVisiblePlazaCard(postId, { commentCount: post.commentCount });
+        if (!root.querySelector('#commentList [data-comment]')) {
+          root.querySelector('#commentList').innerHTML = '<p class="muted empty-comments">还没有评论</p>';
+        }
+      } catch (error) {
+        restoreButton();
+        alert(error.message);
+      }
+    };
+  });
+
+  const renderComments = (result, append = false) => {
+    if (modalEpoch !== plazaModalEpoch) return;
+    const list = root.querySelector('#commentList');
+    if (!list) return;
+    const commentsHtml = result.comments.map((comment) => `
+      <article class="comment-item" data-comment="${comment.id}">
+        <div><strong>${escapeHtml(comment.name)}</strong><span class="muted">${formatDate(comment.createdAt)}</span></div>
+        <p>${escapeHtml(comment.content)}</p>
+        ${comment.canDelete ? '<button class="link-button delete-comment">删除</button>' : ''}
+      </article>`).join('');
+    if (append) list.insertAdjacentHTML('beforeend', commentsHtml);
+    else list.innerHTML = commentsHtml || '<p class="muted empty-comments">还没有评论</p>';
+    const moreComments = root.querySelector('#moreComments');
+    moreComments.hidden = !result.hasMore;
+    root.querySelector('#commentForm button').disabled = false;
+    bindDeleteComments();
+  };
+
+  const showCommentsError = (error) => {
+    if (modalEpoch !== plazaModalEpoch) return;
+    const list = root.querySelector('#commentList');
+    if (!list) return;
+    list.innerHTML = `<p class="bad comments-error">评论加载失败：${escapeHtml(error.message)}</p><button class="secondary" id="retryComments" type="button">重新加载评论</button>`;
+    root.querySelector('#commentForm button').disabled = false;
+    root.querySelector('#retryComments').onclick = async (event) => {
+      const restoreButton = beginButtonLoading(event.currentTarget, '加载中…');
+      try {
+        const result = await api(`/api/plaza/${postId}/comments?page=1&limit=10`);
+        commentPage = 1;
+        renderComments(result);
+      } catch (retryError) {
+        restoreButton();
+        showCommentsError(retryError);
+      }
+    };
+  };
+
+  root.querySelector('#likePost').onclick = async (event) => {
+    const button = event.currentTarget;
+    const restoreButton = beginButtonLoading(button, post.liked ? '正在取消…' : '正在点赞…');
+    const previousLiked = post.liked;
+    try {
+      const result = await api(`/api/plaza/${postId}/like`, {
+        method: 'POST',
+        body: JSON.stringify({ liked: !post.liked })
+      });
+      post.liked = result.liked;
+      if (post.liked !== previousLiked) post.likeCount += post.liked ? 1 : -1;
+      button.dataset.loading = 'false';
+      button.disabled = false;
+      button.innerHTML = `${post.liked ? '取消点赞' : '点赞'} <span id="likeCount">${post.likeCount}</span>`;
+      button.classList.toggle('secondary', !post.liked);
+      patchPlazaPostCache(postId, { likeCount: post.likeCount, liked: post.liked });
+      updatePlazaCachePost(postId, { likeCount: post.likeCount, liked: post.liked });
+      updateVisiblePlazaCard(postId, { likeCount: post.likeCount });
+      rankingViewCache.clear();
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
+  };
+
+  root.querySelector('#commentForm').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const submitButton = event.submitter || form.querySelector('button');
+    const restoreButton = beginButtonLoading(submitButton, '发布中…');
+    try {
+      const result = await api(`/api/plaza/${postId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ content: form.content.value })
+      });
+      root.querySelector('.empty-comments')?.remove();
+      root.querySelector('.comments-error')?.remove();
+      root.querySelector('.comments-loading')?.remove();
+      root.querySelector('#retryComments')?.remove();
+      root.querySelector('#commentList').insertAdjacentHTML('afterbegin', `
+        <article class="comment-item" data-comment="${result.comment.id}">
+          <div><strong>${escapeHtml(result.comment.name)}</strong><span class="muted">${formatDate(result.comment.createdAt)}</span></div>
+          <p>${escapeHtml(result.comment.content)}</p><button class="link-button delete-comment">删除</button>
+        </article>`);
+      root.querySelector('#commentCount').textContent = result.commentCount;
+      post.commentCount = result.commentCount;
+      patchPlazaPostCache(postId, { commentCount: post.commentCount });
+      updatePlazaCachePost(postId, { commentCount: post.commentCount });
+      updateVisiblePlazaCard(postId, { commentCount: post.commentCount });
+      form.reset();
+      restoreButton();
+      bindDeleteComments();
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
+  };
+
+  const moreComments = root.querySelector('#moreComments');
+  moreComments.onclick = async (event) => {
+    const restoreButton = beginButtonLoading(event.currentTarget, '加载中…');
+    try {
+      const nextPage = commentPage + 1;
+      const next = await api(`/api/plaza/${postId}/comments?page=${nextPage}&limit=10`);
+      commentPage = nextPage;
+      renderComments(next, true);
+      restoreButton();
+    } catch (error) {
+      restoreButton();
+      alert(error.message);
+    }
+  };
+
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      const viewKey = scopedCacheKey('plaza-view', postId);
+      if (!countView || countedPlazaViews.has(viewKey)) return;
+      countedPlazaViews.add(viewKey);
+      void api(`/api/plaza/${postId}/view`, { method: 'POST' })
+        .then((result) => {
+          if (!result.counted) return;
+          const nextViewCount = Number(post.viewCount || 0) + 1;
+          post.viewCount = nextViewCount;
+          patchPlazaPostCache(postId, { viewCount: nextViewCount });
+          updatePlazaCachePost(postId, { viewCount: nextViewCount });
+          updateVisiblePlazaCard(postId, { viewCount: nextViewCount });
+          const detailCount = root.querySelector('[data-detail-views]');
+          if (detailCount) detailCount.textContent = nextViewCount;
+          rankingViewCache.clear();
+        })
+        .catch(() => {});
+    }, 0);
+  });
+
+  void commentsPromise.then((result) => renderComments(result)).catch(showCommentsError);
+}
