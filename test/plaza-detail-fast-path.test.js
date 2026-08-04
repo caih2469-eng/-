@@ -22,9 +22,11 @@ test('作品主体先于评论完成渲染，评论失败不再拖垮详情', ()
   const detail = detailBody(app);
   assert.ok(detail.length > 0, '未找到活动广场详情函数');
   assert.match(detail, /const commentsPromise = api\(`/);
+  assert.match(detail, /\.catch\(\(error\) => \(\{ result: null, error \}\)\)/);
   assert.match(detail, /post = await loadPlazaPost\(postId\)/);
   assert.match(detail, /评论加载中…/);
-  assert.match(detail, /void commentsPromise\.then\(\(result\) => renderComments\(result\)\)\.catch\(showCommentsError\)/);
+  assert.match(detail, /void commentsPromise\.then\(\(\{ result, error \}\) => \{/);
+  assert.match(detail, /if \(error\) showCommentsError\(error\)/);
   assert.doesNotMatch(detail, /await Promise\.all\(\[detailPromise, commentsPromise\]\)/);
   assert.doesNotMatch(detail, /\[\{ post \}, commentResult\] = await Promise\.all/);
 });
