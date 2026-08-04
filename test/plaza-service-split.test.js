@@ -103,6 +103,8 @@ test('当前阶段只部署子服务，Pages绑定留到部署成功后的独立
 test('独立工作流先验证再部署，PR阶段不切换生产流量', () => {
   assert.match(workflowSource, /name: Plaza service validation and deployment/);
   assert.match(workflowSource, /pull_request:/);
+  assert.match(workflowSource, /permissions:\s+contents: read/);
+  assert.doesNotMatch(workflowSource, /permissions:\s+contents: write/);
   assert.match(workflowSource, /node --test test\/plaza-service-split\.test\.js/);
   assert.match(workflowSource, /command: deploy --config wrangler\.production\.jsonc/);
   assert.match(workflowSource, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
