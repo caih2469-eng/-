@@ -4,6 +4,7 @@ import { handlePlazaRoutes } from './routes/plaza.js';
 const USER_HEADER = 'x-jinshan-plaza-user';
 const SERVICE_HEADER = 'x-jinshan-internal-service';
 const SERVICE_VERSION = 'plaza-v1';
+const SERVICE_BUILD = '20260804-plaza1';
 
 const parseInternalUser = (request) => {
   if (request.headers.get(SERVICE_HEADER) !== SERVICE_VERSION) return null;
@@ -25,7 +26,8 @@ const parseInternalUser = (request) => {
 
 const serviceHeaders = {
   'x-jinshan-service': 'plaza',
-  'x-jinshan-service-version': SERVICE_VERSION
+  'x-jinshan-service-version': SERVICE_VERSION,
+  'x-jinshan-service-build': SERVICE_BUILD
 };
 
 const withServiceHeader = (response) => {
