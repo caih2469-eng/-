@@ -68,7 +68,7 @@ test('健康自律客户端仅由健康学生按需加载且沿用后台配置',
   assert.match(module, /MutationObserver/);
   assert.match(module, /健康自律赛道当前未开放/);
   assert.match(module, /今天不开放健康自律赛道打卡/);
-  assert.equal(module.slice(module.indexOf('(() => {')).trim(), `${homeTemplate.trim()}\n`);
+  assert.equal(module.slice(module.indexOf('(() => {')).trim(), homeTemplate.trim());
   assert.doesNotMatch(generator + module, /CREATE TABLE|ALTER TABLE|DROP TABLE/);
 });
 
