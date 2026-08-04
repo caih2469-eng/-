@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 const workflow = fs.readFileSync('deploy/plaza-service.workflow.yml', 'utf8');
+const activeWorkflow = fs.readFileSync('.github/workflows/plaza-service.yml', 'utf8');
 const testConfig = JSON.parse(fs.readFileSync('cloudflare/plaza-service/wrangler.test.jsonc', 'utf8'));
 const productionConfig = JSON.parse(fs.readFileSync('cloudflare/plaza-service/wrangler.production.jsonc', 'utf8'));
 
@@ -37,7 +38,7 @@ test('工作流使用现有Cloudflare密钥并部署到正确配置', () => {
   assert.equal(productionConfig.workers_dev, false);
 });
 
-test('启用前模板与正式工作流路径分离', () => {
-  assert.equal(fs.existsSync('.github/workflows/plaza-service.yml'), false);
-  assert.match(workflow, /'\.github\/workflows\/plaza-service\.yml'/);
+test('启用后的正式工作流与已审查模板完全一致', () => {
+  assert.equal(activeWorkflow, workflow);
+  assert.match(activeWorkflow, /'\.github\/workflows\/plaza-service\.yml'/);
 });
