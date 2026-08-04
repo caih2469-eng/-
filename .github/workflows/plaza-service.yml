@@ -72,12 +72,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/apply-plaza-service-split.mjs
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: cloudflare/plaza-service
-          command: deploy --config wrangler.test.jsonc
+      - name: Validate test Worker bundle with locked Wrangler
+        working-directory: cloudflare/plaza-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.test.jsonc
+      - name: Deploy test Worker
+        working-directory: cloudflare/plaza-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
 
   mark-production-pending:
     if: >-
@@ -129,12 +132,29 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/apply-plaza-service-split.mjs
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: cloudflare/plaza-service
-          command: deploy --config wrangler.production.jsonc
+      - name: Validate production Worker bundle with locked Wrangler
+        working-directory: cloudflare/plaza-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.production.jsonc
+      - name: Deploy production Worker
+        working-directory: cloudflare/plaza-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          pnpm exec wrangler deploy --config wrangler.production.jsonc 2>&1 | tee wrangler-production.log
+          deploy_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$deploy_status" -ne 0 ]; then
+            if grep -Eq 'Authentication error.*10000|10000.*Authentication error' wrangler-production.log; then
+              message='Cloudflare API Token lacks the permissions required to deploy the independent Worker. Grant Account / Workers Scripts / Edit and retain the D1/R2 permissions required by this project.'
+              echo "::error title=Cloudflare production token permissions::$message"
+              printf '## Cloudflare production deployment blocked\n\n%s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$deploy_status"
+          fi
 
   publish-production-status:
     if: >-

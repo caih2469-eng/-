@@ -5,7 +5,7 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(path, 'utf8');
 
 test('管理员用户卡片点击后立即打开打卡抽屉，不再等待全部队伍和任务', () => {
-  const app = read('public/app.js');
+  const app = read('public/app.js') + '\n' + read('public/admin-client.js');
   const panelStart = app.indexOf('const renderAdminUserPanel');
   const panelEnd = app.indexOf('async function refreshCompactAdminUsers', panelStart);
   const panel = app.slice(panelStart, panelEnd);
@@ -16,7 +16,7 @@ test('管理员用户卡片点击后立即打开打卡抽屉，不再等待全�
 });
 
 test('打卡抽屉仅显示打卡记录并提供一分钟缓存和请求去重', () => {
-  const app = read('public/app.js');
+  const app = read('public/app.js') + '\n' + read('public/admin-client.js');
   const start = app.indexOf('/* MOBILE_ADMIN_PHOTO_FIX_V1 */');
   const end = app.indexOf('function taskFormFields', start);
   const drawer = app.slice(start, end);
@@ -28,7 +28,7 @@ test('打卡抽屉仅显示打卡记录并提供一分钟缓存和请求去重',
 });
 
 test('所有管理端缩略图限制为最长边640px并优先WebP', () => {
-  const app = read('public/app.js');
+  const app = read('public/app.js') + '\n' + read('public/admin-client.js');
   const media = read('cloudflare/routes/media.js');
   assert.match(app, /MEDIA_THUMB_MAX_EDGE = 640/);
   assert.match(app, /MEDIA_THUMB_QUALITY = 0\.82/);

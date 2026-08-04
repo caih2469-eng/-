@@ -30,9 +30,12 @@ test('生产部署只允许main推送或main上的手动生产执行', () => {
 test('工作流使用现有Cloudflare密钥并部署到正确配置', () => {
   assert.match(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /secrets\.CLOUDFLARE_ACCOUNT_ID/);
-  assert.match(workflow, /workingDirectory: cloudflare\/plaza-service/);
-  assert.match(workflow, /deploy --config wrangler\.test\.jsonc/);
-  assert.match(workflow, /deploy --config wrangler\.production\.jsonc/);
+  assert.match(workflow, /working-directory: cloudflare\/plaza-service/);
+  assert.match(workflow, /pnpm exec wrangler deploy --dry-run --config wrangler\.test\.jsonc/);
+  assert.match(workflow, /pnpm exec wrangler deploy --config wrangler\.test\.jsonc/);
+  assert.match(workflow, /pnpm exec wrangler deploy --dry-run --config wrangler\.production\.jsonc/);
+  assert.match(workflow, /pnpm exec wrangler deploy --config wrangler\.production\.jsonc/);
+  assert.doesNotMatch(workflow, /cloudflare\/wrangler-action|\bnpx\s+wrangler/);
   assert.equal(testConfig.name, 'jinshan20-plaza-test');
   assert.equal(productionConfig.name, 'jinshan20-plaza');
   assert.equal(testConfig.workers_dev, false);
@@ -48,6 +51,13 @@ test('生产部署发布可读取的待处理和最终提交状态', () => {
   assert.match(workflow, /actions\/runs\/\$\{GITHUB_RUN_ID\}/);
   assert.match(workflow, /\/statuses\/\$\{GITHUB_SHA\}/);
   assert.match(workflow, /always\(\)/);
+});
+
+test('authentication failures remain failures and report only the required permission action', () => {
+  assert.match(workflow, /Authentication error\.\*10000/);
+  assert.match(workflow, /exit "\$deploy_status"/);
+  assert.match(workflow, /Workers Scripts \/ Edit/);
+  assert.doesNotMatch(workflow, /continue-on-error|\|\| true/);
 });
 
 test('正式工作流与已审查模板完全一致', () => {
