@@ -1,0 +1,205 @@
+name: Check-in service validation and deployment
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'cloudflare/checkin-worker.js'
+      - 'cloudflare/checkin-service/**'
+      - 'cloudflare/routes/student.js'
+      - 'cloudflare/lib/**'
+      - 'cloudflare/services/**'
+      - 'scripts/apply-checkin-service-split.mjs'
+      - 'scripts/apply-plaza-service-split.mjs'
+      - 'scripts/apply-approved-plaza-prefetch.mjs'
+      - 'test/checkin-service-split.test.js'
+      - '.github/workflows/checkin-service.yml'
+  pull_request:
+    paths:
+      - 'cloudflare/checkin-worker.js'
+      - 'cloudflare/checkin-service/**'
+      - 'cloudflare/routes/student.js'
+      - 'cloudflare/lib/**'
+      - 'cloudflare/services/**'
+      - 'scripts/apply-checkin-service-split.mjs'
+      - 'scripts/apply-plaza-service-split.mjs'
+      - 'scripts/apply-approved-plaza-prefetch.mjs'
+      - 'test/checkin-service-split.test.js'
+      - '.github/workflows/checkin-service.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: test
+        type: choice
+        options:
+          - test
+          - production
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: checkin-service-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --check scripts/apply-checkin-service-split.mjs
+      - run: node scripts/apply-checkin-service-split.mjs
+      - run: node --check cloudflare/checkin-worker.js
+      - run: node --check cloudflare/routes/student.js
+      - run: node --check cloudflare/worker.js
+      - run: node --test test/checkin-service-split.test.js
+      - name: Validate test Worker bundle with locked Wrangler
+        working-directory: cloudflare/checkin-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.test.jsonc
+      - name: Validate production Worker bundle with locked Wrangler
+        working-directory: cloudflare/checkin-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.production.jsonc
+
+  deploy-test:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/apply-checkin-service-split.mjs
+      - name: Deploy test Worker
+        working-directory: cloudflare/checkin-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
+
+  mark-production-pending:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.environment == 'production' &&
+       github.ref == 'refs/heads/main')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish pending deployment status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail-with-body --location \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            --data "$(jq -nc \
+              --arg state pending \
+              --arg target_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --arg description '独立打卡服务正在部署，主站尚未切流' \
+              --arg context 'checkin-service/deploy-production' \
+              '{state:$state,target_url:$target_url,description:$description,context:$context}')"
+
+  deploy-production:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.environment == 'production' &&
+       github.ref == 'refs/heads/main')
+    needs:
+      - validate
+      - mark-production-pending
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/apply-checkin-service-split.mjs
+      - name: Deploy production Worker
+        working-directory: cloudflare/checkin-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          pnpm exec wrangler deploy --config wrangler.production.jsonc 2>&1 | tee wrangler-production.log
+          deploy_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$deploy_status" -ne 0 ]; then
+            if grep -Eq 'Authentication error.*10000|10000.*Authentication error|403: Forbidden' wrangler-production.log; then
+              message='Cloudflare API Token lacks a permission required by the independent check-in Worker. Grant Account / Workers Scripts / Edit, retain D1 access, and add Account / Workers R2 Storage / Edit for the bound upload bucket.'
+              echo "::error title=Cloudflare check-in token permissions::$message"
+              printf '## Cloudflare check-in deployment blocked\n\n%s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$deploy_status"
+          fi
+
+  publish-production-status:
+    if: >-
+      always() && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' &&
+         inputs.environment == 'production' &&
+         github.ref == 'refs/heads/main')
+      )
+    needs:
+      - validate
+      - mark-production-pending
+      - deploy-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish final deployment status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_STATE: ${{ needs.deploy-production.result == 'success' && 'success' || 'failure' }}
+          STATUS_DESCRIPTION: ${{ needs.deploy-production.result == 'success' && '独立打卡服务部署成功，主站尚未切流' || '独立打卡服务部署失败' }}
+        run: |
+          curl --fail-with-body --location \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            --data "$(jq -nc \
+              --arg state "${STATUS_STATE}" \
+              --arg target_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --arg description "${STATUS_DESCRIPTION}" \
+              --arg context 'checkin-service/deploy-production' \
+              '{state:$state,target_url:$target_url,description:$description,context:$context}')"
