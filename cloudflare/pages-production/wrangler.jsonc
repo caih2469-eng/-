@@ -24,5 +24,11 @@
       "binding": "UPLOADS",
       "bucket_name": "jinshan20"
     }
+  ],
+  "services": [
+    {
+      "binding": "PLAZA_SERVICE",
+      "service": "jinshan20-plaza"
+    }
   ]
 }
