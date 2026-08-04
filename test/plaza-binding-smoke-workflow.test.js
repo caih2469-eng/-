@@ -17,7 +17,8 @@ test('production binding smoke verifies the deployed plaza service contract', ()
   assert.match(source, /x-jinshan-service:\[\[:space:\]\]\*plaza/);
   assert.match(source, /x-jinshan-service-version:\[\[:space:\]\]\*plaza-v1/);
   assert.match(source, /workflow_run\.conclusion/);
-  assert.doesNotMatch(source, /continue-on-error|\|\| true/);
+  assert.doesNotMatch(source, /continue-on-error/);
+  assert.match(source, /Production endpoint did not return the plaza-v1 service headers[\s\S]*exit 1/);
 });
 
 test('production binding smoke publishes a readable commit status', () => {
