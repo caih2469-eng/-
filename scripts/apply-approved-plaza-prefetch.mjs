@@ -125,7 +125,6 @@ const replaceOnce = (input, search, replacement, label) => {
 await import('./apply-track-admin-settings-compat.mjs');
 await import('./apply-plaza-detail-fast-path.mjs');
 await import('./apply-lazy-plaza-assets.mjs');
-await import('./apply-lazy-admin-client.mjs');
 await import('./apply-build-asset-version.mjs');
 
-console.log('Applied bootstrap, student-home plaza prefetch, fast plaza detail, lazy plaza assets, lazy admin client, track-aware settings and commit-scoped asset versions.');
+console.log('Applied bootstrap, student-home plaza prefetch, fast plaza detail, lazy plaza assets, track-aware settings and commit-scoped asset versions.');
