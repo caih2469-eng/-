@@ -10,7 +10,6 @@ execFileSync(process.execPath, ['scripts/apply-checkin-service-split.mjs'], { st
 
 const mainWorkerSource = read('cloudflare/worker.js');
 const studentRouteSource = read('cloudflare/routes/student.js');
-const childWorkerSource = read('cloudflare/checkin-worker.js');
 const workflowSource = read('.github/workflows/checkin-service.yml');
 
 test('independent check-in Worker rejects public access and unrelated routes', async () => {
@@ -65,15 +64,18 @@ test('internal check-in request reuses the existing route contract', async () =>
 });
 
 test('main Worker forwards only check-in routes and keeps safe fallback semantics', () => {
+  const allowlistBlock = mainWorkerSource.slice(
+    mainWorkerSource.indexOf('const isCheckinServiceRoute'),
+    mainWorkerSource.indexOf('const checkinInternalUser')
+  );
   assert.match(mainWorkerSource, /CHECKIN_SERVICE_BINDING_V1/);
-  assert.match(mainWorkerSource, /pathname === '\/api\/checkins'/);
-  assert.match(mainWorkerSource, /pathname === '\/api\/checkins\/history'/);
-  assert.match(mainWorkerSource, /member-checkin/);
+  assert.match(allowlistBlock, /pathname === '\/api\/checkins'/);
+  assert.match(allowlistBlock, /pathname === '\/api\/checkins\/history'/);
+  assert.match(allowlistBlock, /member-checkin/);
+  assert.doesNotMatch(allowlistBlock, /submission|public-images|media|plaza/);
   assert.match(mainWorkerSource, /env\.CHECKIN_SERVICE\.fetch\(serviceRequest\)/);
   assert.match(mainWorkerSource, /request\.method === 'GET' \|\| request\.method === 'HEAD'/);
   assert.match(mainWorkerSource, /打卡服务暂时不可用，请稍后重试/);
-  assert.doesNotMatch(mainWorkerSource, /isCheckinServiceRoute.*submission/s);
-  assert.doesNotMatch(mainWorkerSource, /isCheckinServiceRoute.*public-images/s);
 });
 
 test('main Worker strips forged headers and passes only minimal user fields', () => {
