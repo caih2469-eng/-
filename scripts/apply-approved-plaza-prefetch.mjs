@@ -126,7 +126,8 @@ await import('./apply-track-admin-settings-compat.mjs');
 await import('./apply-plaza-detail-fast-path.mjs');
 await import('./apply-lazy-plaza-assets.mjs');
 await import('./apply-plaza-service-split.mjs');
+await import('./apply-checkin-service-split.mjs');
 await import('./apply-role-scoped-admin-style.mjs');
 await import('./apply-build-asset-version.mjs');
 
-console.log('Applied bootstrap, plaza prefetch/detail/lazy assets/service split, role-scoped admin style, track-aware settings and commit-scoped asset versions.');
+console.log('Applied bootstrap, plaza prefetch/detail/lazy assets/service split, check-in service split, role-scoped admin style, track-aware settings and commit-scoped asset versions.');
