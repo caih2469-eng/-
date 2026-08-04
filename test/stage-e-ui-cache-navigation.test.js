@@ -29,9 +29,14 @@ test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔�
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
 });
 
-test('阶段E：打开广场详情并行加载，浏览计数不阻塞，关闭不重新请求列表', () => {
+test('阶段E：广场详情主体优先显示，评论与浏览计数均不阻塞，关闭不重新请求列表', () => {
   const block = sourceBetween('async function openPlazaPost', 'const renderAdminCommentsPage');
-  assert.match(block, /Promise\.all\(\[detailPromise, commentsPromise\]\)/);
+  assert.match(block, /const commentsPromise = api\(`/);
+  assert.match(block, /post = await loadPlazaPost\(postId\)/);
+  assert.match(block, /评论加载中…/);
+  assert.match(block, /void commentsPromise\.then\(\(\{ result, error \}\) => \{/);
+  assert.doesNotMatch(block, /Promise\.all\(\[detailPromise, commentsPromise\]\)/);
+  assert.match(block, /requestAnimationFrame\(\(\) => \{\s*setTimeout\(\(\) => \{/);
   assert.match(block, /void api\(`\/api\/plaza\/\$\{postId\}\/view`/);
   assert.doesNotMatch(block, /await api\(`\/api\/plaza\/\$\{postId\}\/view`/);
   assert.match(block, /countedPlazaViews\.has\(viewKey\)/);
