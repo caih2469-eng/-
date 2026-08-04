@@ -97,8 +97,8 @@ if (!app.includes(marker)) {
   );
   app = replaceOnce(
     app,
-    '  plazaViewCache.clear();\n  rankingViewCache.clear();',
-    '  plazaViewCache.clear();\n  plazaPostCache.clear();\n  plazaPostInflight.clear();\n  plazaPostCacheGeneration += 1;\n  rankingViewCache.clear();',
+    '  plazaViewCache.clear();',
+    '  plazaViewCache.clear();\n  plazaPostCache.clear();\n  plazaPostInflight.clear();\n  plazaPostCacheGeneration += 1;',
     '用户缓存清理逻辑'
   );
   app = replaceTopLevelDeclaration(
