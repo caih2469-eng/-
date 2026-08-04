@@ -9,6 +9,7 @@ const loaderMarker = '/* LAZY_ADMIN_CLIENT_MODULE_V1 */';
 const moduleMarker = '/* ADMIN_CLIENT_MODULE_V1 */';
 const startAnchor = 'async function adminComments(page = 1) {';
 const startupAnchor = 'if (window.__BOOTSTRAP_AUTHENTICATED__)';
+const restoreRequested = process.argv.includes('--restore');
 
 const replaceOnce = (source, search, replacement, label) => {
   const next = source.replace(search, replacement);
@@ -63,6 +64,40 @@ const buildLoader = (preservedMarkers = []) => [
 ].join('\n');
 
 let app = fs.readFileSync(appPath, 'utf8');
+
+if (restoreRequested) {
+  const loaderStart = app.indexOf(loaderMarker);
+  if (loaderStart < 0) {
+    process.stdout.write('Admin client source is already restored.\n');
+    process.exit(0);
+  }
+  if (!fs.existsSync(modulePath)) throw new Error('无法恢复管理端源码：模块文件不存在');
+  const moduleSource = fs.readFileSync(modulePath, 'utf8');
+  const moduleBodyStart = moduleSource.indexOf(startAnchor);
+  const moduleEntryStart = moduleSource.lastIndexOf('\n\nwindow.__ADMIN_CLIENT_ENTRY__');
+  const startupStart = app.indexOf(startupAnchor, loaderStart);
+  if (moduleBodyStart < 0 || moduleEntryStart <= moduleBodyStart || startupStart <= loaderStart) {
+    throw new Error('无法恢复管理端源码：模块边界不完整');
+  }
+  const adminBlock = moduleSource.slice(moduleBodyStart, moduleEntryStart).trimEnd();
+  app = `${app.slice(0, loaderStart).trimEnd()}\n\n${adminBlock}\n\n${app.slice(startupStart)}`;
+  if (app.includes('return loadAdminClient(undefined, pageEpoch);')) {
+    app = replaceOnce(
+      app,
+      '  return loadAdminClient(undefined, pageEpoch);',
+      '  return admin(undefined, pageEpoch);',
+      '管理端同步入口恢复'
+    );
+  }
+  if (app.includes(loaderMarker) || !app.includes(startAnchor) || !app.includes('return admin(undefined, pageEpoch);')) {
+    throw new Error('管理端源码恢复不完整');
+  }
+  new Function(app);
+  fs.writeFileSync(appPath, app, 'utf8');
+  process.stdout.write('Restored admin client source before runtime generators.\n');
+  process.exit(0);
+}
+
 const blockStart = app.indexOf(startAnchor);
 const startupStart = app.indexOf(startupAnchor);
 
@@ -79,7 +114,7 @@ if (blockStart >= 0) {
   fs.writeFileSync(modulePath, moduleSource, 'utf8');
 
   let before = app.slice(0, blockStart).trimEnd();
-  let after = app.slice(startupStart);
+  const after = app.slice(startupStart);
   if (!before.includes(loaderMarker)) {
     before = `${before}\n\n${buildLoader(preservedMarkers)}`;
   }
