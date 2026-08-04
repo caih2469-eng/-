@@ -5,14 +5,19 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(path, 'utf8');
 const commentMode = read('public/plaza-comment-mode.js');
 const bootstrap = read('public/bootstrap.js');
+const app = read('public/app.js');
 const pipeline = read('templates/pica-image-pipeline-runtime.txt');
 
-test('Beav评论呈现脚本与主应用使用同一缓存版本', () => {
+test('Beav评论呈现脚本按需加载并与主应用使用同一缓存版本', () => {
   const appVersion = bootstrap.match(/await loadScript\('\/app\.js\?v=([^']+)'\)/)?.[1];
-  const commentVersion = bootstrap.match(/await loadScript\('\/plaza-comment-mode\.js\?v=([^']+)'\)/)?.[1];
+  const commentVersion = bootstrap.match(/loadFeatureScript\('\/plaza-comment-mode\.js\?v=([^']+)'\)/)?.[1];
   assert.ok(appVersion);
   assert.ok(commentVersion);
   assert.equal(commentVersion, appVersion);
+  assert.doesNotMatch(bootstrap, /await loadScript\('\/plaza-comment-mode\.js/);
+  assert.match(bootstrap, /const featureScriptPromises = new Map\(\)/);
+  assert.match(bootstrap, /featureScriptPromises\.delete\(src\)/);
+  assert.match(app, /void window\.__LOAD_PLAZA_EXTRAS__\?\.\(\)/);
 });
 
 test('评论模式保留现有发布删除和加载更多选择器', () => {
