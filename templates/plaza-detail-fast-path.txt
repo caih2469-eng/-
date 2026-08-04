@@ -25,7 +25,9 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
   };
   root.querySelector('#closePost').onclick = closePost;
 
-  const commentsPromise = api(`/api/plaza/${postId}/comments?page=1&limit=10`);
+  const commentsPromise = api(`/api/plaza/${postId}/comments?page=1&limit=10`)
+    .then((result) => ({ result, error: null }))
+    .catch((error) => ({ result: null, error }));
 
   try {
     post = await loadPlazaPost(postId);
@@ -229,5 +231,8 @@ async function openPlazaPost(postId, sort, page, month, countView = true) {
     }, 0);
   });
 
-  void commentsPromise.then((result) => renderComments(result)).catch(showCommentsError);
+  void commentsPromise.then(({ result, error }) => {
+    if (error) showCommentsError(error);
+    else renderComments(result);
+  });
 }
