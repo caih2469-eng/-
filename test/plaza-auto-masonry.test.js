@@ -5,15 +5,20 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(path, 'utf8');
 const masonry = read('public/plaza-auto-masonry.js');
 const bootstrap = read('public/bootstrap.js');
+const app = read('public/app.js');
 const plazaPage = read('templates/plaza-mobile-page.txt');
 const plazaStyle = read('templates/plaza-mobile-style.css');
 
-test('活动广场自动排版脚本与主资源使用同一缓存版本', () => {
+test('活动广场自动排版脚本按需加载并与主资源使用同一缓存版本', () => {
   const appVersion = bootstrap.match(/await loadScript\('\/app\.js\?v=([^']+)'\)/)?.[1];
-  const masonryVersion = bootstrap.match(/await loadScript\('\/plaza-auto-masonry\.js\?v=([^']+)'\)/)?.[1];
+  const masonryVersion = bootstrap.match(/loadFeatureScript\('\/plaza-auto-masonry\.js\?v=([^']+)'\)/)?.[1];
   assert.ok(appVersion);
   assert.ok(masonryVersion);
   assert.equal(masonryVersion, appVersion);
+  assert.doesNotMatch(bootstrap, /await loadScript\('\/plaza-auto-masonry\.js/);
+  assert.match(bootstrap, /window\.__LOAD_PLAZA_EXTRAS__/);
+  assert.match(app, /\/\* LAZY_PLAZA_ENTRY_V1 \*\/[\s\S]*?__LOAD_PLAZA_EXTRAS__/);
+  assert.match(plazaPage, /\/\* LAZY_PLAZA_ENTRY_V1 \*\/[\s\S]*?__LOAD_PLAZA_EXTRAS__/);
 });
 
 test('采用Beav的最短列分配结构并按真实卡片高度校正', () => {
