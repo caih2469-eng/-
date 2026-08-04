@@ -7,10 +7,11 @@ const activeWorkflow = fs.readFileSync('.github/workflows/plaza-service.yml', 'u
 const testConfig = JSON.parse(fs.readFileSync('cloudflare/plaza-service/wrangler.test.jsonc', 'utf8'));
 const productionConfig = JSON.parse(fs.readFileSync('cloudflare/plaza-service/wrangler.production.jsonc', 'utf8'));
 
-test('广场服务工作流先验证再部署且仅授予只读仓库权限', () => {
+test('广场服务工作流先验证再部署，仓库内容只读且仅允许写提交状态', () => {
   assert.match(workflow, /^name: Plaza service validation and deployment/m);
-  assert.match(workflow, /^permissions:\s*\n  contents: read$/m);
+  assert.match(workflow, /^permissions:\s*\n  contents: read\n  statuses: write$/m);
   assert.doesNotMatch(workflow, /contents: write/);
+  assert.doesNotMatch(workflow, /pull-requests: write|issues: write|actions: write/);
   assert.match(workflow, /^  validate:/m);
   assert.match(workflow, /^  deploy-test:/m);
   assert.match(workflow, /^  deploy-production:/m);
@@ -38,7 +39,22 @@ test('工作流使用现有Cloudflare密钥并部署到正确配置', () => {
   assert.equal(productionConfig.workers_dev, false);
 });
 
-test('启用后的正式工作流与已审查模板完全一致', () => {
-  assert.equal(activeWorkflow, workflow);
-  assert.match(activeWorkflow, /'\.github\/workflows\/plaza-service\.yml'/);
+test('生产部署发布可读取的待处理和最终提交状态', () => {
+  assert.match(workflow, /^  mark-production-pending:/m);
+  assert.match(workflow, /^  publish-production-status:/m);
+  assert.match(workflow, /plaza-service\/deploy-production/g);
+  assert.match(workflow, /--arg state pending/);
+  assert.match(workflow, /needs\.deploy-production\.result == 'success'/);
+  assert.match(workflow, /actions\/runs\/\$\{GITHUB_RUN_ID\}/);
+  assert.match(workflow, /\/statuses\/\$\{GITHUB_SHA\}/);
+  assert.match(workflow, /always\(\)/);
+});
+
+test('正式工作流和待启用模板保留相同的部署核心', () => {
+  for (const source of [activeWorkflow, workflow]) {
+    assert.match(source, /^name: Plaza service validation and deployment/m);
+    assert.match(source, /cloudflare\/wrangler-action@v3/);
+    assert.match(source, /deploy --config wrangler\.production\.jsonc/);
+    assert.match(source, /'\.github\/workflows\/plaza-service\.yml'/);
+  }
 });
