@@ -39,8 +39,10 @@ test('阶段G：入口资源按当前Git提交自动更新且保留同版本缓�
   assert.match(bootstrapSource, /BUILD_ASSET_VERSION_V1/);
   assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: no-cache, no-store, must-revalidate/s);
   assert.match(headerSource, /\/app\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
+  assert.match(headerSource, /\/health-checkin\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/style\.css\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/vendor\/\*\s+Cache-Control: public, max-age=31536000, immutable/s);
+  assert.match(appSource, /moduleUrl\.searchParams\.set\('v', version\)/);
 });
 
 test('阶段G：性能指标只在调试模式记录且不包含凭据或图片内容', () => {
@@ -53,6 +55,7 @@ test('阶段G：性能指标只在调试模式记录且不包含凭据或图片�
   assert.match(appSource, /recordPerf\('upload'/);
   assert.match(appSource, /recordPerf\('submit'/);
   assert.match(appSource, /recordPerf\('home-restore'/);
+  assert.match(appSource, /recordPerf\('module-load'/);
   const recorderBlock = bootstrapSource.slice(
     bootstrapSource.indexOf('window.__RECORD_PERF__'),
     bootstrapSource.indexOf('const bootstrapStarted')
