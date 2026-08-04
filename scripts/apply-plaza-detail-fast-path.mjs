@@ -26,56 +26,58 @@ const replaceTopLevelDeclaration = (source, startAnchor, replacement, label) => 
   return `${source.slice(0, start)}${replacement.trimEnd()}\n\n${source.slice(end)}`;
 };
 
-const cacheHelpers = String.raw`
-const plazaPostCacheKey = (postId) => scopedCacheKey('plaza-post', postId);
-const readPlazaPostCache = (postId) => {
-  const entry = plazaPostCache.get(plazaPostCacheKey(postId));
-  return entry && Date.now() - entry.savedAt <= PLAZA_POST_CACHE_TTL_MS ? entry.post : null;
-};
-const writePlazaPostCache = (postId, post) => {
-  plazaPostCache.set(plazaPostCacheKey(postId), { post, savedAt: Date.now() });
-  return post;
-};
-const patchPlazaPostCache = (postId, updates) => {
-  const entry = plazaPostCache.get(plazaPostCacheKey(postId));
-  if (entry?.post) Object.assign(entry.post, updates);
-};
-const loadPlazaPost = (postId) => {
-  const cached = readPlazaPostCache(postId);
-  if (cached) return Promise.resolve(cached);
-  const key = plazaPostCacheKey(postId);
-  if (plazaPostInflight.has(key)) return plazaPostInflight.get(key);
-  const generation = plazaPostCacheGeneration;
-  const request = api(`/api/plaza/${encodeURIComponent(postId)}`)
-    .then(({ post }) => {
-      if (generation === plazaPostCacheGeneration) writePlazaPostCache(postId, post);
-      return post;
-    })
-    .finally(() => {
-      if (plazaPostInflight.get(key) === request) plazaPostInflight.delete(key);
-    });
-  plazaPostInflight.set(key, request);
-  return request;
-};
-`;
+const cacheHelpers = [
+  "const plazaPostCacheKey = (postId) => scopedCacheKey('plaza-post', postId);",
+  'const readPlazaPostCache = (postId) => {',
+  '  const entry = plazaPostCache.get(plazaPostCacheKey(postId));',
+  '  return entry && Date.now() - entry.savedAt <= PLAZA_POST_CACHE_TTL_MS ? entry.post : null;',
+  '};',
+  'const writePlazaPostCache = (postId, post) => {',
+  '  plazaPostCache.set(plazaPostCacheKey(postId), { post, savedAt: Date.now() });',
+  '  return post;',
+  '};',
+  'const patchPlazaPostCache = (postId, updates) => {',
+  '  const entry = plazaPostCache.get(plazaPostCacheKey(postId));',
+  '  if (entry?.post) Object.assign(entry.post, updates);',
+  '};',
+  'const loadPlazaPost = (postId) => {',
+  '  const cached = readPlazaPostCache(postId);',
+  '  if (cached) return Promise.resolve(cached);',
+  '  const key = plazaPostCacheKey(postId);',
+  '  if (plazaPostInflight.has(key)) return plazaPostInflight.get(key);',
+  '  const generation = plazaPostCacheGeneration;',
+  '  const request = api(`/api/plaza/${encodeURIComponent(postId)}`)',
+  '    .then(({ post }) => {',
+  '      if (generation === plazaPostCacheGeneration) writePlazaPostCache(postId, post);',
+  '      return post;',
+  '    })',
+  '    .finally(() => {',
+  '      if (plazaPostInflight.get(key) === request) plazaPostInflight.delete(key);',
+  '    });',
+  '  plazaPostInflight.set(key, request);',
+  '  return request;',
+  '};'
+].join('\n');
 
-const visibleCardUpdater = String.raw`const updateVisiblePlazaCard = (postId, updates) => {
-  const card = [...app.querySelectorAll('[data-post]')].find(
-    (item) => item.dataset.post === postId
-  );
-  if (!card) return;
-  const updateText = (selector, value) => {
-    const target = card.querySelector(selector);
-    if (target && value != null) target.textContent = value;
-  };
-  updateText('[data-plaza-views]', updates.viewCount);
-  updateText('[data-plaza-comments]', updates.commentCount);
-  if (updates.likeCount != null) {
-    const likeTarget = card.querySelector('[data-plaza-likes]')
-      || card.querySelector('.plaza-like > span:last-child');
-    if (likeTarget) likeTarget.textContent = updates.likeCount;
-  }
-};`;
+const visibleCardUpdater = [
+  'const updateVisiblePlazaCard = (postId, updates) => {',
+  "  const card = [...app.querySelectorAll('[data-post]')].find(",
+  '    (item) => item.dataset.post === postId',
+  '  );',
+  '  if (!card) return;',
+  '  const updateText = (selector, value) => {',
+  '    const target = card.querySelector(selector);',
+  '    if (target && value != null) target.textContent = value;',
+  '  };',
+  "  updateText('[data-plaza-views]', updates.viewCount);",
+  "  updateText('[data-plaza-comments]', updates.commentCount);",
+  '  if (updates.likeCount != null) {',
+  "    const likeTarget = card.querySelector('[data-plaza-likes]')",
+  "      || card.querySelector('.plaza-like > span:last-child');",
+  '    if (likeTarget) likeTarget.textContent = updates.likeCount;',
+  '  }',
+  '};'
+].join('\n');
 
 const detailTemplate = (await readFile(templatePath, 'utf8')).trim();
 let app = await readFile(appPath, 'utf8');
@@ -90,7 +92,7 @@ if (!app.includes(marker)) {
   app = replaceOnce(
     app,
     'const clearUserViewCaches = () => {',
-    `${cacheHelpers.trim()}\n\nconst clearUserViewCaches = () => {`,
+    `${cacheHelpers}\n\nconst clearUserViewCaches = () => {`,
     '活动广场详情缓存辅助函数位置'
   );
   app = replaceOnce(
