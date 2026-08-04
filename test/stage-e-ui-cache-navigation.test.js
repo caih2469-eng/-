@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const appSource = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+const adminSource = fs.readFileSync(path.join(root, 'public', 'admin-client.js'), 'utf8');
 const styleSource = fs.readFileSync(path.join(root, 'public', 'style.css'), 'utf8');
 
 const sourceBetween = (start, end) => {
@@ -24,7 +25,7 @@ test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔�
   assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
   assert.match(appSource, /\]\.join\('\|'\);/);
   assert.match(appSource, /scopedCacheKey\('plaza', sort, page, month\)/);
-  assert.match(appSource, /scopedCacheKey\('admin-comments', page\)/);
+  assert.match(adminSource, /scopedCacheKey\('admin-comments', page\)/);
   const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
 });

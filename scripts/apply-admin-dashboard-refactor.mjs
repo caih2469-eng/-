@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { execFileSync } from 'node:child_process';
 
 const root = process.cwd();
 const appPath = path.join(root, 'public', 'app.js');
@@ -40,6 +41,10 @@ requireFile(adminTemplatePath, '后台减法重构模板');
 requireFile(flowTemplatePath, '学生与后台流程修复模板');
 
 let appSource = fs.readFileSync(appPath, 'utf8');
+if (!appSource.includes('async function admin(selectedDate, pageEpoch = beginNavigation()) {')) {
+  execFileSync(process.execPath, ['scripts/apply-lazy-admin-client.mjs', '--restore'], { stdio: 'pipe' });
+  appSource = fs.readFileSync(appPath, 'utf8');
+}
 
 if (!appSource.includes(adminMarker)) {
   const originalAdmin = 'async function admin(selectedDate, pageEpoch = beginNavigation()) {';

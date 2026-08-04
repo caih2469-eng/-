@@ -268,6 +268,7 @@ stageECacheTest = replaceNamedTest(
   stageECacheTest,
   '阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离',
   String.raw`test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
+  const adminSource = fs.readFileSync(path.join(root, 'public', 'admin-client.js'), 'utf8');
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 20_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
   assert.match(appSource, /const adminCommentViewCache = new Map\(\);/);
@@ -277,7 +278,7 @@ stageECacheTest = replaceNamedTest(
   assert.match(appSource, /\]\.join\('\|'\);/);
   assert.match(appSource, /scopedCacheKey\('plaza', safeSort, page, safeQuery\)/);
   assert.match(appSource, /q=\$\{encodeURIComponent\(safeQuery\)\}/);
-  assert.match(appSource, /scopedCacheKey\('admin-comments', page\)/);
+  assert.match(adminSource, /scopedCacheKey\('admin-comments', page\)/);
   const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
 });`,
@@ -313,4 +314,5 @@ if (!(await readFile(appPath, 'utf8')).includes(marker)
   throw new Error('活动广场移动端布局、并行上传或测试生成不完整');
 }
 
-process.stdout.write('Applied mobile plaza layout, search, masonry feed, paired upload and scoped assertions.\n');
+await import('./apply-lazy-admin-client.mjs');
+process.stdout.write('Applied mobile plaza layout, search, masonry feed, paired upload, scoped assertions and the lazy admin client.\n');
