@@ -11,12 +11,6 @@
     "R2_BUCKET_NAME": "jinshan20-test",
     "ALLOW_LOAD_TESTS": "false"
   },
-  "services": [
-    {
-      "binding": "PLAZA_SERVICE",
-      "service": "jinshan20-plaza-test"
-    }
-  ],
   "d1_databases": [
     {
       "binding": "DB",
