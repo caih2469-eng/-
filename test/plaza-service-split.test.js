@@ -62,12 +62,15 @@ test('服务未绑定时保留本地路由，读取失败可回退且写入失�
 });
 
 test('主Worker认证后只向内部服务传递最小用户字段', () => {
-  assert.match(mainWorkerSource, /id: user\.id/);
-  assert.match(mainWorkerSource, /role: user\.role/);
-  assert.match(mainWorkerSource, /trackId: user\.trackId/);
-  assert.match(mainWorkerSource, /status: user\.status/);
-  assert.doesNotMatch(mainWorkerSource, /plazaInternalUser[\s\S]*password/);
-  assert.doesNotMatch(mainWorkerSource, /plazaInternalUser[\s\S]*token/);
+  const userBlock = mainWorkerSource.slice(
+    mainWorkerSource.indexOf('const plazaInternalUser'),
+    mainWorkerSource.indexOf('const dispatchPlazaService')
+  );
+  assert.match(userBlock, /id: user\.id/);
+  assert.match(userBlock, /role: user\.role/);
+  assert.match(userBlock, /trackId: user\.trackId/);
+  assert.match(userBlock, /status: user\.status/);
+  assert.doesNotMatch(userBlock, /password|token|cookie|authorization/i);
   assert.match(mainWorkerSource, /headers\.delete\(PLAZA_USER_HEADER\)/);
 });
 
