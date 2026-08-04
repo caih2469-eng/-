@@ -13,7 +13,6 @@ const plazaRouteSource = read('cloudflare/routes/plaza.js');
 const childWorkerSource = read('cloudflare/plaza-worker.js');
 const generatorSource = read('scripts/apply-plaza-service-split.mjs');
 const buildHookSource = read('scripts/apply-approved-plaza-prefetch.mjs');
-const workflowSource = read('.github/workflows/plaza-service.yml');
 
 test('广场业务具备独立Worker入口且不直接暴露内部写接口', async () => {
   assert.match(childWorkerSource, /handlePlazaRoutes\(request, env, ctx, url, user\)/);
@@ -91,24 +90,13 @@ test('独立服务复用原D1并跳过用户请求热路径中的运行时建表
   assert.equal(productionConfig.d1_databases[0].database_id, '1734a812-afc8-4c49-a1f1-f776c4b7ae69');
 });
 
-test('当前阶段只部署子服务，Pages绑定留到部署成功后的独立切换', () => {
+test('当前阶段只准备子服务，Pages绑定留到部署成功后的独立切换', () => {
   const testPages = parseJson('cloudflare/pages-test/wrangler.jsonc');
   const productionPages = parseJson('cloudflare/pages-production/wrangler.jsonc');
   assert.equal(testPages.services, undefined);
   assert.equal(productionPages.services, undefined);
   assert.match(buildHookSource, /apply-plaza-service-split\.mjs/);
   assert.match(generatorSource, /PLAZA_SERVICE_BINDING_V1/);
-});
-
-test('独立工作流先验证再部署，PR阶段不切换生产流量', () => {
-  assert.match(workflowSource, /name: Plaza service validation and deployment/);
-  assert.match(workflowSource, /pull_request:/);
-  assert.match(workflowSource, /permissions:\s+contents: read/);
-  assert.doesNotMatch(workflowSource, /permissions:\s+contents: write/);
-  assert.match(workflowSource, /node --test test\/plaza-service-split\.test\.js/);
-  assert.match(workflowSource, /command: deploy --config wrangler\.production\.jsonc/);
-  assert.match(workflowSource, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(workflowSource, /pull_request[\s\S]*command: deploy --config wrangler\.production\.jsonc[\s\S]*github\.event_name == 'pull_request'/);
 });
 
 test('广场服务拆分生成器可重复执行', () => {
