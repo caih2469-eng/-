@@ -90,11 +90,17 @@ test('独立服务复用原D1并跳过用户请求热路径中的运行时建表
   assert.equal(productionConfig.d1_databases[0].database_id, '1734a812-afc8-4c49-a1f1-f776c4b7ae69');
 });
 
-test('当前阶段只准备子服务，Pages绑定留到部署成功后的独立切换', () => {
+test('部署成功后Pages分别绑定测试与生产广场服务', () => {
   const testPages = parseJson('cloudflare/pages-test/wrangler.jsonc');
   const productionPages = parseJson('cloudflare/pages-production/wrangler.jsonc');
-  assert.equal(testPages.services, undefined);
-  assert.equal(productionPages.services, undefined);
+  assert.deepEqual(testPages.services, [{
+    binding: 'PLAZA_SERVICE',
+    service: 'jinshan20-plaza-test'
+  }]);
+  assert.deepEqual(productionPages.services, [{
+    binding: 'PLAZA_SERVICE',
+    service: 'jinshan20-plaza'
+  }]);
   assert.match(buildHookSource, /apply-plaza-service-split\.mjs/);
   assert.match(generatorSource, /PLAZA_SERVICE_BINDING_V1/);
 });
