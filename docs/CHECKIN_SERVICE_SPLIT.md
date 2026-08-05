@@ -40,7 +40,12 @@
 
 密钥值不得写入仓库、日志、PR描述或聊天。无法读取旧密钥时，应同时轮换同一环境中的Pages和Worker密钥；生产和测试可以使用不同值。
 
-健康检查仅返回 `mediaSigning: true/false`，不会返回密钥内容。缺少D1、R2或媒体签名密钥时，健康检查返回503并阻止生产验收。
+验收时主Worker生成一次随机挑战，子Worker使用自身密钥计算不可逆HMAC，主Worker再使用Pages密钥校验。证明值仅通过内部Service Binding传递，并在返回公网前删除。公网健康结果只显示：
+
+- `mediaSigning: true`：子Worker存在密钥；
+- `mediaSigningAligned: true`：Pages与子Worker密钥值一致。
+
+缺少D1、R2、媒体签名密钥或两边密钥不一致时，健康检查返回503并阻止生产验收。
 
 ## 第二阶段：切换Service Binding
 
@@ -62,6 +67,7 @@
 - `x-jinshan-service-version: checkin-v1`
 - `ok: true`
 - `mediaSigning: true`
+- `mediaSigningAligned: true`
 
 验证成功后发布提交状态 `checkin-binding/production-smoke`。
 
