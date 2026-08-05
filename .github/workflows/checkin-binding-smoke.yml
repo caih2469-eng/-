@@ -59,7 +59,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify public traffic reaches ready checkin-v1
+      - name: Verify public traffic reaches aligned checkin-v1
         shell: bash
         run: |
           set -euo pipefail
@@ -79,8 +79,9 @@ jobs:
               if grep -Eqi '^x-jinshan-service:[[:space:]]*checkin[[:space:]]*$' "$headers" \
                 && grep -Eqi '^x-jinshan-service-version:[[:space:]]*checkin-v1[[:space:]]*$' "$headers" \
                 && grep -Fq '"ok":true' "$body" \
-                && grep -Fq '"mediaSigning":true' "$body"; then
-                echo 'Production check-in Service Binding and media signing verified.'
+                && grep -Fq '"mediaSigning":true' "$body" \
+                && grep -Fq '"mediaSigningAligned":true' "$body"; then
+                echo 'Production check-in Service Binding and signing alignment verified.'
                 cat "$headers"
                 cat "$body"
                 exit 0
@@ -89,7 +90,7 @@ jobs:
             echo "Waiting for check-in binding propagation ($attempt/30)..."
             sleep 4
           done
-          echo 'Production endpoint did not return a ready checkin-v1 service.'
+          echo 'Production endpoint did not return an aligned checkin-v1 service.'
           echo 'Last response headers:'
           cat "$headers"
           echo 'Last response body:'
@@ -107,7 +108,7 @@ jobs:
           set -euo pipefail
           if [ "$FINAL_JOB_STATUS" = 'success' ]; then
             state='success'
-            description='Production traffic is served by ready checkin-v1'
+            description='Production traffic is served by aligned checkin-v1'
           else
             state='failure'
             description='Production check-in Service Binding verification failed'
