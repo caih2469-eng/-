@@ -10,6 +10,10 @@ const replaceOnce = (source, search, replacement, label) => {
   return next;
 };
 
+const replaceIfPresent = (source, search, replacement) => (
+  source.includes(search) ? source.replace(search, replacement) : source
+);
+
 const patchPlazaPage = (source, label) => {
   if (source.includes(marker)) return source;
   let next = source;
@@ -59,6 +63,12 @@ const patchPlazaPage = (source, label) => {
     `    if (cacheIsFresh(cached)) {\n      setTimeout(() => { void refresh(); }, 3200);\n    } else void refresh();`,
     `${label}缓存后台刷新让出首屏带宽`
   );
+  next = replaceOnce(
+    next,
+    `  const result = await api(path);\n  writeViewCache(plazaViewCache, cacheKey, result);\n  renderPlazaPage(result, safeSort, page, '', pageEpoch, { query: safeQuery });`,
+    `  const bootstrapResult = safeSort === 'latest' && page === 1 && !safeQuery\n    ? await Promise.resolve(window.__BOOTSTRAP_PLAZA_PROMISE__).catch(() => null)\n    : null;\n  const result = bootstrapResult || await api(path);\n  writeViewCache(plazaViewCache, cacheKey, result);\n  renderPlazaPage(result, safeSort, page, '', pageEpoch, { query: safeQuery });`,
+    `${label}启动预取结果复用`
+  );
   return next;
 };
 
@@ -105,37 +115,74 @@ const patchAppRuntime = (source) => {
     `  prepareDynamicContent(root);\n  root.querySelector('#closePost').onclick = closePost;\n  post.images.slice(0, 2).forEach((image, imageIndex) => {\n    const displayUrl = buildMediaUrl(image.displayUrl || image.imageUrl || image.thumbUrl);\n    if (!displayUrl) return;\n    const preload = new Image();\n    preload.decoding = 'async';\n    preload.fetchPriority = imageIndex === 0 ? 'high' : 'low';\n    preload.src = displayUrl;\n  });\n  recordPerf('plaza-detail-visible', {`,
     '详情高清图片预热'
   );
-  next = replaceOnce(
-    next,
-    `      const firstImage = result.posts?.[0]?.images?.[0];\n      const firstUrl = firstImage?.thumbUrl || firstImage?.imageUrl || '';\n      if (firstUrl) {\n        void fetch(buildMediaUrl(firstUrl), {\n          credentials: 'same-origin',\n          cache: 'force-cache',\n          priority: 'low'\n        }).catch(() => null);\n      }`,
-    `      const preloadImages = (result.posts || []).slice(0, 4)\n        .map((post) => post.images?.[0])\n        .filter(Boolean);\n      preloadImages.forEach((image, index) => {\n        const thumbUrl = buildMediaUrl(image.thumbUrl || image.imageUrl || image.displayUrl);\n        const displayUrl = buildMediaUrl(image.displayUrl || image.imageUrl || image.thumbUrl);\n        if (!thumbUrl) return;\n        const preload = new Image();\n        preload.decoding = 'async';\n        preload.fetchPriority = index < 2 ? 'high' : 'auto';\n        preload.sizes = '(max-width: 720px) calc(50vw - 18px), 360px';\n        if (displayUrl && displayUrl !== thumbUrl) preload.srcset = \`${'${'}thumbUrl} 960w, ${'${'}displayUrl} 2048w\`;\n        preload.src = thumbUrl;\n      });`,
-    '学生首页活动广场首屏图片预取'
-  );
-  next = replaceOnce(
+
+  const oldPrefetchBlock = `      const firstImage = result.posts?.[0]?.images?.[0];\n      const firstUrl = firstImage?.thumbUrl || firstImage?.imageUrl || '';\n      if (firstUrl) {\n        void fetch(buildMediaUrl(firstUrl), {\n          credentials: 'same-origin',\n          cache: 'force-cache',\n          priority: 'low'\n        }).catch(() => null);\n      }`;
+  const upgradedPrefetchBlock = `      const preloadImages = (result.posts || []).slice(0, 4)\n        .map((post) => post.images?.[0])\n        .filter(Boolean);\n      preloadImages.forEach((image, index) => {\n        const thumbUrl = buildMediaUrl(image.thumbUrl || image.imageUrl || image.displayUrl);\n        const displayUrl = buildMediaUrl(image.displayUrl || image.imageUrl || image.thumbUrl);\n        if (!thumbUrl) return;\n        const preload = new Image();\n        preload.decoding = 'async';\n        preload.fetchPriority = index < 2 ? 'high' : 'auto';\n        preload.sizes = '(max-width: 720px) calc(50vw - 18px), 360px';\n        if (displayUrl && displayUrl !== thumbUrl) preload.srcset = \`${'${'}thumbUrl} 960w, ${'${'}displayUrl} 2048w\`;\n        preload.src = thumbUrl;\n      });`;
+  next = replaceIfPresent(next, oldPrefetchBlock, upgradedPrefetchBlock);
+  next = replaceIfPresent(
     next,
     '        hasFirstImage: Boolean(firstUrl),',
-    '        hasFirstImage: Boolean(preloadImages.length),',
-    '活动广场预取指标'
+    '        hasFirstImage: Boolean(preloadImages.length),'
   );
   return next;
 };
 
+const standaloneBootstrapPrefetch = [
+  `      ${marker}`,
+  "      window.__BOOTSTRAP_PLAZA_PROMISE__ = window.__BOOTSTRAP_USER__?.role === 'student'",
+  "        ? fetch('/api/plaza?sort=latest&page=1&limit=20', {",
+  "            credentials: 'same-origin',",
+  "            headers: storedToken ? { authorization: `Bearer ${storedToken}` } : {}",
+  '          })',
+  '          .then(async (plazaResponse) => {',
+  '            if (!plazaResponse.ok) return null;',
+  '            const result = await plazaResponse.json();',
+  '            const preloadImages = (result.posts || []).slice(0, 4)',
+  '              .map((post) => post.images?.[0])',
+  '              .filter(Boolean)',
+  '              .map((image, index) => {',
+  '                const thumbUrl = new URL(image.thumbUrl || image.imageUrl || image.displayUrl, location.origin).href;',
+  '                const displayUrl = new URL(image.displayUrl || image.imageUrl || image.thumbUrl, location.origin).href;',
+  '                const preload = new Image();',
+  "                preload.decoding = 'async';",
+  "                preload.fetchPriority = index < 2 ? 'high' : 'auto';",
+  "                preload.sizes = '(max-width: 720px) calc(50vw - 18px), 360px';",
+  '                if (displayUrl !== thumbUrl) preload.srcset = `${thumbUrl} 960w, ${displayUrl} 2048w`;',
+  '                preload.src = thumbUrl;',
+  '                return preload;',
+  '              });',
+  '            window.__BOOTSTRAP_PLAZA_IMAGES__ = preloadImages;',
+  '            return result;',
+  '          })',
+  '          .catch(() => null)',
+  '        : Promise.resolve(null);'
+].join('\n');
+
 const patchBootstrap = (source) => {
   if (source.includes(marker)) return source;
   let next = source;
-  next = replaceOnce(
+  const oldApprovedBlock = `            const firstImage = result.posts?.[0]?.images?.[0];\n            const firstUrl = firstImage?.thumbUrl || firstImage?.imageUrl || '';\n            if (firstUrl) {\n              const preload = new Image();\n              preload.decoding = 'async';\n              preload.fetchPriority = 'low';\n              preload.src = new URL(firstUrl, location.origin).href;\n              window.__BOOTSTRAP_PLAZA_IMAGE__ = preload;\n            }`;
+  if (next.includes('/* APPROVED_BOOTSTRAP_PLAZA_PREFETCH_V1 */') && next.includes(oldApprovedBlock)) {
+    next = replaceOnce(
+      next,
+      '/* APPROVED_BOOTSTRAP_PLAZA_PREFETCH_V1 */',
+      `/* APPROVED_BOOTSTRAP_PLAZA_PREFETCH_V1 */\n      ${marker}`,
+      '启动预取性能标记'
+    );
+    next = replaceOnce(
+      next,
+      oldApprovedBlock,
+      `            const preloadImages = (result.posts || []).slice(0, 4)\n              .map((post) => post.images?.[0])\n              .filter(Boolean)\n              .map((image, index) => {\n                const thumbUrl = new URL(image.thumbUrl || image.imageUrl || image.displayUrl, location.origin).href;\n                const displayUrl = new URL(image.displayUrl || image.imageUrl || image.thumbUrl, location.origin).href;\n                const preload = new Image();\n                preload.decoding = 'async';\n                preload.fetchPriority = index < 2 ? 'high' : 'auto';\n                preload.sizes = '(max-width: 720px) calc(50vw - 18px), 360px';\n                if (displayUrl !== thumbUrl) preload.srcset = \`${'${'}thumbUrl} 960w, ${'${'}displayUrl} 2048w\`;\n                preload.src = thumbUrl;\n                return preload;\n              });\n            window.__BOOTSTRAP_PLAZA_IMAGES__ = preloadImages;`,
+      '启动阶段四张广场首图预取'
+    );
+    return next;
+  }
+  return replaceOnce(
     next,
-    '/* APPROVED_BOOTSTRAP_PLAZA_PREFETCH_V1 */',
-    `/* APPROVED_BOOTSTRAP_PLAZA_PREFETCH_V1 */\n      ${marker}`,
-    '启动预取性能标记'
+    '      window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;\n',
+    `      window.__BOOTSTRAP_DASHBOARD__ = session.dashboard || null;\n${standaloneBootstrapPrefetch}\n`,
+    '独立启动阶段广场预取位置'
   );
-  next = replaceOnce(
-    next,
-    `            const firstImage = result.posts?.[0]?.images?.[0];\n            const firstUrl = firstImage?.thumbUrl || firstImage?.imageUrl || '';\n            if (firstUrl) {\n              const preload = new Image();\n              preload.decoding = 'async';\n              preload.fetchPriority = 'low';\n              preload.src = new URL(firstUrl, location.origin).href;\n              window.__BOOTSTRAP_PLAZA_IMAGE__ = preload;\n            }`,
-    `            const preloadImages = (result.posts || []).slice(0, 4)\n              .map((post) => post.images?.[0])\n              .filter(Boolean)\n              .map((image, index) => {\n                const thumbUrl = new URL(image.thumbUrl || image.imageUrl || image.displayUrl, location.origin).href;\n                const displayUrl = new URL(image.displayUrl || image.imageUrl || image.thumbUrl, location.origin).href;\n                const preload = new Image();\n                preload.decoding = 'async';\n                preload.fetchPriority = index < 2 ? 'high' : 'auto';\n                preload.sizes = '(max-width: 720px) calc(50vw - 18px), 360px';\n                if (displayUrl !== thumbUrl) preload.srcset = \`${'${'}thumbUrl} 960w, ${'${'}displayUrl} 2048w\`;\n                preload.src = thumbUrl;\n                return preload;\n              });\n            window.__BOOTSTRAP_PLAZA_IMAGES__ = preloadImages;`,
-    '启动阶段四张广场首图预取'
-  );
-  return next;
 };
 
 const appPath = path.join(root, 'public/app.js');
@@ -157,7 +204,7 @@ if (!app.includes(marker)
     || !app.includes('2048w')
     || !app.includes('scheduleVisiblePlazaDetailWarmup();')
     || !app.includes('setTimeout(() => { void refresh(); }, 3200)')
-    || !app.includes('preloadImages.length')
+    || !app.includes('__BOOTSTRAP_PLAZA_PROMISE__')
     || !bootstrap.includes('__BOOTSTRAP_PLAZA_IMAGES__')) {
   throw new Error('活动广场性能与画质V3生成不完整');
 }
