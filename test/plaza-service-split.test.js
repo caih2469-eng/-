@@ -93,14 +93,18 @@ test('独立服务复用原D1并跳过用户请求热路径中的运行时建表
 test('部署成功后Pages分别绑定测试与生产广场服务', () => {
   const testPages = parseJson('cloudflare/pages-test/wrangler.jsonc');
   const productionPages = parseJson('cloudflare/pages-production/wrangler.jsonc');
-  assert.deepEqual(testPages.services, [{
+  const testBinding = (testPages.services || []).find((item) => item.binding === 'PLAZA_SERVICE');
+  const productionBinding = (productionPages.services || []).find((item) => item.binding === 'PLAZA_SERVICE');
+  assert.deepEqual(testBinding, {
     binding: 'PLAZA_SERVICE',
     service: 'jinshan20-plaza-test'
-  }]);
-  assert.deepEqual(productionPages.services, [{
+  });
+  assert.deepEqual(productionBinding, {
     binding: 'PLAZA_SERVICE',
     service: 'jinshan20-plaza'
-  }]);
+  });
+  assert.equal((testPages.services || []).filter((item) => item.binding === 'PLAZA_SERVICE').length, 1);
+  assert.equal((productionPages.services || []).filter((item) => item.binding === 'PLAZA_SERVICE').length, 1);
   assert.match(buildHookSource, /apply-plaza-service-split\.mjs/);
   assert.match(generatorSource, /PLAZA_SERVICE_BINDING_V1/);
 });
