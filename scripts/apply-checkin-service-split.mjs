@@ -42,6 +42,7 @@ const workerHelpers = [
   "const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';",
   "const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';",
   "const CHECKIN_PROOF_CHALLENGE_HEADER = 'x-jinshan-checkin-proof-challenge';",
+  "const CHECKIN_PROOF_HEADER = 'x-jinshan-checkin-proof';",
   "const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';",
   'const isCheckinServiceRoute = (pathname) => pathname === CHECKIN_HEALTH_PATH',
   "  || pathname === '/api/checkins'",
@@ -53,23 +54,29 @@ const workerHelpers = [
   '  trackId: user.trackId,',
   '  status: user.status',
   '}));',
-  'const verifiedCheckinHealthResponse = async (response, env, challenge) => {',
+  'const normalizedCheckinHealthResponse = async (response) => {',
   '  const headers = new Headers(response.headers);',
   "  headers.set('content-type', 'application/json; charset=utf-8');",
   "  headers.delete('content-length');",
   '  let body = {};',
   '  try { body = await response.json(); } catch {}',
-  '  const suppliedProof = String(body.mediaSigningProof || \"\");',
   '  delete body.mediaSigningProof;',
-  '  let mediaSigningAligned = false;',
-  '  try {',
-  '    mediaSigningAligned = await verifyMediaSigningAlignmentProof(env, challenge, suppliedProof);',
-  '  } catch {}',
-  '  const ready = Boolean(response.ok && body.ok && mediaSigningAligned);',
-  '  return new Response(JSON.stringify({ ...body, ok: ready, mediaSigningAligned }), {',
+  '  const ready = Boolean(response.ok && body.ok && body.mediaSigningAligned === true);',
+  '  return new Response(JSON.stringify({ ...body, ok: ready, mediaSigningAligned: ready }), {',
   '    status: ready ? 200 : 503,',
   '    headers',
   '  });',
+  '};',
+  'const isSafeCheckinLocalFallback = async (response) => {',
+  "  if (response.headers.get('x-jinshan-checkin-alignment') === 'failed') return true;",
+  '  if (response.status !== 503) return false;',
+  '  try {',
+  '    const body = await response.clone().json();',
+  "    return body?.error === '打卡服务媒体签名尚未对齐'",
+  "      || body?.error === '打卡服务尚未完成媒体签名配置';",
+  '  } catch {',
+  '    return false;',
+  '  }',
   '};',
   'const dispatchCheckinService = async (request, env, ctx, url) => {',
   '  if (!env.CHECKIN_SERVICE || !isCheckinServiceRoute(url.pathname)) return null;',
@@ -84,15 +91,26 @@ const workerHelpers = [
   '  headers.delete(CHECKIN_USER_HEADER);',
   '  headers.delete(CHECKIN_SERVICE_HEADER);',
   '  headers.delete(CHECKIN_PROOF_CHALLENGE_HEADER);',
+  '  headers.delete(CHECKIN_PROOF_HEADER);',
   "  headers.set(CHECKIN_SERVICE_HEADER, 'checkin-v1');",
-  '  const challenge = isHealth ? crypto.randomUUID() : null;',
-  '  if (challenge) headers.set(CHECKIN_PROOF_CHALLENGE_HEADER, challenge);',
+  '  let challenge;',
+  '  let proof;',
+  '  try {',
+  '    challenge = crypto.randomUUID();',
+  '    proof = await createMediaSigningAlignmentProof(env, challenge);',
+  '  } catch {',
+  '    return null;',
+  '  }',
+  '  headers.set(CHECKIN_PROOF_CHALLENGE_HEADER, challenge);',
+  '  headers.set(CHECKIN_PROOF_HEADER, proof);',
   '  if (user) headers.set(CHECKIN_USER_HEADER, checkinInternalUser(user));',
   '  const serviceRequest = new Request(request.clone(), { headers });',
   '  try {',
   '    const response = await env.CHECKIN_SERVICE.fetch(serviceRequest);',
-  '    return isHealth ? await verifiedCheckinHealthResponse(response, env, challenge) : response;',
-  '  } catch (error) {',
+  '    if (isHealth) return await normalizedCheckinHealthResponse(response);',
+  '    if (await isSafeCheckinLocalFallback(response)) return null;',
+  '    return response;',
+  '  } catch {',
   "    if (request.method === 'GET' || request.method === 'HEAD') return null;",
   "    return json({ error: '打卡服务暂时不可用，请稍后重试' }, 503, {",
   "      'x-jinshan-service-error': 'checkin-binding'",
@@ -103,13 +121,25 @@ const workerHelpers = [
 ].join('\n');
 
 let worker = fs.readFileSync(workerPath, 'utf8');
-if (!worker.includes(workerMarker)) {
+const newSigningImport = "import { createMediaSigningAlignmentProof } from './lib/media-signing.js';";
+const oldSigningImport = "import { verifyMediaSigningAlignmentProof } from './lib/media-signing.js';";
+if (worker.includes(oldSigningImport)) {
+  worker = worker.replace(oldSigningImport, newSigningImport);
+} else if (!worker.includes(newSigningImport)) {
   worker = replaceOnce(
     worker,
     "import { handleStudentRoutes } from './routes/student.js';",
-    "import { verifyMediaSigningAlignmentProof } from './lib/media-signing.js';\nimport { handleStudentRoutes } from './routes/student.js';",
-    '主Worker媒体签名校验导入位置'
+    `${newSigningImport}\nimport { handleStudentRoutes } from './routes/student.js';`,
+    '主Worker媒体签名证明导入位置'
   );
+}
+
+if (worker.includes(workerMarker)) {
+  const blockStart = worker.indexOf(workerMarker);
+  const blockEnd = worker.indexOf('const routeRequest = async (request, env, ctx) => {', blockStart);
+  if (blockStart < 0 || blockEnd < 0) throw new Error('未找到现有打卡服务块边界');
+  worker = `${worker.slice(0, blockStart)}${workerHelpers}${worker.slice(blockEnd)}`;
+} else {
   worker = replaceOnce(
     worker,
     'const routeRequest = async (request, env, ctx) => {',
@@ -122,20 +152,21 @@ if (!worker.includes(workerMarker)) {
     `      const checkinService = await dispatchCheckinService(request, env, ctx, url);\n      if (checkinService) return checkinService;\n\n      const student = await handleStudentRoutes(request, env, ctx, url);`,
     '打卡服务转发位置'
   );
-  fs.writeFileSync(workerPath, worker, 'utf8');
 }
+fs.writeFileSync(workerPath, worker, 'utf8');
 
 route = fs.readFileSync(routePath, 'utf8');
 worker = fs.readFileSync(workerPath, 'utf8');
 if (!route.includes(routeMarker)
     || !route.includes('authenticatedUser = null')
     || !worker.includes(workerMarker)
-    || !worker.includes('verifyMediaSigningAlignmentProof')
+    || !worker.includes('createMediaSigningAlignmentProof')
     || !worker.includes("CHECKIN_HEALTH_PATH = '/api/checkin-service-health'")
-    || !worker.includes('mediaSigningAligned')
+    || !worker.includes('CHECKIN_PROOF_HEADER')
+    || !worker.includes('isSafeCheckinLocalFallback')
     || !worker.includes('env.CHECKIN_SERVICE.fetch(serviceRequest)')
     || !worker.includes("request.method === 'GET' || request.method === 'HEAD'")) {
   throw new Error('打卡独立服务生成不完整');
 }
 
-console.log('Applied check-in service binding with safe local fallback and signing alignment proof.');
+console.log('Applied check-in service binding with safe local fallback and per-request signing proof.');
