@@ -37,46 +37,61 @@ test('independent check-in Worker rejects public access and unrelated routes', a
   assert.equal(unrelated.status, 404);
 });
 
-test('internal service health probe returns an internal one-time signing proof', async () => {
+test('internal service requires a matching media signing proof without exposing it', async () => {
   const childWorker = (await import(`../cloudflare/checkin-worker.js?health=${Date.now()}`)).default;
-  const internalHeaders = {
-    'x-jinshan-internal-service': 'checkin-v1',
-    'x-jinshan-checkin-proof-challenge': proofChallenge
-  };
   const missing = await childWorker.fetch(
-    new Request('https://internal.test/api/checkin-service-health', { headers: internalHeaders }),
+    new Request('https://internal.test/api/checkin-service-health', {
+      headers: {
+        'x-jinshan-internal-service': 'checkin-v1',
+        'x-jinshan-checkin-proof-challenge': proofChallenge,
+        'x-jinshan-checkin-proof': 'invalid-proof'
+      }
+    }),
     { ENVIRONMENT: 'test', DB: {}, UPLOADS: {} },
     { waitUntil() {} }
   );
   assert.equal(missing.status, 503);
   assert.deepEqual(await missing.json(), {
     ok: false,
+    error: '打卡服务媒体签名尚未对齐',
     service: 'checkin',
     version: 'checkin-v1',
     environment: 'test',
     database: true,
     storage: true,
     mediaSigning: false,
-    mediaSigningProof: null
+    mediaSigningAligned: false
   });
 
+  const secret = 'test-secret';
+  const proof = await createMediaSigningAlignmentProof(
+    { MEDIA_SIGNING_SECRET: secret },
+    proofChallenge
+  );
   const ready = await childWorker.fetch(
-    new Request('https://internal.test/api/checkin-service-health', { headers: internalHeaders }),
-    { ENVIRONMENT: 'test', DB: {}, UPLOADS: {}, MEDIA_SIGNING_SECRET: 'test-secret' },
+    new Request('https://internal.test/api/checkin-service-health', {
+      headers: {
+        'x-jinshan-internal-service': 'checkin-v1',
+        'x-jinshan-checkin-proof-challenge': proofChallenge,
+        'x-jinshan-checkin-proof': proof
+      }
+    }),
+    { ENVIRONMENT: 'test', DB: {}, UPLOADS: {}, MEDIA_SIGNING_SECRET: secret },
     { waitUntil() {} }
   );
   assert.equal(ready.status, 200);
   assert.equal(ready.headers.get('x-jinshan-service'), 'checkin');
   assert.equal(ready.headers.get('x-jinshan-service-version'), 'checkin-v1');
-  const body = await ready.json();
-  assert.equal(body.ok, true);
-  assert.equal(body.mediaSigning, true);
-  assert.equal(typeof body.mediaSigningProof, 'string');
-  assert.ok(body.mediaSigningProof.length >= 40);
-  assert.equal(body.mediaSigningProof, await createMediaSigningAlignmentProof(
-    { MEDIA_SIGNING_SECRET: 'test-secret' },
-    proofChallenge
-  ));
+  assert.deepEqual(await ready.json(), {
+    ok: true,
+    service: 'checkin',
+    version: 'checkin-v1',
+    environment: 'test',
+    database: true,
+    storage: true,
+    mediaSigning: true,
+    mediaSigningAligned: true
+  });
 });
 
 test('main Worker verifies matching signing secrets and hides the proof from public output', async () => {
@@ -171,16 +186,23 @@ test('internal check-in request reuses the existing route contract', async () =>
     async first() { return null; },
     async run() { return { meta: { changes: 0 } }; }
   };
+  const secret = 'test-secret';
+  const proof = await createMediaSigningAlignmentProof(
+    { MEDIA_SIGNING_SECRET: secret },
+    proofChallenge
+  );
   const response = await childWorker.fetch(
     new Request('https://internal.test/api/checkins?date=2026-08-05', {
       headers: {
         'x-jinshan-internal-service': 'checkin-v1',
+        'x-jinshan-checkin-proof-challenge': proofChallenge,
+        'x-jinshan-checkin-proof': proof,
         'x-jinshan-checkin-user': encodeURIComponent(JSON.stringify({
           id: 'user-1', role: 'student', trackId: 'health', status: 'active'
         }))
       }
     }),
-    { DB: { prepare() { return statement; } }, ENVIRONMENT: 'test', MEDIA_SIGNING_SECRET: 'test-secret' },
+    { DB: { prepare() { return statement; } }, ENVIRONMENT: 'test', MEDIA_SIGNING_SECRET: secret },
     { waitUntil() {} }
   );
   assert.equal(response.status, 200);
