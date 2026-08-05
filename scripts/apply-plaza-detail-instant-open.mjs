@@ -24,18 +24,29 @@ if (!app.includes(marker)) {
     '  return null;',
     '};',
     'const warmVisiblePlazaDetails = () => {',
-    "  if (document.body.dataset.view !== 'plaza') return;",
+    "  if (document.body.dataset.view !== 'plaza') return false;",
     '  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};',
-    "  if (connection.saveData || /(^|-)2g$/.test(connection.effectiveType || '')) return;",
+    "  if (connection.saveData || /(^|-)2g$/.test(connection.effectiveType || '')) return true;",
     "  const postIds = [...document.querySelectorAll('[data-post]')]",
     '    .slice(0, 4)',
     '    .map((card) => card.dataset.post)',
     '    .filter(Boolean);',
+    '  if (!postIds.length) return false;',
     '  const run = () => postIds.forEach((postId, index) => {',
     '    setTimeout(() => { void loadPlazaPost(postId).catch(() => null); }, index * 90);',
     '  });',
     "  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 900 });",
     '  else setTimeout(run, 120);',
+    '  return true;',
+    '};',
+    'const scheduleVisiblePlazaDetailWarmup = () => {',
+    '  let attempt = 0;',
+    '  const probe = () => {',
+    '    attempt += 1;',
+    '    if (warmVisiblePlazaDetails() || attempt >= 10) return;',
+    '    setTimeout(probe, 120);',
+    '  };',
+    '  setTimeout(probe, 0);',
     '};',
     'const installPlazaDetailIntentPrefetch = () => {',
     "  if (document.documentElement.dataset.plazaDetailPrefetch === 'v2') return;",
@@ -49,6 +60,9 @@ if (!app.includes(marker)) {
     "  document.addEventListener('pointerdown', prefetch, { passive: true, capture: true });",
     "  document.addEventListener('pointerover', prefetch, { passive: true });",
     "  document.addEventListener('focusin', prefetch);",
+    "  document.addEventListener('click', (event) => {",
+    "    if (event.target?.closest?.('#plaza')) scheduleVisiblePlazaDetailWarmup();",
+    '  }, { capture: true });',
     '};',
     'installPlazaDetailIntentPrefetch();',
     ''
@@ -96,13 +110,6 @@ if (!app.includes(marker)) {
     '活动广场详情显示后加载评论'
   );
 
-  app = replaceOnce(
-    app,
-    '  prepareDynamicContent(app);\n  requestAnimationFrame(rebalancePlazaColumns);',
-    '  prepareDynamicContent(app);\n  requestAnimationFrame(() => { rebalancePlazaColumns(); warmVisiblePlazaDetails(); });',
-    '活动广场首屏详情空闲预取'
-  );
-
   fs.writeFileSync(appPath, app, 'utf8');
 }
 
@@ -141,6 +148,7 @@ if (!app.includes(marker)
     || !app.includes('readPlazaPostPreview')
     || !app.includes("recordPerf('plaza-detail-preview-visible'")
     || !app.includes('warmVisiblePlazaDetails')
+    || !app.includes('scheduleVisiblePlazaDetailWarmup')
     || !app.includes("document.addEventListener('pointerdown', prefetch")
     || !app.includes("imageIndex === 0 ? 'src' : 'data-src'")
     || !route.includes(marker)
