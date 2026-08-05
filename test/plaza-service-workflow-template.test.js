@@ -16,7 +16,21 @@ test('广场服务工作流先验证再部署，仓库内容只读且仅允许�
   assert.match(workflow, /^  deploy-test:/m);
   assert.match(workflow, /^  deploy-production:/m);
   assert.match(workflow, /needs: validate/);
-  assert.match(workflow, /node --test test\/plaza-service-split\.test\.js/);
+  assert.match(workflow, /node --test test\/plaza-detail-fast-path\.test\.js test\/plaza-detail-instant-open\.test\.js test\/plaza-service-split\.test\.js/);
+});
+
+test('详情优化生成器在独立广场Worker验证与部署前执行', () => {
+  assert.match(workflow, /'scripts\/apply-plaza-detail-fast-path\.mjs'/);
+  assert.match(workflow, /'scripts\/apply-plaza-detail-instant-open\.mjs'/);
+  assert.match(workflow, /'templates\/plaza-detail-fast-path\.txt'/);
+  const validateBlock = workflow.slice(workflow.indexOf('  validate:'), workflow.indexOf('  deploy-test:'));
+  const detailIndex = validateBlock.indexOf('node scripts/apply-plaza-detail-fast-path.mjs');
+  const serviceIndex = validateBlock.indexOf('node scripts/apply-plaza-service-split.mjs');
+  assert.ok(detailIndex >= 0, '验证任务缺少详情优化生成器');
+  assert.ok(serviceIndex > detailIndex, '详情优化必须先于服务拆分生成器执行');
+  const productionBlock = workflow.slice(workflow.indexOf('  deploy-production:'), workflow.indexOf('  publish-production-status:'));
+  assert.ok(productionBlock.indexOf('node scripts/apply-plaza-detail-fast-path.mjs') >= 0);
+  assert.ok(productionBlock.indexOf('node scripts/apply-plaza-service-split.mjs') > productionBlock.indexOf('node scripts/apply-plaza-detail-fast-path.mjs'));
 });
 
 test('生产部署只允许main推送或main上的手动生产执行', () => {
