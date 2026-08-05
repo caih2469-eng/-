@@ -16,7 +16,7 @@ const sourceBetween = (start, end) => {
   return appSource.slice(startIndex, endIndex);
 };
 
-test('阶段E：广场、排行和评论管理缓存仅存于页面内存并按用户隔离', () => {
+test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 60_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
   assert.match(appSource, /const rankingViewCache = new Map\(\);/);
@@ -25,6 +25,7 @@ test('阶段E：广场、排行和评论管理缓存仅存于页面内存并按�
   assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
   assert.match(appSource, /\]\.join\('\|'\);/);
   assert.match(appSource, /scopedCacheKey\('plaza', safeSort, page, safeQuery\)/);
+  assert.match(appSource, /q=\$\{encodeURIComponent\(safeQuery\)\}/);
   assert.match(adminSource, /scopedCacheKey\('admin-comments', page\)/);
   const cacheBlock = sourceBetween('const VIEW_CACHE_TTL_MS', 'const clearUserViewCaches');
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
