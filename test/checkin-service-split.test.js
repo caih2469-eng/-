@@ -35,25 +35,44 @@ test('independent check-in Worker rejects public access and unrelated routes', a
   assert.equal(unrelated.status, 404);
 });
 
-test('internal service health probe exposes no user or secret data', async () => {
+test('internal service health probe requires media signing without exposing its value', async () => {
   const childWorker = (await import(`../cloudflare/checkin-worker.js?health=${Date.now()}`)).default;
-  const response = await childWorker.fetch(
+  const missing = await childWorker.fetch(
     new Request('https://internal.test/api/checkin-service-health', {
       headers: { 'x-jinshan-internal-service': 'checkin-v1' }
     }),
     { ENVIRONMENT: 'test', DB: {}, UPLOADS: {} },
     { waitUntil() {} }
   );
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get('x-jinshan-service'), 'checkin');
-  assert.equal(response.headers.get('x-jinshan-service-version'), 'checkin-v1');
-  assert.deepEqual(await response.json(), {
+  assert.equal(missing.status, 503);
+  assert.deepEqual(await missing.json(), {
+    ok: false,
+    service: 'checkin',
+    version: 'checkin-v1',
+    environment: 'test',
+    database: true,
+    storage: true,
+    mediaSigning: false
+  });
+
+  const ready = await childWorker.fetch(
+    new Request('https://internal.test/api/checkin-service-health', {
+      headers: { 'x-jinshan-internal-service': 'checkin-v1' }
+    }),
+    { ENVIRONMENT: 'test', DB: {}, UPLOADS: {}, MEDIA_SIGNING_SECRET: 'test-secret' },
+    { waitUntil() {} }
+  );
+  assert.equal(ready.status, 200);
+  assert.equal(ready.headers.get('x-jinshan-service'), 'checkin');
+  assert.equal(ready.headers.get('x-jinshan-service-version'), 'checkin-v1');
+  assert.deepEqual(await ready.json(), {
     ok: true,
     service: 'checkin',
     version: 'checkin-v1',
     environment: 'test',
     database: true,
-    storage: true
+    storage: true,
+    mediaSigning: true
   });
 });
 
@@ -120,7 +139,7 @@ test('student routes accept trusted internal users without changing local authen
   assert.match(studentRouteSource, /authenticatedUser \? \{ user: authenticatedUser \} : await requireUser/);
 });
 
-test('test and production Worker configs bind isolated D1 and R2 resources', () => {
+test('test and production Worker configs bind isolated resources and require signing', () => {
   const testConfig = parseJson('cloudflare/checkin-service/wrangler.test.jsonc');
   const productionConfig = parseJson('cloudflare/checkin-service/wrangler.production.jsonc');
   assert.equal(testConfig.name, 'jinshan20-checkin-test');
@@ -131,6 +150,8 @@ test('test and production Worker configs bind isolated D1 and R2 resources', () 
   assert.equal(productionConfig.d1_databases[0].database_id, '1734a812-afc8-4c49-a1f1-f776c4b7ae69');
   assert.equal(testConfig.r2_buckets[0].bucket_name, 'jinshan20-test');
   assert.equal(productionConfig.r2_buckets[0].bucket_name, 'jinshan20');
+  assert.deepEqual(testConfig.secrets, ['MEDIA_SIGNING_SECRET']);
+  assert.deepEqual(productionConfig.secrets, ['MEDIA_SIGNING_SECRET']);
 });
 
 test('stage two binds Pages traffic to the matching check-in Worker', () => {
@@ -146,11 +167,12 @@ test('stage two binds Pages traffic to the matching check-in Worker', () => {
   assert.doesNotMatch(workflowSource, /continue-on-error/);
 });
 
-test('production smoke workflow verifies live checkin-v1 service headers', () => {
+test('production smoke workflow verifies live ready checkin-v1 service', () => {
   assert.match(smokeWorkflowSource, /Check-in binding production smoke/);
   assert.match(smokeWorkflowSource, /api\/checkin-service-health/);
   assert.match(smokeWorkflowSource, /x-jinshan-service-version/);
   assert.match(smokeWorkflowSource, /checkin-v1/);
+  assert.match(smokeWorkflowSource, /mediaSigning/);
   assert.match(smokeWorkflowSource, /checkin-binding\/production-smoke/);
   assert.doesNotMatch(smokeWorkflowSource, /continue-on-error/);
 });
