@@ -27,6 +27,21 @@ const hmac = async (payload, secret) => {
   return base64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(payload))));
 };
 
+const alignmentPayload = (challenge) => `jinshan20.checkin.media-signing.v1.${String(challenge || '')}`;
+
+export const createMediaSigningAlignmentProof = async (env, challenge) => {
+  if (!/^[0-9a-f-]{32,64}$/i.test(String(challenge || ''))) {
+    throw Object.assign(new Error('媒体签名校验挑战无效'), { status: 400 });
+  }
+  return hmac(alignmentPayload(challenge), env.MEDIA_SIGNING_SECRET);
+};
+
+export const verifyMediaSigningAlignmentProof = async (env, challenge, supplied) => {
+  if (!supplied) return false;
+  const expected = await createMediaSigningAlignmentProof(env, challenge);
+  return timingSafeEqual(supplied, expected);
+};
+
 export const createPrivateMediaUrl = async (env, media, audience, scope, ttlSeconds = 15 * 60) => {
   const nowSeconds = Math.floor(Date.now() / 1000);
   // Keep the signed URL stable during one TTL window so mobile WebViews can reuse
@@ -71,4 +86,3 @@ export const verifyPrivateMediaRequest = async (env, mediaId, searchParams) => {
   const expected = await hmac(signingPayload(values), env.MEDIA_SIGNING_SECRET);
   return timingSafeEqual(supplied, expected) ? values : null;
 };
-

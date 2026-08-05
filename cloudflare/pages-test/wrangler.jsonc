@@ -29,6 +29,10 @@
     {
       "binding": "PLAZA_SERVICE",
       "service": "jinshan20-plaza-test"
+    },
+    {
+      "binding": "CHECKIN_SERVICE",
+      "service": "jinshan20-checkin-test"
     }
   ]
 }
