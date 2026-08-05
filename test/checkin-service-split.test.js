@@ -11,6 +11,8 @@ execFileSync(process.execPath, ['scripts/apply-checkin-service-split.mjs'], { st
 const mainWorkerSource = read('cloudflare/worker.js');
 const studentRouteSource = read('cloudflare/routes/student.js');
 const workflowSource = read('.github/workflows/checkin-service.yml');
+const cloudflareWorkflowSource = read('.github/workflows/cloudflare.yml');
+const smokeWorkflowSource = read('.github/workflows/checkin-binding-smoke.yml');
 
 test('independent check-in Worker rejects public access and unrelated routes', async () => {
   const childWorker = (await import(`../cloudflare/checkin-worker.js?test=${Date.now()}`)).default;
@@ -25,17 +27,34 @@ test('independent check-in Worker rejects public access and unrelated routes', a
 
   const unrelated = await childWorker.fetch(
     new Request('https://internal.test/api/student-dashboard', {
-      headers: {
-        'x-jinshan-internal-service': 'checkin-v1',
-        'x-jinshan-checkin-user': encodeURIComponent(JSON.stringify({
-          id: 'user-1', role: 'student', trackId: 'health', status: 'active'
-        }))
-      }
+      headers: { 'x-jinshan-internal-service': 'checkin-v1' }
     }),
     {},
     { waitUntil() {} }
   );
   assert.equal(unrelated.status, 404);
+});
+
+test('internal service health probe exposes no user or secret data', async () => {
+  const childWorker = (await import(`../cloudflare/checkin-worker.js?health=${Date.now()}`)).default;
+  const response = await childWorker.fetch(
+    new Request('https://internal.test/api/checkin-service-health', {
+      headers: { 'x-jinshan-internal-service': 'checkin-v1' }
+    }),
+    { ENVIRONMENT: 'test', DB: {}, UPLOADS: {} },
+    { waitUntil() {} }
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-jinshan-service'), 'checkin');
+  assert.equal(response.headers.get('x-jinshan-service-version'), 'checkin-v1');
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    service: 'checkin',
+    version: 'checkin-v1',
+    environment: 'test',
+    database: true,
+    storage: true
+  });
 });
 
 test('internal check-in request reuses the existing route contract', async () => {
@@ -69,11 +88,14 @@ test('main Worker forwards only check-in routes and keeps safe fallback semantic
     mainWorkerSource.indexOf('const checkinInternalUser')
   );
   assert.match(mainWorkerSource, /CHECKIN_SERVICE_BINDING_V1/);
+  assert.match(allowlistBlock, /checkin-service-health/);
   assert.match(allowlistBlock, /pathname === '\/api\/checkins'/);
   assert.match(allowlistBlock, /pathname === '\/api\/checkins\/history'/);
   assert.match(allowlistBlock, /member-checkin/);
   assert.doesNotMatch(allowlistBlock, /submission|public-images|media|plaza/);
   assert.match(mainWorkerSource, /env\.CHECKIN_SERVICE\.fetch\(serviceRequest\)/);
+  assert.match(mainWorkerSource, /const isHealth = url\.pathname === CHECKIN_HEALTH_PATH/);
+  assert.match(mainWorkerSource, /if \(!isHealth\) \{/);
   assert.match(mainWorkerSource, /request\.method === 'GET' \|\| request\.method === 'HEAD'/);
   assert.match(mainWorkerSource, /打卡服务暂时不可用，请稍后重试/);
 });
@@ -111,14 +133,26 @@ test('test and production Worker configs bind isolated D1 and R2 resources', () 
   assert.equal(productionConfig.r2_buckets[0].bucket_name, 'jinshan20');
 });
 
-test('stage one deploys the child Worker without switching Pages traffic', () => {
+test('stage two binds Pages traffic to the matching check-in Worker', () => {
   const testPages = parseJson('cloudflare/pages-test/wrangler.jsonc');
   const productionPages = parseJson('cloudflare/pages-production/wrangler.jsonc');
-  assert.equal((testPages.services || []).some((item) => item.binding === 'CHECKIN_SERVICE'), false);
-  assert.equal((productionPages.services || []).some((item) => item.binding === 'CHECKIN_SERVICE'), false);
+  const testBinding = (testPages.services || []).find((item) => item.binding === 'CHECKIN_SERVICE');
+  const productionBinding = (productionPages.services || []).find((item) => item.binding === 'CHECKIN_SERVICE');
+  assert.deepEqual(testBinding, { binding: 'CHECKIN_SERVICE', service: 'jinshan20-checkin-test' });
+  assert.deepEqual(productionBinding, { binding: 'CHECKIN_SERVICE', service: 'jinshan20-checkin' });
+  assert.match(cloudflareWorkflowSource, /node scripts\/apply-checkin-service-split\.mjs/);
   assert.match(workflowSource, /checkin-service\/deploy-production/);
   assert.match(workflowSource, /Workers R2 Storage \/ Edit/);
   assert.doesNotMatch(workflowSource, /continue-on-error/);
+});
+
+test('production smoke workflow verifies live checkin-v1 service headers', () => {
+  assert.match(smokeWorkflowSource, /Check-in binding production smoke/);
+  assert.match(smokeWorkflowSource, /api\/checkin-service-health/);
+  assert.match(smokeWorkflowSource, /x-jinshan-service-version/);
+  assert.match(smokeWorkflowSource, /checkin-v1/);
+  assert.match(smokeWorkflowSource, /checkin-binding\/production-smoke/);
+  assert.doesNotMatch(smokeWorkflowSource, /continue-on-error/);
 });
 
 test('check-in service split generator is idempotent', () => {
