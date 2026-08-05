@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const marker = '/* PLAZA_PERFORMANCE_QUALITY_V3 */';
+const mobileLayoutMarker = '/* PLAZA_MOBILE_LAYOUT_V1 */';
 
 const replaceOnce = (source, search, replacement, label) => {
   const next = source.replace(search, replacement);
@@ -19,8 +20,8 @@ const patchPlazaPage = (source, label) => {
   let next = source;
   next = replaceOnce(
     next,
-    '/* PLAZA_MOBILE_LAYOUT_V1 */',
-    `/* PLAZA_MOBILE_LAYOUT_V1 */\n${marker}`,
+    mobileLayoutMarker,
+    `${mobileLayoutMarker}\n${marker}`,
     `${label}性能标记位置`
   );
   next = replaceOnce(
@@ -74,13 +75,23 @@ const patchPlazaPage = (source, label) => {
 
 const patchAppRuntime = (source) => {
   if (source.includes(marker)) return source;
-  let next = patchPlazaPage(source, '主应用');
-  next = replaceOnce(
-    next,
-    'const VIEW_CACHE_TTL_MS = 20_000;',
-    'const VIEW_CACHE_TTL_MS = 60_000;',
-    '活动广场视图缓存时长'
-  );
+  let next = source;
+  if (next.includes(mobileLayoutMarker)) {
+    next = patchPlazaPage(next, '主应用');
+    next = replaceOnce(
+      next,
+      'const VIEW_CACHE_TTL_MS = 20_000;',
+      'const VIEW_CACHE_TTL_MS = 60_000;',
+      '活动广场视图缓存时长'
+    );
+  } else {
+    next = replaceOnce(
+      next,
+      'const VIEW_CACHE_TTL_MS = 20_000;',
+      `${marker}\nconst VIEW_CACHE_TTL_MS = 60_000;`,
+      '活动广场运行时性能标记与缓存时长'
+    );
+  }
   next = replaceOnce(
     next,
     `  const run = () => postIds.forEach((postId, index) => {\n    setTimeout(() => { void loadPlazaPost(postId).catch(() => null); }, index * 90);\n  });\n  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 900 });\n  else setTimeout(run, 120);`,
@@ -200,11 +211,11 @@ fs.writeFileSync(bootstrapPath, bootstrap, 'utf8');
 if (!app.includes(marker)
     || !pageTemplate.includes(marker)
     || !bootstrap.includes(marker)
-    || !app.includes('cardIndex < 4')
     || !app.includes('2048w')
-    || !app.includes('scheduleVisiblePlazaDetailWarmup();')
-    || !app.includes('setTimeout(() => { void refresh(); }, 3200)')
-    || !app.includes('__BOOTSTRAP_PLAZA_PROMISE__')
+    || !pageTemplate.includes('cardIndex < 4')
+    || !pageTemplate.includes('scheduleVisiblePlazaDetailWarmup();')
+    || !pageTemplate.includes('setTimeout(() => { void refresh(); }, 3200)')
+    || !pageTemplate.includes('__BOOTSTRAP_PLAZA_PROMISE__')
     || !bootstrap.includes('__BOOTSTRAP_PLAZA_IMAGES__')) {
   throw new Error('活动广场性能与画质V3生成不完整');
 }
