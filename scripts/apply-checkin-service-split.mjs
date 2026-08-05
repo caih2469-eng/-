@@ -41,7 +41,9 @@ const workerHelpers = [
   workerMarker,
   "const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';",
   "const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';",
-  "const isCheckinServiceRoute = (pathname) => pathname === '/api/checkins'",
+  "const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';",
+  'const isCheckinServiceRoute = (pathname) => pathname === CHECKIN_HEALTH_PATH',
+  "  || pathname === '/api/checkins'",
   "  || pathname === '/api/checkins/history'",
   "  || /^\\/api\\/tasks\\/[^/]+\\/member-checkin$/.test(pathname);",
   'const checkinInternalUser = (user) => encodeURIComponent(JSON.stringify({',
@@ -52,13 +54,18 @@ const workerHelpers = [
   '}));',
   'const dispatchCheckinService = async (request, env, ctx, url) => {',
   '  if (!env.CHECKIN_SERVICE || !isCheckinServiceRoute(url.pathname)) return null;',
-  '  const auth = await requireUser(request, env);',
-  '  if (auth.error) return auth.error;',
+  '  const isHealth = url.pathname === CHECKIN_HEALTH_PATH && request.method === \'GET\';',
+  '  let user = null;',
+  '  if (!isHealth) {',
+  '    const auth = await requireUser(request, env);',
+  '    if (auth.error) return auth.error;',
+  '    user = auth.user;',
+  '  }',
   '  const headers = new Headers(request.headers);',
   '  headers.delete(CHECKIN_USER_HEADER);',
   '  headers.delete(CHECKIN_SERVICE_HEADER);',
   "  headers.set(CHECKIN_SERVICE_HEADER, 'checkin-v1');",
-  '  headers.set(CHECKIN_USER_HEADER, checkinInternalUser(auth.user));',
+  '  if (user) headers.set(CHECKIN_USER_HEADER, checkinInternalUser(user));',
   '  const serviceRequest = new Request(request.clone(), { headers });',
   '  try {',
   '    return await env.CHECKIN_SERVICE.fetch(serviceRequest);',
@@ -94,9 +101,10 @@ worker = fs.readFileSync(workerPath, 'utf8');
 if (!route.includes(routeMarker)
     || !route.includes('authenticatedUser = null')
     || !worker.includes(workerMarker)
+    || !worker.includes("CHECKIN_HEALTH_PATH = '/api/checkin-service-health'")
     || !worker.includes('env.CHECKIN_SERVICE.fetch(serviceRequest)')
     || !worker.includes("request.method === 'GET' || request.method === 'HEAD'")) {
   throw new Error('打卡独立服务生成不完整');
 }
 
-console.log('Applied optional check-in service binding with safe local fallback.');
+console.log('Applied check-in service binding with safe local fallback.');
