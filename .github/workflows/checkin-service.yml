@@ -11,11 +11,15 @@ on:
       - 'cloudflare/routes/student.js'
       - 'cloudflare/lib/**'
       - 'cloudflare/services/**'
+      - 'cloudflare/pages-production/wrangler.jsonc'
+      - 'cloudflare/pages-test/wrangler.jsonc'
       - 'scripts/apply-checkin-service-split.mjs'
       - 'scripts/apply-plaza-service-split.mjs'
       - 'scripts/apply-approved-plaza-prefetch.mjs'
+      - 'scripts/apply-approved-performance-diagnostics.mjs'
       - 'test/checkin-service-split.test.js'
       - '.github/workflows/checkin-service.yml'
+      - '.github/workflows/checkin-binding-smoke.yml'
   pull_request:
     paths:
       - 'cloudflare/checkin-worker.js'
@@ -23,11 +27,15 @@ on:
       - 'cloudflare/routes/student.js'
       - 'cloudflare/lib/**'
       - 'cloudflare/services/**'
+      - 'cloudflare/pages-production/wrangler.jsonc'
+      - 'cloudflare/pages-test/wrangler.jsonc'
       - 'scripts/apply-checkin-service-split.mjs'
       - 'scripts/apply-plaza-service-split.mjs'
       - 'scripts/apply-approved-plaza-prefetch.mjs'
+      - 'scripts/apply-approved-performance-diagnostics.mjs'
       - 'test/checkin-service-split.test.js'
       - '.github/workflows/checkin-service.yml'
+      - '.github/workflows/checkin-binding-smoke.yml'
   workflow_dispatch:
     inputs:
       environment:
@@ -122,7 +130,7 @@ jobs:
             --data "$(jq -nc \
               --arg state pending \
               --arg target_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-              --arg description '独立打卡服务正在部署，主站尚未切流' \
+              --arg description '独立打卡服务正在部署' \
               --arg context 'checkin-service/deploy-production' \
               '{state:$state,target_url:$target_url,description:$description,context:$context}')"
 
@@ -189,7 +197,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           STATUS_STATE: ${{ needs.deploy-production.result == 'success' && 'success' || 'failure' }}
-          STATUS_DESCRIPTION: ${{ needs.deploy-production.result == 'success' && '独立打卡服务部署成功，主站尚未切流' || '独立打卡服务部署失败' }}
+          STATUS_DESCRIPTION: ${{ needs.deploy-production.result == 'success' && '独立打卡服务部署成功' || '独立打卡服务部署失败' }}
         run: |
           curl --fail-with-body --location \
             --request POST \
