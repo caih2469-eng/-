@@ -99,6 +99,7 @@ ${marker}
 }
 
 await import('./apply-approved-plaza-prefetch.mjs');
+await import('./apply-checkin-service-split.mjs');
 
 if (process.env.GITHUB_JOB === 'deploy-production') {
   await import('./apply-pica-image-pipeline.mjs');
