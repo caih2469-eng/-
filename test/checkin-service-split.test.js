@@ -94,36 +94,22 @@ test('internal service requires a matching media signing proof without exposing 
   });
 });
 
-test('main Worker verifies matching signing secrets and hides the proof from public output', async () => {
+test('main Worker and real child Worker accept matching signing secrets', async () => {
   const mainWorker = (await import(`../cloudflare/worker.js?alignment=${Date.now()}`)).default;
+  const childWorker = (await import(`../cloudflare/checkin-worker.js?alignment=${Date.now()}`)).default;
   const secret = 'shared-media-secret';
   const response = await mainWorker.fetch(
     new Request('https://example.test/api/checkin-service-health'),
     {
       MEDIA_SIGNING_SECRET: secret,
       CHECKIN_SERVICE: {
-        async fetch(request) {
-          const challenge = request.headers.get('x-jinshan-checkin-proof-challenge');
-          const mediaSigningProof = await createMediaSigningAlignmentProof(
-            { MEDIA_SIGNING_SECRET: secret },
-            challenge
-          );
-          return new Response(JSON.stringify({
-            ok: true,
-            service: 'checkin',
-            version: 'checkin-v1',
-            environment: 'test',
-            database: true,
-            storage: true,
-            mediaSigning: true,
-            mediaSigningProof
-          }), {
-            headers: {
-              'content-type': 'application/json',
-              'x-jinshan-service': 'checkin',
-              'x-jinshan-service-version': 'checkin-v1'
-            }
-          });
+        fetch(request) {
+          return childWorker.fetch(request, {
+            ENVIRONMENT: 'test',
+            DB: {},
+            UPLOADS: {},
+            MEDIA_SIGNING_SECRET: secret
+          }, { waitUntil() {} });
         }
       }
     },
@@ -137,35 +123,21 @@ test('main Worker verifies matching signing secrets and hides the proof from pub
   assert.equal(Object.hasOwn(body, 'mediaSigningProof'), false);
 });
 
-test('main Worker rejects a child Worker configured with a different signing secret', async () => {
+test('main Worker rejects a real child Worker configured with a different signing secret', async () => {
   const mainWorker = (await import(`../cloudflare/worker.js?mismatch=${Date.now()}`)).default;
+  const childWorker = (await import(`../cloudflare/checkin-worker.js?mismatch=${Date.now()}`)).default;
   const response = await mainWorker.fetch(
     new Request('https://example.test/api/checkin-service-health'),
     {
       MEDIA_SIGNING_SECRET: 'main-secret',
       CHECKIN_SERVICE: {
-        async fetch(request) {
-          const challenge = request.headers.get('x-jinshan-checkin-proof-challenge');
-          const mediaSigningProof = await createMediaSigningAlignmentProof(
-            { MEDIA_SIGNING_SECRET: 'different-child-secret' },
-            challenge
-          );
-          return new Response(JSON.stringify({
-            ok: true,
-            service: 'checkin',
-            version: 'checkin-v1',
-            environment: 'test',
-            database: true,
-            storage: true,
-            mediaSigning: true,
-            mediaSigningProof
-          }), {
-            headers: {
-              'content-type': 'application/json',
-              'x-jinshan-service': 'checkin',
-              'x-jinshan-service-version': 'checkin-v1'
-            }
-          });
+        fetch(request) {
+          return childWorker.fetch(request, {
+            ENVIRONMENT: 'test',
+            DB: {},
+            UPLOADS: {},
+            MEDIA_SIGNING_SECRET: 'different-child-secret'
+          }, { waitUntil() {} });
         }
       }
     },
@@ -221,12 +193,16 @@ test('main Worker forwards only check-in routes and keeps safe fallback semantic
   assert.match(allowlistBlock, /pathname === '\/api\/checkins\/history'/);
   assert.match(allowlistBlock, /member-checkin/);
   assert.doesNotMatch(allowlistBlock, /submission|public-images|media|plaza/);
-  assert.match(mainWorkerSource, /verifyMediaSigningAlignmentProof/);
+  assert.match(mainWorkerSource, /createMediaSigningAlignmentProof/);
   assert.match(mainWorkerSource, /CHECKIN_PROOF_CHALLENGE_HEADER/);
-  assert.match(mainWorkerSource, /mediaSigningAligned/);
+  assert.match(mainWorkerSource, /CHECKIN_PROOF_HEADER/);
+  assert.match(mainWorkerSource, /challenge = crypto\.randomUUID\(\)/);
+  assert.match(mainWorkerSource, /proof = await createMediaSigningAlignmentProof\(env, challenge\)/);
+  assert.match(mainWorkerSource, /headers\.set\(CHECKIN_PROOF_HEADER, proof\)/);
+  assert.match(mainWorkerSource, /isSafeCheckinLocalFallback/);
+  assert.match(mainWorkerSource, /打卡服务尚未完成媒体签名配置/);
   assert.match(mainWorkerSource, /env\.CHECKIN_SERVICE\.fetch\(serviceRequest\)/);
   assert.match(mainWorkerSource, /const isHealth = url\.pathname === CHECKIN_HEALTH_PATH/);
-  assert.match(mainWorkerSource, /if \(!isHealth\) \{/);
   assert.match(mainWorkerSource, /request\.method === 'GET' \|\| request\.method === 'HEAD'/);
   assert.match(mainWorkerSource, /打卡服务暂时不可用，请稍后重试/);
 });
@@ -235,9 +211,10 @@ test('main Worker strips forged headers and passes only minimal user fields', ()
   assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_USER_HEADER\)/);
   assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_SERVICE_HEADER\)/);
   assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_PROOF_CHALLENGE_HEADER\)/);
+  assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_PROOF_HEADER\)/);
   const block = mainWorkerSource.slice(
     mainWorkerSource.indexOf('const checkinInternalUser'),
-    mainWorkerSource.indexOf('const verifiedCheckinHealthResponse')
+    mainWorkerSource.indexOf('const normalizedCheckinHealthResponse')
   );
   assert.match(block, /id: user\.id/);
   assert.match(block, /role: user\.role/);
