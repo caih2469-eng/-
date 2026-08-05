@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
+import { createMediaSigningAlignmentProof } from '../cloudflare/lib/media-signing.js';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const parseJson = (file) => JSON.parse(read(file));
+const proofChallenge = '123e4567-e89b-12d3-a456-426614174000';
 
 execFileSync(process.execPath, ['scripts/apply-checkin-service-split.mjs'], { stdio: 'pipe' });
 
@@ -35,12 +37,14 @@ test('independent check-in Worker rejects public access and unrelated routes', a
   assert.equal(unrelated.status, 404);
 });
 
-test('internal service health probe requires media signing without exposing its value', async () => {
+test('internal service health probe returns an internal one-time signing proof', async () => {
   const childWorker = (await import(`../cloudflare/checkin-worker.js?health=${Date.now()}`)).default;
+  const internalHeaders = {
+    'x-jinshan-internal-service': 'checkin-v1',
+    'x-jinshan-checkin-proof-challenge': proofChallenge
+  };
   const missing = await childWorker.fetch(
-    new Request('https://internal.test/api/checkin-service-health', {
-      headers: { 'x-jinshan-internal-service': 'checkin-v1' }
-    }),
+    new Request('https://internal.test/api/checkin-service-health', { headers: internalHeaders }),
     { ENVIRONMENT: 'test', DB: {}, UPLOADS: {} },
     { waitUntil() {} }
   );
@@ -52,28 +56,111 @@ test('internal service health probe requires media signing without exposing its 
     environment: 'test',
     database: true,
     storage: true,
-    mediaSigning: false
+    mediaSigning: false,
+    mediaSigningProof: null
   });
 
   const ready = await childWorker.fetch(
-    new Request('https://internal.test/api/checkin-service-health', {
-      headers: { 'x-jinshan-internal-service': 'checkin-v1' }
-    }),
+    new Request('https://internal.test/api/checkin-service-health', { headers: internalHeaders }),
     { ENVIRONMENT: 'test', DB: {}, UPLOADS: {}, MEDIA_SIGNING_SECRET: 'test-secret' },
     { waitUntil() {} }
   );
   assert.equal(ready.status, 200);
   assert.equal(ready.headers.get('x-jinshan-service'), 'checkin');
   assert.equal(ready.headers.get('x-jinshan-service-version'), 'checkin-v1');
-  assert.deepEqual(await ready.json(), {
-    ok: true,
-    service: 'checkin',
-    version: 'checkin-v1',
-    environment: 'test',
-    database: true,
-    storage: true,
-    mediaSigning: true
-  });
+  const body = await ready.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.mediaSigning, true);
+  assert.equal(typeof body.mediaSigningProof, 'string');
+  assert.ok(body.mediaSigningProof.length >= 40);
+  assert.equal(body.mediaSigningProof, await createMediaSigningAlignmentProof(
+    { MEDIA_SIGNING_SECRET: 'test-secret' },
+    proofChallenge
+  ));
+});
+
+test('main Worker verifies matching signing secrets and hides the proof from public output', async () => {
+  const mainWorker = (await import(`../cloudflare/worker.js?alignment=${Date.now()}`)).default;
+  const secret = 'shared-media-secret';
+  const response = await mainWorker.fetch(
+    new Request('https://example.test/api/checkin-service-health'),
+    {
+      MEDIA_SIGNING_SECRET: secret,
+      CHECKIN_SERVICE: {
+        async fetch(request) {
+          const challenge = request.headers.get('x-jinshan-checkin-proof-challenge');
+          const mediaSigningProof = await createMediaSigningAlignmentProof(
+            { MEDIA_SIGNING_SECRET: secret },
+            challenge
+          );
+          return new Response(JSON.stringify({
+            ok: true,
+            service: 'checkin',
+            version: 'checkin-v1',
+            environment: 'test',
+            database: true,
+            storage: true,
+            mediaSigning: true,
+            mediaSigningProof
+          }), {
+            headers: {
+              'content-type': 'application/json',
+              'x-jinshan-service': 'checkin',
+              'x-jinshan-service-version': 'checkin-v1'
+            }
+          });
+        }
+      }
+    },
+    { waitUntil() {} }
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-jinshan-service-version'), 'checkin-v1');
+  const body = await response.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.mediaSigningAligned, true);
+  assert.equal(Object.hasOwn(body, 'mediaSigningProof'), false);
+});
+
+test('main Worker rejects a child Worker configured with a different signing secret', async () => {
+  const mainWorker = (await import(`../cloudflare/worker.js?mismatch=${Date.now()}`)).default;
+  const response = await mainWorker.fetch(
+    new Request('https://example.test/api/checkin-service-health'),
+    {
+      MEDIA_SIGNING_SECRET: 'main-secret',
+      CHECKIN_SERVICE: {
+        async fetch(request) {
+          const challenge = request.headers.get('x-jinshan-checkin-proof-challenge');
+          const mediaSigningProof = await createMediaSigningAlignmentProof(
+            { MEDIA_SIGNING_SECRET: 'different-child-secret' },
+            challenge
+          );
+          return new Response(JSON.stringify({
+            ok: true,
+            service: 'checkin',
+            version: 'checkin-v1',
+            environment: 'test',
+            database: true,
+            storage: true,
+            mediaSigning: true,
+            mediaSigningProof
+          }), {
+            headers: {
+              'content-type': 'application/json',
+              'x-jinshan-service': 'checkin',
+              'x-jinshan-service-version': 'checkin-v1'
+            }
+          });
+        }
+      }
+    },
+    { waitUntil() {} }
+  );
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.mediaSigningAligned, false);
+  assert.equal(Object.hasOwn(body, 'mediaSigningProof'), false);
 });
 
 test('internal check-in request reuses the existing route contract', async () => {
@@ -112,6 +199,9 @@ test('main Worker forwards only check-in routes and keeps safe fallback semantic
   assert.match(allowlistBlock, /pathname === '\/api\/checkins\/history'/);
   assert.match(allowlistBlock, /member-checkin/);
   assert.doesNotMatch(allowlistBlock, /submission|public-images|media|plaza/);
+  assert.match(mainWorkerSource, /verifyMediaSigningAlignmentProof/);
+  assert.match(mainWorkerSource, /CHECKIN_PROOF_CHALLENGE_HEADER/);
+  assert.match(mainWorkerSource, /mediaSigningAligned/);
   assert.match(mainWorkerSource, /env\.CHECKIN_SERVICE\.fetch\(serviceRequest\)/);
   assert.match(mainWorkerSource, /const isHealth = url\.pathname === CHECKIN_HEALTH_PATH/);
   assert.match(mainWorkerSource, /if \(!isHealth\) \{/);
@@ -122,9 +212,10 @@ test('main Worker forwards only check-in routes and keeps safe fallback semantic
 test('main Worker strips forged headers and passes only minimal user fields', () => {
   assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_USER_HEADER\)/);
   assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_SERVICE_HEADER\)/);
+  assert.match(mainWorkerSource, /headers\.delete\(CHECKIN_PROOF_CHALLENGE_HEADER\)/);
   const block = mainWorkerSource.slice(
     mainWorkerSource.indexOf('const checkinInternalUser'),
-    mainWorkerSource.indexOf('const dispatchCheckinService')
+    mainWorkerSource.indexOf('const verifiedCheckinHealthResponse')
   );
   assert.match(block, /id: user\.id/);
   assert.match(block, /role: user\.role/);
@@ -167,12 +258,12 @@ test('stage two binds Pages traffic to the matching check-in Worker', () => {
   assert.doesNotMatch(workflowSource, /continue-on-error/);
 });
 
-test('production smoke workflow verifies live ready checkin-v1 service', () => {
+test('production smoke workflow verifies live aligned checkin-v1 service', () => {
   assert.match(smokeWorkflowSource, /Check-in binding production smoke/);
   assert.match(smokeWorkflowSource, /api\/checkin-service-health/);
   assert.match(smokeWorkflowSource, /x-jinshan-service-version/);
   assert.match(smokeWorkflowSource, /checkin-v1/);
-  assert.match(smokeWorkflowSource, /mediaSigning/);
+  assert.match(smokeWorkflowSource, /mediaSigningAligned/);
   assert.match(smokeWorkflowSource, /checkin-binding\/production-smoke/);
   assert.doesNotMatch(smokeWorkflowSource, /continue-on-error/);
 });
