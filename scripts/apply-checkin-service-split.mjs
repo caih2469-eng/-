@@ -41,6 +41,7 @@ const workerHelpers = [
   workerMarker,
   "const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';",
   "const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';",
+  "const CHECKIN_PROOF_CHALLENGE_HEADER = 'x-jinshan-checkin-proof-challenge';",
   "const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';",
   'const isCheckinServiceRoute = (pathname) => pathname === CHECKIN_HEALTH_PATH',
   "  || pathname === '/api/checkins'",
@@ -52,6 +53,24 @@ const workerHelpers = [
   '  trackId: user.trackId,',
   '  status: user.status',
   '}));',
+  'const verifiedCheckinHealthResponse = async (response, env, challenge) => {',
+  '  const headers = new Headers(response.headers);',
+  "  headers.set('content-type', 'application/json; charset=utf-8');",
+  "  headers.delete('content-length');",
+  '  let body = {};',
+  '  try { body = await response.json(); } catch {}',
+  '  const suppliedProof = String(body.mediaSigningProof || \"\");',
+  '  delete body.mediaSigningProof;',
+  '  let mediaSigningAligned = false;',
+  '  try {',
+  '    mediaSigningAligned = await verifyMediaSigningAlignmentProof(env, challenge, suppliedProof);',
+  '  } catch {}',
+  '  const ready = Boolean(response.ok && body.ok && mediaSigningAligned);',
+  '  return new Response(JSON.stringify({ ...body, ok: ready, mediaSigningAligned }), {',
+  '    status: ready ? 200 : 503,',
+  '    headers',
+  '  });',
+  '};',
   'const dispatchCheckinService = async (request, env, ctx, url) => {',
   '  if (!env.CHECKIN_SERVICE || !isCheckinServiceRoute(url.pathname)) return null;',
   '  const isHealth = url.pathname === CHECKIN_HEALTH_PATH && request.method === \'GET\';',
@@ -64,11 +83,15 @@ const workerHelpers = [
   '  const headers = new Headers(request.headers);',
   '  headers.delete(CHECKIN_USER_HEADER);',
   '  headers.delete(CHECKIN_SERVICE_HEADER);',
+  '  headers.delete(CHECKIN_PROOF_CHALLENGE_HEADER);',
   "  headers.set(CHECKIN_SERVICE_HEADER, 'checkin-v1');",
+  '  const challenge = isHealth ? crypto.randomUUID() : null;',
+  '  if (challenge) headers.set(CHECKIN_PROOF_CHALLENGE_HEADER, challenge);',
   '  if (user) headers.set(CHECKIN_USER_HEADER, checkinInternalUser(user));',
   '  const serviceRequest = new Request(request.clone(), { headers });',
   '  try {',
-  '    return await env.CHECKIN_SERVICE.fetch(serviceRequest);',
+  '    const response = await env.CHECKIN_SERVICE.fetch(serviceRequest);',
+  '    return isHealth ? await verifiedCheckinHealthResponse(response, env, challenge) : response;',
   '  } catch (error) {',
   "    if (request.method === 'GET' || request.method === 'HEAD') return null;",
   "    return json({ error: '打卡服务暂时不可用，请稍后重试' }, 503, {",
@@ -81,6 +104,12 @@ const workerHelpers = [
 
 let worker = fs.readFileSync(workerPath, 'utf8');
 if (!worker.includes(workerMarker)) {
+  worker = replaceOnce(
+    worker,
+    "import { handleStudentRoutes } from './routes/student.js';",
+    "import { verifyMediaSigningAlignmentProof } from './lib/media-signing.js';\nimport { handleStudentRoutes } from './routes/student.js';",
+    '主Worker媒体签名校验导入位置'
+  );
   worker = replaceOnce(
     worker,
     'const routeRequest = async (request, env, ctx) => {',
@@ -101,10 +130,12 @@ worker = fs.readFileSync(workerPath, 'utf8');
 if (!route.includes(routeMarker)
     || !route.includes('authenticatedUser = null')
     || !worker.includes(workerMarker)
+    || !worker.includes('verifyMediaSigningAlignmentProof')
     || !worker.includes("CHECKIN_HEALTH_PATH = '/api/checkin-service-health'")
+    || !worker.includes('mediaSigningAligned')
     || !worker.includes('env.CHECKIN_SERVICE.fetch(serviceRequest)')
     || !worker.includes("request.method === 'GET' || request.method === 'HEAD'")) {
   throw new Error('打卡独立服务生成不完整');
 }
 
-console.log('Applied check-in service binding with safe local fallback.');
+console.log('Applied check-in service binding with safe local fallback and signing alignment proof.');
