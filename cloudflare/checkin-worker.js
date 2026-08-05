@@ -5,8 +5,10 @@ const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';
 const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';
 const CHECKIN_SERVICE_VERSION = 'checkin-v1';
 const CHECKIN_SERVICE_BUILD = '20260805-checkin1';
+const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';
 
-const isCheckinRoute = (pathname) => pathname === '/api/checkins'
+const isCheckinRoute = (pathname) => pathname === CHECKIN_HEALTH_PATH
+  || pathname === '/api/checkins'
   || pathname === '/api/checkins/history'
   || /^\/api\/tasks\/[^/]+\/member-checkin$/.test(pathname);
 
@@ -46,6 +48,19 @@ export default {
       const url = new URL(request.url);
       if (!isCheckinRoute(url.pathname)) {
         return serviceResponse(json({ error: '接口不存在' }, 404));
+      }
+      if (request.headers.get(CHECKIN_SERVICE_HEADER) !== CHECKIN_SERVICE_VERSION) {
+        return serviceResponse(json({ error: '禁止直接访问打卡内部服务' }, 403));
+      }
+      if (url.pathname === CHECKIN_HEALTH_PATH && request.method === 'GET') {
+        return serviceResponse(json({
+          ok: true,
+          service: 'checkin',
+          version: CHECKIN_SERVICE_VERSION,
+          environment: env.ENVIRONMENT || 'unknown',
+          database: Boolean(env.DB),
+          storage: Boolean(env.UPLOADS)
+        }));
       }
       const user = internalUser(request);
       if (!user) {
