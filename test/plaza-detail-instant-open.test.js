@@ -70,16 +70,19 @@ test('fresh plaza cache renders first and delays refresh so images keep the crit
   assert.match(plazaPageTemplate, /setTimeout\(\(\) => \{ void refresh\(\); \}, 3200\)/);
 });
 
-test('student bootstrap preloads four responsive plaza covers instead of one low-priority thumbnail', () => {
-  assert.match(app, /const preloadImages = \(result\.posts \|\| \[\]\)\.slice\(0, 4\)/);
-  assert.match(app, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
-  assert.match(app, /preload\.srcset/);
-  assert.match(app, /hasFirstImage: Boolean\(preloadImages\.length\)/);
+test('student bootstrap preloads four responsive plaza covers and the plaza reuses that response', () => {
   assert.match(bootstrap, /PLAZA_PERFORMANCE_QUALITY_V3/);
+  assert.match(bootstrap, /__BOOTSTRAP_PLAZA_PROMISE__/);
   assert.match(bootstrap, /__BOOTSTRAP_PLAZA_IMAGES__/);
   assert.match(bootstrap, /slice\(0, 4\)/);
+  assert.match(bootstrap, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
+  assert.match(bootstrap, /preload\.srcset/);
   assert.match(bootstrap, /2048w/);
   assert.doesNotMatch(bootstrap, /__BOOTSTRAP_PLAZA_IMAGE__ = preload/);
+  assert.match(app, /const bootstrapResult = safeSort === 'latest' && page === 1 && !safeQuery/);
+  assert.match(app, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
+  assert.match(app, /const result = bootstrapResult \|\| await api\(path\)/);
+  assert.match(plazaPageTemplate, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
 });
 
 test('detail counts combine liked state into the existing aggregate query', () => {
