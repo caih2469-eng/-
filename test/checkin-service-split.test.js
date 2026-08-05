@@ -150,8 +150,8 @@ test('test and production Worker configs bind isolated resources and require sig
   assert.equal(productionConfig.d1_databases[0].database_id, '1734a812-afc8-4c49-a1f1-f776c4b7ae69');
   assert.equal(testConfig.r2_buckets[0].bucket_name, 'jinshan20-test');
   assert.equal(productionConfig.r2_buckets[0].bucket_name, 'jinshan20');
-  assert.deepEqual(testConfig.secrets, ['MEDIA_SIGNING_SECRET']);
-  assert.deepEqual(productionConfig.secrets, ['MEDIA_SIGNING_SECRET']);
+  assert.deepEqual(testConfig.secrets.required, ['MEDIA_SIGNING_SECRET']);
+  assert.deepEqual(productionConfig.secrets.required, ['MEDIA_SIGNING_SECRET']);
 });
 
 test('stage two binds Pages traffic to the matching check-in Worker', () => {
