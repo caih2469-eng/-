@@ -1,10 +1,11 @@
 import { errorResponse, json } from './lib/runtime.js';
-import { createMediaSigningAlignmentProof } from './lib/media-signing.js';
+import { verifyMediaSigningAlignmentProof } from './lib/media-signing.js';
 import { handleStudentRoutes } from './routes/student.js';
 
 const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';
 const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';
 const CHECKIN_PROOF_CHALLENGE_HEADER = 'x-jinshan-checkin-proof-challenge';
+const CHECKIN_PROOF_HEADER = 'x-jinshan-checkin-proof';
 const CHECKIN_SERVICE_VERSION = 'checkin-v1';
 const CHECKIN_SERVICE_BUILD = '20260805-checkin1';
 const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';
@@ -44,6 +45,16 @@ const internalUser = (request) => {
   }
 };
 
+const signingAligned = async (request, env) => {
+  const challenge = request.headers.get(CHECKIN_PROOF_CHALLENGE_HEADER) || '';
+  const supplied = request.headers.get(CHECKIN_PROOF_HEADER) || '';
+  try {
+    return await verifyMediaSigningAlignmentProof(env, challenge, supplied);
+  } catch {
+    return false;
+  }
+};
+
 export default {
   async fetch(request, env, ctx) {
     try {
@@ -54,14 +65,24 @@ export default {
       if (request.headers.get(CHECKIN_SERVICE_HEADER) !== CHECKIN_SERVICE_VERSION) {
         return serviceResponse(json({ error: '禁止直接访问打卡内部服务' }, 403));
       }
+      const mediaSigningAligned = await signingAligned(request, env);
+      if (!mediaSigningAligned) {
+        return serviceResponse(json({
+          ok: false,
+          error: '打卡服务媒体签名尚未对齐',
+          service: 'checkin',
+          version: CHECKIN_SERVICE_VERSION,
+          environment: env.ENVIRONMENT || 'unknown',
+          database: Boolean(env.DB),
+          storage: Boolean(env.UPLOADS),
+          mediaSigning: Boolean(env.MEDIA_SIGNING_SECRET),
+          mediaSigningAligned: false
+        }, 503, {
+          'x-jinshan-checkin-alignment': 'failed'
+        }));
+      }
       if (url.pathname === CHECKIN_HEALTH_PATH && request.method === 'GET') {
-        const challenge = request.headers.get(CHECKIN_PROOF_CHALLENGE_HEADER) || '';
-        const challengeValid = /^[0-9a-f-]{32,64}$/i.test(challenge);
-        const resourcesReady = Boolean(env.DB && env.UPLOADS && env.MEDIA_SIGNING_SECRET);
-        const ready = resourcesReady && challengeValid;
-        const mediaSigningProof = ready
-          ? await createMediaSigningAlignmentProof(env, challenge)
-          : null;
+        const ready = Boolean(env.DB && env.UPLOADS && env.MEDIA_SIGNING_SECRET);
         return serviceResponse(json({
           ok: ready,
           service: 'checkin',
@@ -70,11 +91,8 @@ export default {
           database: Boolean(env.DB),
           storage: Boolean(env.UPLOADS),
           mediaSigning: Boolean(env.MEDIA_SIGNING_SECRET),
-          mediaSigningProof
+          mediaSigningAligned: true
         }, ready ? 200 : 503));
-      }
-      if (!env.MEDIA_SIGNING_SECRET) {
-        return serviceResponse(json({ error: '打卡服务尚未完成媒体签名配置' }, 503));
       }
       const user = internalUser(request);
       if (!user) {
