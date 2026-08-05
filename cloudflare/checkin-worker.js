@@ -53,14 +53,19 @@ export default {
         return serviceResponse(json({ error: '禁止直接访问打卡内部服务' }, 403));
       }
       if (url.pathname === CHECKIN_HEALTH_PATH && request.method === 'GET') {
+        const ready = Boolean(env.DB && env.UPLOADS && env.MEDIA_SIGNING_SECRET);
         return serviceResponse(json({
-          ok: true,
+          ok: ready,
           service: 'checkin',
           version: CHECKIN_SERVICE_VERSION,
           environment: env.ENVIRONMENT || 'unknown',
           database: Boolean(env.DB),
-          storage: Boolean(env.UPLOADS)
-        }));
+          storage: Boolean(env.UPLOADS),
+          mediaSigning: Boolean(env.MEDIA_SIGNING_SECRET)
+        }, ready ? 200 : 503));
+      }
+      if (!env.MEDIA_SIGNING_SECRET) {
+        return serviceResponse(json({ error: '打卡服务尚未完成媒体签名配置' }, 503));
       }
       const user = internalUser(request);
       if (!user) {
