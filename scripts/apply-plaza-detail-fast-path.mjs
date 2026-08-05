@@ -127,4 +127,6 @@ if (!app.includes(marker)
   throw new Error('活动广场详情快速加载链路生成不完整');
 }
 
-process.stdout.write('Applied non-blocking plaza detail loading, detail cache and deferred view counting.\n');
+await import('./apply-plaza-detail-instant-open.mjs');
+
+process.stdout.write('Applied non-blocking plaza detail loading, detail cache, instant preview and deferred view counting.\n');

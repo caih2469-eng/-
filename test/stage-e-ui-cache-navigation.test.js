@@ -32,7 +32,12 @@ test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔�
 
 test('阶段E：广场详情主体优先显示，评论与浏览计数均不阻塞，关闭不重新请求列表', () => {
   const block = sourceBetween('async function openPlazaPost', 'const renderAdminCommentsPage');
-  assert.match(block, /const commentsPromise = api\(`/);
+  assert.match(block, /let commentsPromise = null;/);
+  assert.match(block, /commentsPromise = api\(`/);
+  const detailVisibleIndex = block.indexOf("recordPerf('plaza-detail-visible'");
+  const commentsRequestIndex = block.indexOf('commentsPromise = api(`');
+  assert.ok(detailVisibleIndex >= 0, '缺少详情可见性能指标');
+  assert.ok(commentsRequestIndex > detailVisibleIndex, '评论请求必须在详情主体可见后启动');
   assert.match(block, /post = await loadPlazaPost\(postId\)/);
   assert.match(block, /评论加载中…/);
   assert.match(block, /void commentsPromise\.then\(\(\{ result, error \}\) => \{/);

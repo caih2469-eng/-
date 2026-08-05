@@ -21,7 +21,12 @@ test('作品主体先于评论完成渲染，评论失败不再拖垮详情', ()
   const app = readApp();
   const detail = detailBody(app);
   assert.ok(detail.length > 0, '未找到活动广场详情函数');
-  assert.match(detail, /const commentsPromise = api\(`/);
+  assert.match(detail, /let commentsPromise = null;/);
+  assert.match(detail, /commentsPromise = api\(`/);
+  const detailVisibleIndex = detail.indexOf("recordPerf('plaza-detail-visible'");
+  const commentsRequestIndex = detail.indexOf('commentsPromise = api(`');
+  assert.ok(detailVisibleIndex >= 0, '缺少详情可见性能指标');
+  assert.ok(commentsRequestIndex > detailVisibleIndex, '评论请求必须在详情主体可见后启动');
   assert.match(detail, /\.catch\(\(error\) => \(\{ result: null, error \}\)\)/);
   assert.match(detail, /post = await loadPlazaPost\(postId\)/);
   assert.match(detail, /评论加载中…/);
