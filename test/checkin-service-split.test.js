@@ -107,7 +107,7 @@ test('main Worker forwards only check-in routes and keeps safe fallback semantic
     mainWorkerSource.indexOf('const checkinInternalUser')
   );
   assert.match(mainWorkerSource, /CHECKIN_SERVICE_BINDING_V1/);
-  assert.match(allowlistBlock, /checkin-service-health/);
+  assert.match(mainWorkerSource, /const CHECKIN_HEALTH_PATH = '\/api\/checkin-service-health'/);
   assert.match(allowlistBlock, /pathname === '\/api\/checkins'/);
   assert.match(allowlistBlock, /pathname === '\/api\/checkins\/history'/);
   assert.match(allowlistBlock, /member-checkin/);
