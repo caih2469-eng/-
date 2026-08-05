@@ -11,7 +11,7 @@ execFileSync(process.execPath, ['scripts/apply-checkin-service-split.mjs'], { st
 const mainWorkerSource = read('cloudflare/worker.js');
 const studentRouteSource = read('cloudflare/routes/student.js');
 const workflowSource = read('.github/workflows/checkin-service.yml');
-const cloudflareWorkflowSource = read('.github/workflows/cloudflare.yml');
+const performanceBuildSource = read('scripts/apply-approved-performance-diagnostics.mjs');
 const smokeWorkflowSource = read('.github/workflows/checkin-binding-smoke.yml');
 
 test('independent check-in Worker rejects public access and unrelated routes', async () => {
@@ -140,7 +140,7 @@ test('stage two binds Pages traffic to the matching check-in Worker', () => {
   const productionBinding = (productionPages.services || []).find((item) => item.binding === 'CHECKIN_SERVICE');
   assert.deepEqual(testBinding, { binding: 'CHECKIN_SERVICE', service: 'jinshan20-checkin-test' });
   assert.deepEqual(productionBinding, { binding: 'CHECKIN_SERVICE', service: 'jinshan20-checkin' });
-  assert.match(cloudflareWorkflowSource, /node scripts\/apply-checkin-service-split\.mjs/);
+  assert.match(performanceBuildSource, /await import\('\.\/apply-checkin-service-split\.mjs'\)/);
   assert.match(workflowSource, /checkin-service\/deploy-production/);
   assert.match(workflowSource, /Workers R2 Storage \/ Edit/);
   assert.doesNotMatch(workflowSource, /continue-on-error/);
