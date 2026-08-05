@@ -128,5 +128,6 @@ if (!app.includes(marker)
 }
 
 await import('./apply-plaza-detail-instant-open.mjs');
+await import('./apply-plaza-performance-quality-v3.mjs');
 
-process.stdout.write('Applied non-blocking plaza detail loading, detail cache, instant preview and deferred view counting.\n');
+process.stdout.write('Applied non-blocking plaza detail loading, instant preview, responsive high-quality images and deferred view counting.\n');
