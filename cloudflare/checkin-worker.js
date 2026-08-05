@@ -1,8 +1,10 @@
 import { errorResponse, json } from './lib/runtime.js';
+import { createMediaSigningAlignmentProof } from './lib/media-signing.js';
 import { handleStudentRoutes } from './routes/student.js';
 
 const CHECKIN_USER_HEADER = 'x-jinshan-checkin-user';
 const CHECKIN_SERVICE_HEADER = 'x-jinshan-internal-service';
+const CHECKIN_PROOF_CHALLENGE_HEADER = 'x-jinshan-checkin-proof-challenge';
 const CHECKIN_SERVICE_VERSION = 'checkin-v1';
 const CHECKIN_SERVICE_BUILD = '20260805-checkin1';
 const CHECKIN_HEALTH_PATH = '/api/checkin-service-health';
@@ -53,7 +55,13 @@ export default {
         return serviceResponse(json({ error: '禁止直接访问打卡内部服务' }, 403));
       }
       if (url.pathname === CHECKIN_HEALTH_PATH && request.method === 'GET') {
-        const ready = Boolean(env.DB && env.UPLOADS && env.MEDIA_SIGNING_SECRET);
+        const challenge = request.headers.get(CHECKIN_PROOF_CHALLENGE_HEADER) || '';
+        const challengeValid = /^[0-9a-f-]{32,64}$/i.test(challenge);
+        const resourcesReady = Boolean(env.DB && env.UPLOADS && env.MEDIA_SIGNING_SECRET);
+        const ready = resourcesReady && challengeValid;
+        const mediaSigningProof = ready
+          ? await createMediaSigningAlignmentProof(env, challenge)
+          : null;
         return serviceResponse(json({
           ok: ready,
           service: 'checkin',
@@ -61,7 +69,8 @@ export default {
           environment: env.ENVIRONMENT || 'unknown',
           database: Boolean(env.DB),
           storage: Boolean(env.UPLOADS),
-          mediaSigning: Boolean(env.MEDIA_SIGNING_SECRET)
+          mediaSigning: Boolean(env.MEDIA_SIGNING_SECRET),
+          mediaSigningProof
         }, ready ? 200 : 503));
       }
       if (!env.MEDIA_SIGNING_SECRET) {
