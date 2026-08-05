@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 const read = (file) => fs.readFileSync(file, 'utf8');
 
 execFileSync(process.execPath, ['scripts/apply-plaza-detail-fast-path.mjs'], { stdio: 'pipe' });
+execFileSync(process.execPath, ['scripts/apply-plaza-mobile-layout.mjs'], { stdio: 'pipe' });
 
 const app = read('public/app.js');
 const bootstrap = read('public/bootstrap.js');
