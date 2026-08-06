@@ -19,7 +19,7 @@ const sourceBetween = (start, end) => {
 test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 60_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
-  assert.match(appSource, /const rankingViewCache = new Map\(\);/);
+  assert.doesNotMatch(appSource, /const rankingViewCache = new Map\(\);/);
   assert.match(appSource, /const adminCommentViewCache = new Map\(\);/);
   assert.match(appSource, /const scopedCacheKey = \(\.\.\.parts\) => \[/);
   assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
