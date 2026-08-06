@@ -27,11 +27,11 @@ const parseArgs = (argv) => {
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const findChrome = () => {
-  for (const command of ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser']) {
+  for (const command of ['google-chrome-stable', 'google-chrome']) {
     const result = spawnSync('which', [command], { encoding: 'utf8' });
     if (result.status === 0 && result.stdout.trim()) return result.stdout.trim();
   }
-  throw new Error('GitHub Runner 未找到 Chrome/Chromium');
+  throw new Error('GitHub Runner 未找到正式版 Google Chrome');
 };
 
 class CdpClient {
