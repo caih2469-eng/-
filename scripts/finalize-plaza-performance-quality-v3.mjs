@@ -6,14 +6,18 @@ const appPath = path.join(root, 'public/app.js');
 const templatePath = path.join(root, 'templates/plaza-mobile-page.txt');
 const testPath = path.join(root, 'test/stage-e-ui-cache-navigation.test.js');
 const mobileTestPath = path.join(root, 'test/approved-mobile-experience.test.js');
+const layoutTestPath = path.join(root, 'test/approved-layout-team-draft-720.test.js');
 const title = '阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离';
 const mobileTitle = '活动广场、历史打卡和管理员列表图统一使用960px Pica链路';
 const legacyMobileTitle = '活动广场、历史打卡和管理员打卡统一640px WebP缩略图';
+const layoutTitle = '图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填';
+const legacyLayoutTitle = '本轮限定区域使用720px WebP缩略图且不再保留640px生成常量';
 
 const app = fs.readFileSync(appPath, 'utf8');
 const template = fs.readFileSync(templatePath, 'utf8');
 let testSource = fs.readFileSync(testPath, 'utf8');
 let mobileTestSource = fs.readFileSync(mobileTestPath, 'utf8');
+let layoutTestSource = fs.readFileSync(layoutTestPath, 'utf8');
 
 if (!app.includes('/* PLAZA_PERFORMANCE_QUALITY_V3 */')
     || !template.includes('/* PLAZA_PERFORMANCE_QUALITY_V3 */')
@@ -41,7 +45,7 @@ const replaceNamedTest = (source, candidateTitles, replacement, label) => {
 const replacement = String.raw`test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 60_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
-  assert.match(appSource, /const rankingViewCache = new Map\(\);/);
+  assert.doesNotMatch(appSource, /const rankingViewCache = new Map\(\);/);
   assert.match(appSource, /const adminCommentViewCache = new Map\(\);/);
   assert.match(appSource, /const scopedCacheKey = \(\.\.\.parts\) => \[/);
   assert.match(appSource, /user\?\.id \|\| user\?\.studentId \|\| 'anonymous'/);
@@ -92,13 +96,38 @@ mobileTestSource = replaceNamedTest(
 );
 fs.writeFileSync(mobileTestPath, mobileTestSource, 'utf8');
 
+const layoutReplacement = String.raw`test('图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填', () => {
+  const app = read('public/app.js');
+  const media = read('cloudflare/routes/media.js');
+  const backfill = read('scripts/backfill-approved-thumbnails-720.mjs');
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.match(backfill, /APPROVED_720PX_BACKFILL_V1/);
+  assert.match(backfill, /thumbs-720-v1/);
+  assert.match(backfill, /encode\(720, 84\)/);
+});`;
+
+layoutTestSource = replaceNamedTest(
+  layoutTestSource,
+  [layoutTitle, legacyLayoutTitle],
+  layoutReplacement,
+  '独立720px历史回填测试'
+);
+fs.writeFileSync(layoutTestPath, layoutTestSource, 'utf8');
+
 if (!testSource.includes('const VIEW_CACHE_TTL_MS = 60_000;')
+    || !testSource.includes('assert.doesNotMatch(appSource, /const rankingViewCache')
     || !testSource.includes("scopedCacheKey\\('plaza', safeSort, page, safeQuery\\)")
     || !mobileTestSource.includes("cardIndex < 4 \\? 'eager' : 'lazy'")
     || !mobileTestSource.includes("cardIndex < 2 \\? 'high' : cardIndex < 4 \\? 'auto' : 'low'")
     || !mobileTestSource.includes("cardIndex < 4 \\? 'high' : 'low'")
     || !mobileTestSource.includes('admin-thumbs-540-v1')
-    || !mobileTestSource.includes('encode\\(540, 84\\)')) {
+    || !mobileTestSource.includes('encode\\(540, 84\\)')
+    || !layoutTestSource.includes('backfill-approved-thumbnails-720.mjs')
+    || !layoutTestSource.includes('encode\\(720, 84\\)')) {
   throw new Error('活动广场V3测试收敛失败');
 }
 
