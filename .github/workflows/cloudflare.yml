@@ -126,6 +126,15 @@ jobs:
             echo '测试构建仍引用旧资源版本。'
             exit 1
           fi
+      - name: Validate test plaza Worker bundle
+        working-directory: cloudflare/plaza-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.test.jsonc
+      - name: Deploy test plaza Worker
+        working-directory: cloudflare/plaza-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
