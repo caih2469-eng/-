@@ -7,17 +7,21 @@ const templatePath = path.join(root, 'templates/plaza-mobile-page.txt');
 const testPath = path.join(root, 'test/stage-e-ui-cache-navigation.test.js');
 const mobileTestPath = path.join(root, 'test/approved-mobile-experience.test.js');
 const layoutTestPath = path.join(root, 'test/approved-layout-team-draft-720.test.js');
+const mobileAdminTestPath = path.join(root, 'test/mobile-admin-photo-fix.test.js');
 const title = '阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离';
 const mobileTitle = '活动广场、历史打卡和管理员列表图统一使用960px Pica链路';
 const legacyMobileTitle = '活动广场、历史打卡和管理员打卡统一640px WebP缩略图';
 const layoutTitle = '图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填';
 const legacyLayoutTitle = '本轮限定区域使用720px WebP缩略图且不再保留640px生成常量';
+const adminBackfillTitle = '管理员540px缩略图回填脚本具备正式环境双重确认和原图保护';
+const legacyAdminBackfillTitle = '640px缩略图回填脚本具备正式环境双重确认和原图保护';
 
 const app = fs.readFileSync(appPath, 'utf8');
 const template = fs.readFileSync(templatePath, 'utf8');
 let testSource = fs.readFileSync(testPath, 'utf8');
 let mobileTestSource = fs.readFileSync(mobileTestPath, 'utf8');
 let layoutTestSource = fs.readFileSync(layoutTestPath, 'utf8');
+let mobileAdminTestSource = fs.readFileSync(mobileAdminTestPath, 'utf8');
 
 if (!app.includes('/* PLAZA_PERFORMANCE_QUALITY_V3 */')
     || !template.includes('/* PLAZA_PERFORMANCE_QUALITY_V3 */')
@@ -118,6 +122,24 @@ layoutTestSource = replaceNamedTest(
 );
 fs.writeFileSync(layoutTestPath, layoutTestSource, 'utf8');
 
+const mobileAdminBackfillReplacement = String.raw`test('管理员540px缩略图回填脚本具备正式环境双重确认和原图保护', () => {
+  const script = read('scripts/backfill-admin-thumbnails-540.mjs');
+  assert.match(script, /--confirm-production jinshan20/);
+  assert.match(script, /withoutEnlargement: true/);
+  assert.match(script, /oldThumbObjectKeysPreserved/);
+  assert.match(script, /admin-thumbs-540-v1/);
+  assert.match(script, /encode\(540, 84\)/);
+  assert.doesNotMatch(script, /r2', 'object', 'delete/);
+});`;
+
+mobileAdminTestSource = replaceNamedTest(
+  mobileAdminTestSource,
+  [adminBackfillTitle, legacyAdminBackfillTitle],
+  mobileAdminBackfillReplacement,
+  '管理员540px回填测试'
+);
+fs.writeFileSync(mobileAdminTestPath, mobileAdminTestSource, 'utf8');
+
 if (!testSource.includes('const VIEW_CACHE_TTL_MS = 60_000;')
     || !testSource.includes('assert.doesNotMatch(appSource, /const rankingViewCache')
     || !testSource.includes("scopedCacheKey\\('plaza', safeSort, page, safeQuery\\)")
@@ -127,7 +149,9 @@ if (!testSource.includes('const VIEW_CACHE_TTL_MS = 60_000;')
     || !mobileTestSource.includes('admin-thumbs-540-v1')
     || !mobileTestSource.includes('encode\\(540, 84\\)')
     || !layoutTestSource.includes('backfill-approved-thumbnails-720.mjs')
-    || !layoutTestSource.includes('encode\\(720, 84\\)')) {
+    || !layoutTestSource.includes('encode\\(720, 84\\)')
+    || !mobileAdminTestSource.includes('admin-thumbs-540-v1')
+    || !mobileAdminTestSource.includes('encode\\(540, 84\\)')) {
   throw new Error('活动广场V3测试收敛失败');
 }
 
