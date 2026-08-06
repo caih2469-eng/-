@@ -8,6 +8,7 @@ const testPath = path.join(root, 'test/stage-e-ui-cache-navigation.test.js');
 const mobileTestPath = path.join(root, 'test/approved-mobile-experience.test.js');
 const title = '阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离';
 const mobileTitle = '活动广场、历史打卡和管理员列表图统一使用960px Pica链路';
+const legacyMobileTitle = '活动广场、历史打卡和管理员打卡统一640px WebP缩略图';
 
 const app = fs.readFileSync(appPath, 'utf8');
 const template = fs.readFileSync(templatePath, 'utf8');
@@ -22,8 +23,21 @@ if (!app.includes('/* PLAZA_PERFORMANCE_QUALITY_V3 */')
   throw new Error('活动广场性能与画质V3运行时尚未完成，停止收敛测试');
 }
 
-const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const pattern = new RegExp(`test\\('${escapedTitle}',[\\s\\S]*?\\r?\\n\\}\\);`);
+const testBlockPattern = (testTitle) => {
+  const escapedTitle = testTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`test\\('${escapedTitle}',[\\s\\S]*?\\r?\\n\\}\\);`);
+};
+
+const replaceNamedTest = (source, candidateTitles, replacement, label) => {
+  for (const candidateTitle of candidateTitles) {
+    const pattern = testBlockPattern(candidateTitle);
+    if (pattern.test(source)) {
+      return source.replace(pattern, () => replacement);
+    }
+  }
+  throw new Error(`${label}锚点未找到`);
+};
+
 const replacement = String.raw`test('阶段E：广场和评论管理缓存仅存于页面内存并按用户隔离', () => {
   assert.match(appSource, /const VIEW_CACHE_TTL_MS = 60_000;/);
   assert.match(appSource, /const plazaViewCache = new Map\(\);/);
@@ -39,14 +53,14 @@ const replacement = String.raw`test('阶段E：广场和评论管理缓存仅存
   assert.doesNotMatch(cacheBlock, /localStorage|sessionStorage/);
 });`;
 
-if (!pattern.test(testSource)) {
-  throw new Error('活动广场阶段E缓存测试锚点未找到');
-}
-testSource = testSource.replace(pattern, replacement);
+testSource = replaceNamedTest(
+  testSource,
+  [title],
+  replacement,
+  '活动广场阶段E缓存测试'
+);
 fs.writeFileSync(testPath, testSource, 'utf8');
 
-const escapedMobileTitle = mobileTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const mobilePattern = new RegExp(`test\\('${escapedMobileTitle}',[\\s\\S]*?\\r?\\n\\}\\);`);
 const mobileReplacement = String.raw`test('活动广场、历史打卡和管理员列表图统一使用960px Pica链路', () => {
   const app = read('public/app.js');
   const style = read('public/style.css');
@@ -70,10 +84,12 @@ const mobileReplacement = String.raw`test('活动广场、历史打卡和管理�
   assert.match(backfill, /encode\(720, 84\)/);
 });`;
 
-if (!mobilePattern.test(mobileTestSource)) {
-  throw new Error('活动广场图片优先级测试锚点未找到');
-}
-mobileTestSource = mobileTestSource.replace(mobilePattern, mobileReplacement);
+mobileTestSource = replaceNamedTest(
+  mobileTestSource,
+  [mobileTitle, legacyMobileTitle],
+  mobileReplacement,
+  '活动广场图片优先级测试'
+);
 fs.writeFileSync(mobileTestPath, mobileTestSource, 'utf8');
 
 if (!testSource.includes('const VIEW_CACHE_TTL_MS = 60_000;')
