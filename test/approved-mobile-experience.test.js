@@ -35,8 +35,8 @@ test('活动广场、历史打卡和管理员列表图统一使用960px Pica链�
   assert.match(media, /THUMB_MAX_EDGE = 960/);
   assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
   assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
-  assert.match(backfill, /thumbs-720-v1/);
-  assert.match(backfill, /encode\(720, 84\)/);
+  assert.match(backfill, /admin-thumbs-540-v1/);
+  assert.match(backfill, /encode\(540, 84\)/);
 });
 
 test('高清原图位于详情之上并可保存且不销毁下层详情', () => {
