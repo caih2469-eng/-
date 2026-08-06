@@ -16,21 +16,27 @@ test('用户首页仅包含确认的四项同排入口与累计打卡', () => {
   assert.doesNotMatch(app, /data-material=/);
 });
 
-test('活动广场、历史打卡和管理员打卡统一640px WebP缩略图', () => {
+test('活动广场、历史打卡和管理员列表图统一使用960px Pica链路', () => {
   const app = read('public/app.js');
+  const style = read('public/style.css');
   const media = read('cloudflare/routes/media.js');
   const backfill = read('scripts/backfill-admin-thumbnails-540.mjs');
-  assert.match(app, /const MEDIA_THUMB_MAX_EDGE = 640;/);
-  assert.match(app, /const MEDIA_PLAZA_THUMB_MAX_EDGE = 640;/);
+  const plazaBody = app.match(/\/\* PLAZA_MOBILE_LAYOUT_V1 \*\/[\s\S]*?async function plaza/)?.[0] || '';
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
   assert.match(app, /data-perf-image="history-thumb"/);
-  assert.match(app, /data-perf-image="plaza-thumb"/);
+  assert.match(plazaBody, /data-perf-image="plaza-thumb"/);
+  assert.match(plazaBody, /data-priority=/);
+  assert.match(plazaBody, /cardIndex < 4 \? 'eager' : 'lazy'/);
+  assert.match(plazaBody, /cardIndex < 2 \? 'high' : cardIndex < 4 \? 'auto' : 'low'/);
+  assert.match(plazaBody, /cardIndex < 4 \? 'high' : 'low'/);
   assert.match(app, /data-perf-image="admin-checkin-thumb"/);
-  assert.match(app, /width="640" height="480"/);
-  assert.match(media, /const THUMB_MAX_EDGE = 640;/);
-  assert.match(media, /const PLAZA_THUMB_MAX_EDGE = 640;/);
-  assert.match(backfill, /thumbs-640-v1/);
-  assert.match(backfill, /encode\(640, 84\)/);
-  assert.match(backfill, /'task'/);
+  assert.match(style, /column-count:\s*2/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.match(backfill, /thumbs-720-v1/);
+  assert.match(backfill, /encode\(720, 84\)/);
 });
 
 test('高清原图位于详情之上并可保存且不销毁下层详情', () => {
