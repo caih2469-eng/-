@@ -80,8 +80,8 @@ const mobileReplacement = String.raw`test('活动广场、历史打卡和管理�
   assert.match(media, /THUMB_MAX_EDGE = 960/);
   assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
   assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
-  assert.match(backfill, /thumbs-720-v1/);
-  assert.match(backfill, /encode\(720, 84\)/);
+  assert.match(backfill, /admin-thumbs-540-v1/);
+  assert.match(backfill, /encode\(540, 84\)/);
 });`;
 
 mobileTestSource = replaceNamedTest(
@@ -96,7 +96,9 @@ if (!testSource.includes('const VIEW_CACHE_TTL_MS = 60_000;')
     || !testSource.includes("scopedCacheKey\\('plaza', safeSort, page, safeQuery\\)")
     || !mobileTestSource.includes("cardIndex < 4 \\? 'eager' : 'lazy'")
     || !mobileTestSource.includes("cardIndex < 2 \\? 'high' : cardIndex < 4 \\? 'auto' : 'low'")
-    || !mobileTestSource.includes("cardIndex < 4 \\? 'high' : 'low'")) {
+    || !mobileTestSource.includes("cardIndex < 4 \\? 'high' : 'low'")
+    || !mobileTestSource.includes('admin-thumbs-540-v1')
+    || !mobileTestSource.includes('encode\\(540, 84\\)')) {
   throw new Error('活动广场V3测试收敛失败');
 }
 
