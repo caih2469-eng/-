@@ -4,10 +4,11 @@ import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
+const runGenerator = (file) => execFileSync(process.execPath, [file], { stdio: 'pipe' });
 
-execFileSync(process.execPath, ['scripts/apply-plaza-detail-fast-path.mjs'], { stdio: 'pipe' });
-execFileSync(process.execPath, ['scripts/apply-plaza-mobile-layout.mjs'], { stdio: 'pipe' });
-execFileSync(process.execPath, ['scripts/finalize-plaza-performance-quality-v3.mjs'], { stdio: 'pipe' });
+runGenerator('scripts/apply-plaza-detail-fast-path.mjs');
+runGenerator('scripts/apply-plaza-mobile-layout.mjs');
+runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
 
 const app = read('public/app.js');
 const bootstrap = read('public/bootstrap.js');
@@ -95,14 +96,22 @@ test('detail counts combine liked state into the existing aggregate query', () =
   assert.doesNotMatch(plazaRoute, /SELECT 1 AS liked FROM plaza_likes WHERE post_id=\?1 AND user_id=\?2/);
 });
 
-test('plaza performance generator remains idempotent across generated assets and templates', () => {
-  const firstApp = read('public/app.js');
-  const firstBootstrap = read('public/bootstrap.js');
-  const firstTemplate = read('templates/plaza-mobile-page.txt');
-  const firstRoute = read('cloudflare/routes/plaza.js');
-  execFileSync(process.execPath, ['scripts/apply-plaza-detail-fast-path.mjs'], { stdio: 'pipe' });
-  assert.equal(read('public/app.js'), firstApp);
-  assert.equal(read('public/bootstrap.js'), firstBootstrap);
-  assert.equal(read('templates/plaza-mobile-page.txt'), firstTemplate);
-  assert.equal(read('cloudflare/routes/plaza.js'), firstRoute);
+test('plaza performance generators remain idempotent across runtime, templates and converged tests', () => {
+  const targets = [
+    'public/app.js',
+    'public/bootstrap.js',
+    'templates/plaza-mobile-page.txt',
+    'cloudflare/routes/plaza.js',
+    'test/stage-e-ui-cache-navigation.test.js',
+    'test/approved-mobile-experience.test.js'
+  ];
+  const before = new Map(targets.map(target => [target, read(target)]));
+
+  runGenerator('scripts/apply-plaza-detail-fast-path.mjs');
+  runGenerator('scripts/apply-plaza-mobile-layout.mjs');
+  runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
+
+  for (const target of targets) {
+    assert.equal(read(target), before.get(target), `${target} 在重复生成后发生变化`);
+  }
 });
