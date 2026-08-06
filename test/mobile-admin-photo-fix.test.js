@@ -50,11 +50,12 @@ test('媒体签名复用导入后的HMAC密钥', () => {
   assert.match(signing, /if \(!hmacKeyPromise \|\| hmacKeySecret !== secret\)/);
 });
 
-test('640px缩略图回填脚本具备正式环境双重确认和原图保护', () => {
+test('管理员540px缩略图回填脚本具备正式环境双重确认和原图保护', () => {
   const script = read('scripts/backfill-admin-thumbnails-540.mjs');
   assert.match(script, /--confirm-production jinshan20/);
   assert.match(script, /withoutEnlargement: true/);
   assert.match(script, /oldThumbObjectKeysPreserved/);
-  assert.match(script, /thumbs-640-v1/);
+  assert.match(script, /admin-thumbs-540-v1/);
+  assert.match(script, /encode\(540, 84\)/);
   assert.doesNotMatch(script, /r2', 'object', 'delete/);
 });
