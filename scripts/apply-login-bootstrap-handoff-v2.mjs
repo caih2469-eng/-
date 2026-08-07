@@ -87,10 +87,30 @@ const replaceOnce = (source, search, replacement, label) => {
   }
 }
 
+// Legacy generators intentionally assert that the login page does not execute app.js.
+// V2 only adds <link rel="prefetch">. Patch this one assertion after those generators
+// have converged, preserving the original test title and every other test in the file.
+{
+  const { file, source } = read('test/production-media-login-performance.test.js');
+  const oldAssertion = '  assert.doesNotMatch(html, /\\bapp\\.js\\b/);';
+  const markerAssertion = '    assert.match(html, /LOGIN_HOME_PREFETCH_V2/);';
+  if (!source.includes(markerAssertion)) {
+    const replacement = [
+      '  assert.doesNotMatch(html, /<script[^>]+src=["\'][^"\']*(?:\\/app\\.js|\\/bootstrap\\.js)/i);',
+      '  if (/\\bapp\\.js\\b/.test(html) || /\\bbootstrap\\.js\\b/.test(html)) {',
+      '    assert.match(html, /LOGIN_HOME_PREFETCH_V2/);',
+      '    assert.match(html, /<link[^>]+rel=["\']prefetch["\'][^>]+href=["\'][^"\']*\\/(?:app|bootstrap)\\.js/i);',
+      '  }'
+    ].join('\n');
+    write(file, replaceOnce(source, oldAssertion, replacement, '入口页主应用执行与prefetch区分断言'));
+  }
+}
+
 const worker = read('cloudflare/worker.js').source;
 const entrance = read('public/entrance.js').source;
 const entranceHtml = read('public/entrance.html').source;
 const bootstrap = read('public/bootstrap.js').source;
+const productionPerformanceTest = read('test/production-media-login-performance.test.js').source;
 if (!worker.includes(marker)
     || !worker.includes('buildStudentDashboard(env, user).catch(() => null)')
     || !worker.includes('bootstrap\n  }, 200, {')
@@ -101,8 +121,10 @@ if (!worker.includes(marker)
     || !bootstrap.includes('consumeLoginBootstrapV2')
     || !bootstrap.includes('age > 10_000')
     || !bootstrap.includes("source: 'login-handoff-v2'")
-    || !bootstrap.includes("fetch('/api/session'")) {
+    || !bootstrap.includes("fetch('/api/session'")
+    || !productionPerformanceTest.includes('assert.match(html, /LOGIN_HOME_PREFETCH_V2/);')
+    || !productionPerformanceTest.includes("test('阶段B会话直接携带学生首页快照")) {
   throw new Error('安全登录首页交接V2生成不完整');
 }
 
-console.log('Applied safe login bootstrap handoff V2 with 10-second same-user validation and network fallback.');
+console.log('Applied safe login bootstrap handoff V2 with 10-second same-user validation, network fallback and prefetch-aware safety test.');
