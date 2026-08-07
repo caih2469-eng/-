@@ -13,6 +13,9 @@ concurrency:
   group: strict-p95-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  STRICT_P95_BASE_URL: https://strict-p95-v4.jinshan20-test.pages.dev
+
 jobs:
   strict-p95:
     runs-on: ubuntu-latest
@@ -82,28 +85,29 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-test
           command: pages deploy ../../public --project-name jinshan20-test --branch strict-p95-v4
-      - name: Verify isolated site serves exact commit
+      - name: Verify isolated branch site serves exact commit
         shell: bash
         run: |
           set -euo pipefail
-          url="https://jinshan20-test.pages.dev/deployment-version.json?strict=${GITHUB_RUN_ID}"
+          url="${STRICT_P95_BASE_URL}/deployment-version.json?strict=${GITHUB_RUN_ID}"
           for attempt in $(seq 1 30); do
             body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
             if printf '%s' "$body" | grep -Fq "\"commit\": \"$GITHUB_SHA\"" && printf '%s' "$body" | grep -Fq "\"assetVersion\": \"$GITHUB_SHA\""; then
+              echo "Strict p95 site verified at $GITHUB_SHA"
               printf '%s\n' "$body"
               exit 0
             fi
             sleep 4
           done
-          echo '隔离测试站没有返回当前提交。'
+          echo '隔离分支测试站没有返回当前提交。'
           exit 1
       - name: Seed fixture and run existing Chrome acceptance
-        run: node scripts/browser-approved-preview.mjs --base-url https://jinshan20-test.pages.dev
+        run: node scripts/browser-approved-preview.mjs --base-url "$STRICT_P95_BASE_URL"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Run strict 20-run Google Chrome p95 gate
-        run: node scripts/browser-strict-p95.mjs --base-url https://jinshan20-test.pages.dev --runs 20 --threshold-ms 1000
+        run: node scripts/browser-strict-p95.mjs --base-url "$STRICT_P95_BASE_URL" --runs 20 --threshold-ms 1000
       - name: Upload strict p95 report
         if: always() && hashFiles('reports/browser-strict-p95.json') != ''
         uses: actions/upload-artifact@v4
