@@ -85,7 +85,8 @@ jobs:
   deploy-test:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'perf/plaza-quality-v3')
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
