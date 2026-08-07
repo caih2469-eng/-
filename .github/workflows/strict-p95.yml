@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  STRICT_P95_BASE_URL: https://strict-p95-v4.jinshan20-test.pages.dev
+  STRICT_P95_BASE_URL: https://jinshan20-test.pages.dev
 
 jobs:
   strict-p95:
@@ -78,28 +78,28 @@ jobs:
           }
           fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
           NODE
-      - name: Deploy exact commit to isolated test Pages
+      - name: Deploy exact commit to configured test Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: cloudflare/pages-test
-          command: pages deploy ../../public --project-name jinshan20-test --branch strict-p95-v4
-      - name: Verify isolated branch site serves exact commit
+          command: pages deploy ../../public --project-name jinshan20-test --branch develop
+      - name: Verify configured test site serves exact commit
         shell: bash
         run: |
           set -euo pipefail
           url="${STRICT_P95_BASE_URL}/deployment-version.json?strict=${GITHUB_RUN_ID}"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 45); do
             body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
             if printf '%s' "$body" | grep -Fq "\"commit\": \"$GITHUB_SHA\"" && printf '%s' "$body" | grep -Fq "\"assetVersion\": \"$GITHUB_SHA\""; then
-              echo "Strict p95 site verified at $GITHUB_SHA"
+              echo "Strict p95 test environment verified at $GITHUB_SHA"
               printf '%s\n' "$body"
               exit 0
             fi
-            sleep 4
+            sleep 3
           done
-          echo '隔离分支测试站没有返回当前提交。'
+          echo '正式测试站没有返回当前提交。'
           exit 1
       - name: Seed fixture and run existing Chrome acceptance
         run: node scripts/browser-approved-preview.mjs --base-url "$STRICT_P95_BASE_URL"
