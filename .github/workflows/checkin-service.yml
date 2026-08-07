@@ -85,8 +85,7 @@ jobs:
   deploy-test:
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test') ||
-      (github.event_name == 'pull_request' && github.head_ref == 'perf/plaza-quality-v3')
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'test')
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -101,24 +100,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/apply-checkin-service-split.mjs
-      - name: Prepare test signing secret
-        shell: bash
-        env:
-          MEDIA_SIGNING_SECRET: ${{ secrets.MEDIA_SIGNING_SECRET }}
-        run: |
-          set -euo pipefail
-          if [ -z "${MEDIA_SIGNING_SECRET:-}" ]; then
-            echo '::error title=Missing test media signing secret::Repository secret MEDIA_SIGNING_SECRET is required for the first jinshan20-checkin-test deployment.'
-            exit 1
-          fi
-          umask 077
-          printf 'MEDIA_SIGNING_SECRET=%s\n' "$MEDIA_SIGNING_SECRET" > "$RUNNER_TEMP/checkin-test.secrets"
       - name: Deploy test Worker
         working-directory: cloudflare/checkin-service
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm exec wrangler deploy --config wrangler.test.jsonc --secrets-file "$RUNNER_TEMP/checkin-test.secrets"
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
 
   mark-production-pending:
     if: >-
