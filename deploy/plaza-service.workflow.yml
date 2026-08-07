@@ -62,7 +62,7 @@ jobs:
       - run: node --check cloudflare/plaza-worker.js
       - run: node --check cloudflare/routes/plaza.js
       - run: node --check cloudflare/worker.js
-      - run: node --test test/plaza-detail-fast-path.test.js test/plaza-detail-instant-open.test.js test/plaza-service-split.test.js
+      - run: node --test --test-concurrency=1 test/plaza-detail-fast-path.test.js test/plaza-detail-instant-open.test.js test/plaza-service-split.test.js
 
   deploy-test:
     if: >-

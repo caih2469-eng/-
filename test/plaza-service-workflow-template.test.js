@@ -16,7 +16,7 @@ test('广场服务工作流先验证再部署，仓库内容只读且仅允许�
   assert.match(workflow, /^  deploy-test:/m);
   assert.match(workflow, /^  deploy-production:/m);
   assert.match(workflow, /needs: validate/);
-  assert.match(workflow, /node --test test\/plaza-detail-fast-path\.test\.js test\/plaza-detail-instant-open\.test\.js test\/plaza-service-split\.test\.js/);
+  assert.match(workflow, /node --test --test-concurrency=1 test\/plaza-detail-fast-path\.test\.js test\/plaza-detail-instant-open\.test\.js test\/plaza-service-split\.test\.js/);
 });
 
 test('详情优化生成器在独立广场Worker验证与部署前执行', () => {
