@@ -144,13 +144,17 @@ if (!route.includes(marker)) {
 
 app = fs.readFileSync(appPath, 'utf8');
 route = fs.readFileSync(routePath, 'utf8');
+const hasPriorityDetailImage = app.includes("imageIndex === 0 ? 'src' : 'data-src'")
+  || (app.includes('PLAZA_PERFORMANCE_QUALITY_V3')
+    && app.includes('image.displayUrl')
+    && app.includes('2048w'));
 if (!app.includes(marker)
     || !app.includes('readPlazaPostPreview')
     || !app.includes("recordPerf('plaza-detail-preview-visible'")
     || !app.includes('warmVisiblePlazaDetails')
     || !app.includes('scheduleVisiblePlazaDetailWarmup')
     || !app.includes("document.addEventListener('pointerdown', prefetch")
-    || !app.includes("imageIndex === 0 ? 'src' : 'data-src'")
+    || !hasPriorityDetailImage
     || !route.includes(marker)
     || !route.includes('AS liked')
     || route.includes('const [members, images, counts, liked]')) {

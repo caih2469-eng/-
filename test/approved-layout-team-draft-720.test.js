@@ -4,12 +4,16 @@ import fs from 'node:fs';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 
-test('本轮限定区域使用720px WebP缩略图且不再保留640px生成常量', () => {
+test('图片链路使用960px列表图和2048px高清图，旧数据继续使用720px回填', () => {
   const app = read('public/app.js');
   const media = read('cloudflare/routes/media.js');
-  const backfill = read('scripts/backfill-admin-thumbnails-540.mjs');
-  assert.match(app, /MEDIA_THUMB_MAX_EDGE = 720/);
-  assert.match(media, /THUMB_MAX_EDGE = 720/);
+  const backfill = read('scripts/backfill-approved-thumbnails-720.mjs');
+  assert.match(app, /PICA_THUMB_MAX_EDGE = 960/);
+  assert.match(app, /PICA_DISPLAY_MAX_EDGE = 2048/);
+  assert.match(media, /THUMB_MAX_EDGE = 960/);
+  assert.match(media, /PLAZA_THUMB_MAX_EDGE = 960/);
+  assert.match(media, /DISPLAY_MAX_EDGE = 2048/);
+  assert.match(backfill, /APPROVED_720PX_BACKFILL_V1/);
   assert.match(backfill, /thumbs-720-v1/);
   assert.match(backfill, /encode\(720, 84\)/);
 });

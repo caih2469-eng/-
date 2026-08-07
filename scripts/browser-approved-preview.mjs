@@ -45,6 +45,25 @@ if (!originalSource.includes(resilientCleanup)) {
   originalChanged = true;
 }
 
+const originalDeploymentCheck = [
+  '  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);',
+  "  if (deployment.body?.assetVersion !== '20260731-approved1') {",
+  '    throw new Error(`测试站资源版本不是20260731-approved1：${JSON.stringify(deployment.body)}`);',
+  '  }'
+].join('\n');
+const commitScopedDeploymentCheck = [
+  '  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);',
+  "  const expectedAssetVersion = process.env.GITHUB_SHA || '20260731-approved1';",
+  '  if (deployment.body?.assetVersion !== expectedAssetVersion) {',
+  '    throw new Error(`测试站资源版本不是${expectedAssetVersion}：${JSON.stringify(deployment.body)}`);',
+  '  }'
+].join('\n');
+if (!originalSource.includes('const expectedAssetVersion = process.env.GITHUB_SHA')) {
+  if (!originalSource.includes(originalDeploymentCheck)) throw new Error('未找到原浏览器验收资源版本校验片段');
+  originalSource = originalSource.replace(originalDeploymentCheck, commitScopedDeploymentCheck);
+  originalChanged = true;
+}
+
 const originalDetailOpen = [
   "    await client.evaluate(`document.querySelector('[data-post]')?.click()`);",
   "    await waitFor(client, `Boolean(document.querySelector('.plaza-detail .image-viewer-trigger'))`, 15_000, '活动详情');"
