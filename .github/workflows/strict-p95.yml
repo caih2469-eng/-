@@ -1,0 +1,120 @@
+name: Strict p95 performance gate
+
+on:
+  push:
+    branches:
+      - perf/strict-p95-v4
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strict-p95-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-p95:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Full static and functional validation
+        run: |
+          pnpm run check
+          pnpm run check:text
+          pnpm test
+      - name: Generate exact strict-p95 test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-build-asset-version.mjs
+          node scripts/apply-critical-path-p95-v4.mjs
+          grep -Fq "$GITHUB_SHA" public/bootstrap.js
+          grep -Fq "$GITHUB_SHA" public/index.html
+          grep -Fq "$GITHUB_SHA" public/entrance.html
+          grep -q 'STRICT_P95_LOGIN_READY_V4' public/entrance.js
+          grep -q 'STRICT_P95_BOOTSTRAP_V4' public/bootstrap.js
+          grep -q 'STRICT_P95_APP_PREFETCH_V4' public/app.js
+          if grep -Fq "fetch('/api/plaza?sort=latest&page=1&limit=20'" public/bootstrap.js; then
+            echo '首页启动脚本仍在关键路径直接请求活动广场。'
+            exit 1
+          fi
+      - name: Validate isolated plaza Worker
+        working-directory: cloudflare/plaza-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.test.jsonc
+      - name: Deploy isolated plaza Worker
+        working-directory: cloudflare/plaza-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
+      - name: Stamp exact test commit
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,assetVersion:process.env.GITHUB_SHA,environment:'test-strict-p95',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+      - name: Disable unavailable check-in binding only in isolated test config
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'cloudflare/pages-test/wrangler.jsonc';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const before = Array.isArray(config.services) ? config.services : [];
+          config.services = before.filter((item) => item.binding !== 'CHECKIN_SERVICE');
+          if (!config.services.some((item) => item.binding === 'PLAZA_SERVICE')) {
+            throw new Error('PLAZA_SERVICE must remain enabled');
+          }
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
+      - name: Deploy exact commit to isolated test Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
+          command: pages deploy ../../public --project-name jinshan20-test --branch strict-p95-v4
+      - name: Verify isolated site serves exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://jinshan20-test.pages.dev/deployment-version.json?strict=${GITHUB_RUN_ID}"
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
+            if printf '%s' "$body" | grep -Fq "\"commit\": \"$GITHUB_SHA\"" && printf '%s' "$body" | grep -Fq "\"assetVersion\": \"$GITHUB_SHA\""; then
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            sleep 4
+          done
+          echo '隔离测试站没有返回当前提交。'
+          exit 1
+      - name: Seed fixture and run existing Chrome acceptance
+        run: node scripts/browser-approved-preview.mjs --base-url https://jinshan20-test.pages.dev
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Run strict 20-run Google Chrome p95 gate
+        run: node scripts/browser-strict-p95.mjs --base-url https://jinshan20-test.pages.dev --runs 20 --threshold-ms 1000
+      - name: Upload strict p95 report
+        if: always() && hashFiles('reports/browser-strict-p95.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-strict-p95-${{ github.run_id }}
+          path: reports/browser-strict-p95.json
+          retention-days: 14
+      - name: Upload existing Chrome report
+        if: always() && hashFiles('reports/browser-approved-preview.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-approved-preview-strict-${{ github.run_id }}
+          path: reports/browser-approved-preview.json
+          retention-days: 14
