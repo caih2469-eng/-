@@ -7,6 +7,7 @@ const entranceHtmlMarker = '<!-- STRICT_P95_LOGIN_HTML_V4 -->';
 const appMarker = '/* STRICT_P95_APP_PREFETCH_V4 */';
 const bootstrapMarker = '/* STRICT_P95_BOOTSTRAP_V4 */';
 const bootstrapAssetMarker = '/* STRICT_P95_ASSET_OVERLAP_V4 */';
+const dashboardMarker = '/* STRICT_P95_DASHBOARD_BATCH_V4 */';
 
 const read = (relativePath) => {
   const file = path.join(root, relativePath);
@@ -117,10 +118,13 @@ const replaceOnce = (source, search, replacement, label) => {
   }
 }
 
+await import('./apply-dashboard-p95-v4.mjs');
+
 const entranceHtml = fs.readFileSync(path.join(root, 'public/entrance.html'), 'utf8');
 const entrance = fs.readFileSync(path.join(root, 'public/entrance.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(root, 'public/bootstrap.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
+const dashboard = fs.readFileSync(path.join(root, 'cloudflare/services/student-dashboard.js'), 'utf8');
 if (!entranceHtml.includes(entranceHtmlMarker)
     || !entranceHtml.includes('<script defer src=')
     || !entranceHtml.includes('.ui-layer { opacity: 1 !important;')
@@ -129,6 +133,7 @@ if (!entranceHtml.includes(entranceHtmlMarker)
     || !bootstrap.includes(bootstrapAssetMarker)
     || !bootstrap.includes('queueMicrotask(warmHomeAssets);')
     || !app.includes(appMarker)
+    || !dashboard.includes(dashboardMarker)
     || /setTimeout\(\(\) => \{[\s\S]*?uiLayer\.style\.opacity = '1'[\s\S]*?\}, 800\)/.test(entrance)
     || bootstrap.includes("fetch('/api/plaza?sort=latest&page=1&limit=20'")
     || !app.includes("requestIdleCallback(startPlazaPrefetch, { timeout: 900 })")
@@ -137,4 +142,4 @@ if (!entranceHtml.includes(entranceHtmlMarker)
   throw new Error('严格p95关键路径V4生成不完整');
 }
 
-console.log('Applied strict p95 critical-path V4: immediate HTML login UI, overlapped home assets and deferred Plaza prefetch.');
+console.log('Applied strict p95 critical-path V4: immediate login UI, overlapped home assets, shared Dashboard reads and deferred Plaza prefetch.');
