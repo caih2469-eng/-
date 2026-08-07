@@ -3,8 +3,10 @@ import path from 'node:path';
 
 const root = process.cwd();
 const entranceMarker = '/* STRICT_P95_LOGIN_READY_V4 */';
+const entranceHtmlMarker = '<!-- STRICT_P95_LOGIN_HTML_V4 -->';
 const appMarker = '/* STRICT_P95_APP_PREFETCH_V4 */';
 const bootstrapMarker = '/* STRICT_P95_BOOTSTRAP_V4 */';
+const bootstrapAssetMarker = '/* STRICT_P95_ASSET_OVERLAP_V4 */';
 
 const read = (relativePath) => {
   const file = path.join(root, relativePath);
@@ -18,6 +20,27 @@ const replaceOnce = (source, search, replacement, label) => {
   return next;
 };
 
+// Make the login controls visually usable from the initial HTML/CSS. Decorative
+// animation and entrance.js must never be a prerequisite for seeing or focusing the form.
+{
+  const { file, source } = read('public/entrance.html');
+  if (!source.includes(entranceHtmlMarker)) {
+    const scriptMatch = source.match(/\n\s*<script src="([^"]*entrance\.js[^"]*)"><\/script>/);
+    if (!scriptMatch) throw new Error('未找到入口页登录脚本标签');
+    const critical = [
+      `    ${entranceHtmlMarker}`,
+      '    <style>',
+      '      #cinematic-intro { pointer-events: none !important; z-index: 5 !important; }',
+      '      .ui-layer { opacity: 1 !important; transform: none !important; transition: none !important; }',
+      '    </style>',
+      `    <script defer src="${scriptMatch[1]}"></script>`
+    ].join('\n');
+    let next = replaceOnce(source, '</head>', `${critical}\n</head>`, '入口页head结束位置');
+    next = next.replace(scriptMatch[0], '');
+    write(file, next);
+  }
+}
+
 {
   const { file, source } = read('public/entrance.js');
   if (!source.includes(entranceMarker)) {
@@ -29,12 +52,45 @@ const replaceOnce = (source, search, replacement, label) => {
 
 {
   const { file, source } = read('public/bootstrap.js');
-  if (!source.includes(bootstrapMarker)) {
+  let next = source;
+  if (!next.includes(bootstrapMarker)) {
     const pattern = /\s*\/\* PLAZA_PERFORMANCE_QUALITY_V3 \*\/\n\s*window\.__BOOTSTRAP_PLAZA_PROMISE__ = window\.__BOOTSTRAP_USER__\?\.role === 'student'[\s\S]*?\n\s*: Promise\.resolve\(null\);/;
-    if (!pattern.test(source)) throw new Error('未找到启动阶段活动广场预取区块');
+    if (!pattern.test(next)) throw new Error('未找到启动阶段活动广场预取区块');
     const replacement = `\n      /* PLAZA_PERFORMANCE_QUALITY_V3 */\n      ${bootstrapMarker}\n      // Do not compete with the authenticated home critical path. The app starts this prefetch when the main thread is idle.\n      window.__BOOTSTRAP_PLAZA_PROMISE__ = Promise.resolve(null);\n      window.__BOOTSTRAP_PLAZA_IMAGES__ = [];`;
-    write(file, source.replace(pattern, replacement));
+    next = next.replace(pattern, replacement);
   }
+
+  if (!next.includes(bootstrapAssetMarker)) {
+    const styleUrl = next.match(/loadStylesheet\('([^']*\/style\.css[^']*)'\)/)?.[1];
+    const sitePathUrl = next.match(/loadScript\('([^']*\/site-path\.js[^']*)'\)/)?.[1];
+    const appUrl = next.match(/loadScript\('([^']*\/app\.js[^']*)'\)/)?.[1];
+    if (!styleUrl || !sitePathUrl || !appUrl) throw new Error('未找到首页关键静态资源URL');
+    const helper = [
+      `  ${bootstrapAssetMarker}`,
+      '  const preloadCriticalAsset = (href, as, priority = \'auto\') => {',
+      '    const link = document.createElement(\'link\');',
+      '    link.rel = \'preload\';',
+      '    link.as = as;',
+      '    link.href = href;',
+      '    link.fetchPriority = priority;',
+      '    document.head.appendChild(link);',
+      '  };',
+      `  const warmHomeAssets = () => {`,
+      `    preloadCriticalAsset('${styleUrl}', 'style', 'high');`,
+      `    preloadCriticalAsset('${sitePathUrl}', 'script', 'auto');`,
+      `    preloadCriticalAsset('${appUrl}', 'script', 'auto');`,
+      '  };',
+      ''
+    ].join('\n');
+    next = replaceOnce(next, '  const showNetworkError = () => {', `${helper}  const showNetworkError = () => {`, '首页静态资源预加载器位置');
+
+    const sessionFetch = /      const response = await fetch\('\/api\/session', \{([\s\S]*?)\n      \}\);/;
+    const match = next.match(sessionFetch);
+    if (!match) throw new Error('未找到首页session请求');
+    const replacement = `      const sessionRequest = fetch('/api/session', {${match[1]}\n      });\n      // The authenticated request is issued first; static public assets download in parallel while D1 builds the dashboard.\n      queueMicrotask(warmHomeAssets);\n      const response = await sessionRequest;`;
+    next = next.replace(sessionFetch, replacement);
+  }
+  write(file, next);
 }
 
 {
@@ -61,11 +117,17 @@ const replaceOnce = (source, search, replacement, label) => {
   }
 }
 
+const entranceHtml = fs.readFileSync(path.join(root, 'public/entrance.html'), 'utf8');
 const entrance = fs.readFileSync(path.join(root, 'public/entrance.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(root, 'public/bootstrap.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
-if (!entrance.includes(entranceMarker)
+if (!entranceHtml.includes(entranceHtmlMarker)
+    || !entranceHtml.includes('<script defer src=')
+    || !entranceHtml.includes('.ui-layer { opacity: 1 !important;')
+    || !entrance.includes(entranceMarker)
     || !bootstrap.includes(bootstrapMarker)
+    || !bootstrap.includes(bootstrapAssetMarker)
+    || !bootstrap.includes('queueMicrotask(warmHomeAssets);')
     || !app.includes(appMarker)
     || /setTimeout\(\(\) => \{[\s\S]*?uiLayer\.style\.opacity = '1'[\s\S]*?\}, 800\)/.test(entrance)
     || bootstrap.includes("fetch('/api/plaza?sort=latest&page=1&limit=20'")
@@ -75,4 +137,4 @@ if (!entrance.includes(entranceMarker)
   throw new Error('严格p95关键路径V4生成不完整');
 }
 
-console.log('Applied strict p95 critical-path V4: immediate login UI and deferred Plaza prefetch.');
+console.log('Applied strict p95 critical-path V4: immediate HTML login UI, overlapped home assets and deferred Plaza prefetch.');
