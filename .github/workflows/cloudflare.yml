@@ -151,6 +151,25 @@ jobs:
         shell: bash
         run: |
           node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,assetVersion:process.env.GITHUB_SHA,environment:'test',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+      - name: Disable unavailable check-in binding for isolated Plaza PR preview
+        if: github.event_name == 'pull_request' && github.head_ref == 'perf/plaza-quality-v3'
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'cloudflare/pages-test/wrangler.jsonc';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const before = Array.isArray(config.services) ? config.services : [];
+          const after = before.filter((item) => item.binding !== 'CHECKIN_SERVICE');
+          if (after.length === before.length) {
+            throw new Error('CHECKIN_SERVICE binding was not present in the isolated test config');
+          }
+          if (!after.some((item) => item.binding === 'PLAZA_SERVICE')) {
+            throw new Error('PLAZA_SERVICE must remain enabled for the Plaza V3 preview');
+          }
+          config.services = after;
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
