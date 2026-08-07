@@ -21,9 +21,9 @@ const replaceOnce = (source, search, replacement, label) => {
 {
   const { file, source } = read('public/entrance.js');
   if (!source.includes(entranceMarker)) {
-    const oldReveal = `            setTimeout(() => {\n                intro.style.opacity = '0';\n                intro.style.pointerEvents = 'none';\n                \n                ambient.style.opacity = '1';\n                vignette.style.opacity = '1';\n                bgStars.style.opacity = '1';\n                glow.style.opacity = '1';\n                \n                uiLayer.style.opacity = '1';\n                uiLayer.style.transform = 'translateY(0)';\n            }, 800);`;
-    const newReveal = `            ${entranceMarker}\n            // Login controls are part of the critical path. Keep the cinematic layer decorative, never blocking input.\n            intro.style.pointerEvents = 'none';\n            intro.style.zIndex = '5';\n            uiLayer.style.transition = 'none';\n            uiLayer.style.opacity = '1';\n            uiLayer.style.transform = 'translateY(0)';\n            requestAnimationFrame(() => {\n                ambient.style.opacity = '1';\n                vignette.style.opacity = '1';\n                bgStars.style.opacity = '1';\n                glow.style.opacity = '1';\n                setTimeout(() => { intro.style.opacity = '0'; }, 250);\n            });`;
-    write(file, replaceOnce(source, oldReveal, newReveal, '登录界面延迟显示区块'));
+    const revealPattern = /\s*setTimeout\(\(\) => \{\r?\n\s*intro\.style\.opacity = '0';\r?\n\s*intro\.style\.pointerEvents = 'none';[\s\S]*?uiLayer\.style\.opacity = '1';\r?\n\s*uiLayer\.style\.transform = 'translateY\(0\)';\r?\n\s*\}, 800\);/;
+    const newReveal = `\n            ${entranceMarker}\n            // Login controls are part of the critical path. Keep the cinematic layer decorative, never blocking input.\n            intro.style.pointerEvents = 'none';\n            intro.style.zIndex = '5';\n            uiLayer.style.transition = 'none';\n            uiLayer.style.opacity = '1';\n            uiLayer.style.transform = 'translateY(0)';\n            requestAnimationFrame(() => {\n                ambient.style.opacity = '1';\n                vignette.style.opacity = '1';\n                bgStars.style.opacity = '1';\n                glow.style.opacity = '1';\n                setTimeout(() => { intro.style.opacity = '0'; }, 250);\n            });`;
+    write(file, replaceOnce(source, revealPattern, newReveal, '登录界面800ms延迟显示区块'));
   }
 }
 
