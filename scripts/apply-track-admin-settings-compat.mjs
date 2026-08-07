@@ -2,9 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const runtimePath = path.resolve('cloudflare/lib/runtime.js');
+const appPath = path.resolve('public/app.js');
 const configuredLine = '      configured: Boolean(values.checkinSettings),\n';
+const trackMarker = '/* TRACK_AWARE_ADMIN_SETTINGS_V1 */';
 let runtime = fs.readFileSync(runtimePath, 'utf8');
+const app = fs.readFileSync(appPath, 'utf8');
 const restoreConfigured = runtime.includes(configuredLine);
+const trackSettingsAlreadyApplied = runtime.includes(trackMarker) && app.includes(trackMarker);
 
 if (restoreConfigured) {
   runtime = runtime.replace(configuredLine, '');
@@ -12,7 +16,9 @@ if (restoreConfigured) {
 }
 
 try {
-  await import('./apply-track-admin-settings.mjs');
+  if (!trackSettingsAlreadyApplied) {
+    await import('./apply-track-admin-settings.mjs');
+  }
   await import('./apply-health-client-checkin.mjs');
 } finally {
   if (restoreConfigured) {
