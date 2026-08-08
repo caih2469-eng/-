@@ -10,12 +10,14 @@ runGenerator('scripts/apply-plaza-detail-fast-path.mjs');
 runGenerator('scripts/apply-plaza-mobile-layout.mjs');
 runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
 runGenerator('scripts/apply-critical-path-p95-v4.mjs');
+runGenerator('scripts/apply-mobile-real-under-1s-v5.mjs');
 
 const app = read('public/app.js');
 const bootstrap = read('public/bootstrap.js');
 const entrance = read('public/entrance.js');
 const plazaPageTemplate = read('templates/plaza-mobile-page.txt');
 const plazaRoute = read('cloudflare/routes/plaza.js');
+const packageJson = JSON.parse(read('package.json'));
 
 test('activity plaza detail opens from cached list preview before the full request finishes', () => {
   assert.match(app, /PLAZA_DETAIL_INSTANT_OPEN_V2/);
@@ -29,15 +31,17 @@ test('activity plaza detail opens from cached list preview before the full reque
   assert.match(app, /srcset="[^\n]*960w,[^\n]*2048w"/);
 });
 
-test('first-screen plaza cards start immediately and use responsive high-quality sources', () => {
+test('first-screen plaza cards start immediately with 960px list images only', () => {
+  assert.match(app, /MOBILE_REAL_UNDER_1S_V5/);
   assert.match(app, /cardIndex < 4 \? 'eager' : 'lazy'/);
   assert.match(app, /cardIndex < 2 \? 'high' : cardIndex < 4 \? 'auto' : 'low'/);
   assert.match(app, /cardIndex < 4 \? 'high' : 'low'/);
-  assert.match(app, /calc\(50vw - 18px\), 360px/);
-  assert.match(app, /post\.images\[0\]\.displayUrl/);
+  assert.match(app, /cardIndex < 4[\s\S]{0,160}\? `src="\$\{escapeHtml\(post\.images\[0\]\.thumbUrl \|\| post\.images\[0\]\.imageUrl\)\}"`/);
+  assert.doesNotMatch(app, /cardIndex < 4[\s\S]{0,500}(?:srcset|2048w)/);
   assert.match(plazaPageTemplate, /PLAZA_PERFORMANCE_QUALITY_V3/);
+  assert.match(plazaPageTemplate, /MOBILE_REAL_UNDER_1S_V5/);
   assert.match(plazaPageTemplate, /cardIndex < 4/);
-  assert.match(plazaPageTemplate, /2048w/);
+  assert.doesNotMatch(plazaPageTemplate, /cardIndex < 4[\s\S]{0,500}(?:srcset|2048w)/);
 });
 
 test('detail metadata is warmed immediately for visible cards without waiting for idle time', () => {
@@ -61,7 +65,11 @@ test('detail image and comment scheduling prioritize visible high-quality post c
   assert.match(detail, /image\.displayUrl/);
   assert.match(detail, /960w,[^\n]*2048w/);
   assert.match(detail, /post\.images\.slice\(0, 2\)/);
-  assert.match(detail, /preload\.fetchPriority = imageIndex === 0 \? 'high' : 'low'/);
+  assert.match(detail, /const warmDisplayImages = \(\) =>/);
+  assert.match(detail, /preload\.fetchPriority = 'low'/);
+  assert.match(detail, /requestIdleCallback\(warmDisplayImages, \{ timeout: 1800 \}\)/);
+  assert.match(detail, /setTimeout\(warmDisplayImages, 1200\)/);
+  assert.doesNotMatch(detail, /preload\.fetchPriority = imageIndex === 0 \? 'high' : 'low'/);
   const visibleMetric = detail.indexOf("recordPerf('plaza-detail-visible'");
   const commentsRequest = detail.indexOf('/comments?page=1&limit=10');
   assert.ok(visibleMetric >= 0, '缺少详情可见指标');
@@ -75,22 +83,40 @@ test('fresh plaza cache renders first and delays refresh so images keep the crit
   assert.match(plazaPageTemplate, /setTimeout\(\(\) => \{ void refresh\(\); \}, 3200\)/);
 });
 
-test('authenticated home defers plaza network work until idle and reuses the in-flight promise', () => {
+test('authenticated home starts 960px Plaza warmup after first paint and reuses the in-flight promise', () => {
   assert.match(bootstrap, /PLAZA_PERFORMANCE_QUALITY_V3/);
   assert.match(bootstrap, /STRICT_P95_BOOTSTRAP_V4/);
   assert.match(bootstrap, /window\.__BOOTSTRAP_PLAZA_PROMISE__ = Promise\.resolve\(null\)/);
   assert.match(bootstrap, /window\.__BOOTSTRAP_PLAZA_IMAGES__ = \[\]/);
   assert.doesNotMatch(bootstrap, /fetch\('\/api\/plaza\?sort=latest&page=1&limit=20'/);
   assert.match(app, /STRICT_P95_APP_PREFETCH_V4/);
-  assert.match(app, /requestIdleCallback\(startPlazaPrefetch, \{ timeout: 900 \}\)/);
-  assert.match(app, /setTimeout\(startPlazaPrefetch, 500\)/);
+  assert.match(app, /requestAnimationFrame\(\(\) => \{ setTimeout\(startPlazaPrefetch, 0\); \}\)/);
+  assert.doesNotMatch(app, /requestIdleCallback\(startPlazaPrefetch/);
+  assert.doesNotMatch(app, /setTimeout\(startPlazaPrefetch, 500\)/);
   assert.match(app, /window\.__BOOTSTRAP_PLAZA_PROMISE__ = studentPlazaPrefetchPromise/);
-  assert.match(app, /priority: 'low'/);
-  assert.doesNotMatch(app, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
+  assert.match(app, /\(result\.posts \|\| \[\]\)\.slice\(0, 4\)/);
+  assert.match(app, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
+  const prefetchStart = app.indexOf('const prefetchStudentPlaza');
+  const prefetchEnd = app.indexOf('\nasync function', prefetchStart + 1);
+  assert.ok(prefetchStart >= 0, '缺少活动广场首页预取函数');
+  const prefetch = app.slice(prefetchStart, prefetchEnd > prefetchStart ? prefetchEnd : undefined);
+  assert.doesNotMatch(prefetch, /srcset|2048w/);
   assert.match(app, /const bootstrapResult = safeSort === 'latest' && page === 1 && !safeQuery/);
   assert.match(app, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
   assert.match(app, /const result = bootstrapResult \|\| await api\(path\)/);
   assert.match(plazaPageTemplate, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
+});
+
+test('all lifecycle generator chains run V5 last', () => {
+  for (const scriptName of ['prestart', 'precheck', 'pretest', 'prepare:image-pipeline']) {
+    const script = packageJson.scripts[scriptName];
+    assert.ok(script.includes('apply-mobile-real-under-1s-v5.mjs'), `${scriptName} 缺少V5最终覆盖层`);
+    assert.ok(
+      script.lastIndexOf('apply-mobile-real-under-1s-v5.mjs') > script.lastIndexOf('apply-critical-path-p95-v4.mjs'),
+      `${scriptName} 必须在V4之后执行V5`
+    );
+  }
+  assert.match(packageJson.scripts.check, /node --check scripts\/apply-mobile-real-under-1s-v5\.mjs/);
 });
 
 test('login form is immediately usable instead of waiting for the cinematic intro', () => {
@@ -125,6 +151,7 @@ test('plaza performance generators remain idempotent across runtime, templates a
   runGenerator('scripts/apply-plaza-mobile-layout.mjs');
   runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
   runGenerator('scripts/apply-critical-path-p95-v4.mjs');
+  runGenerator('scripts/apply-mobile-real-under-1s-v5.mjs');
 
   for (const target of targets) {
     assert.equal(read(target), before.get(target), `${target} 在重复生成后发生变化`);

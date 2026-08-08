@@ -148,13 +148,13 @@ const commandClient = (socket) => {
       });
       const evaluation = await send('Runtime.evaluate', {
         returnByValue: true,
-        expression: `({title:document.title,hasProfile:Boolean(document.querySelector('.profile-card')),hasCheckin:Boolean(document.querySelector('#activityTasks')),hasFinalProof:Boolean(document.querySelector('#activityTasks + section.card')),horizontalOverflow:document.documentElement.scrollWidth>window.innerWidth,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})`
+        expression: `({title:document.title,hasStudentShell:Boolean(document.querySelector('.student-user-card')),hasCheckin:Boolean(document.querySelector('#activityTasks')),hasHistoryEntries:Boolean(document.querySelector('#historyCheckins')&&document.querySelector('#teamCheckinStats')),hasPlazaEntry:Boolean(document.querySelector('#plaza')),horizontalOverflow:document.documentElement.scrollWidth>window.innerWidth,scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})`
       });
       results.push({ device: device.name, viewport: `${device.width}x${device.height}`, login: login.result?.result?.value, ...evaluation.result?.result?.value });
       await send('Runtime.evaluate', { expression: 'localStorage.clear()' });
     }
     console.log(JSON.stringify(results, null, 2));
-    if (results.some((item) => !item.login?.ok || !item.hasProfile || !item.hasCheckin || !item.hasFinalProof || item.horizontalOverflow)) process.exitCode = 1;
+    if (results.some((item) => !item.login?.ok || !item.hasStudentShell || !item.hasCheckin || !item.hasHistoryEntries || !item.hasPlazaEntry || item.horizontalOverflow)) process.exitCode = 1;
     socket.close();
   } finally {
     browser.kill();
