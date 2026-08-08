@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - perf/strict-p95-v4
+      - perf/mobile-real-under-1s-v5
   workflow_dispatch:
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
           set -euo pipefail
           node scripts/apply-build-asset-version.mjs
           node scripts/apply-critical-path-p95-v4.mjs
+          node scripts/apply-mobile-real-under-1s-v5.mjs
           grep -Fq "$GITHUB_SHA" public/bootstrap.js
           grep -Fq "$GITHUB_SHA" public/index.html
           grep -Fq "$GITHUB_SHA" public/entrance.html
@@ -49,9 +51,13 @@ jobs:
           grep -q 'STRICT_P95_BOOTSTRAP_V4' public/bootstrap.js
           grep -q 'STRICT_P95_ASSET_OVERLAP_V4' public/bootstrap.js
           grep -q 'STRICT_P95_APP_PREFETCH_V4' public/app.js
+          grep -q 'MOBILE_REAL_UNDER_1S_V5' public/app.js
+          grep -q 'MOBILE_REAL_UNDER_1S_V5' templates/plaza-mobile-page.txt
           grep -q 'STRICT_P95_DASHBOARD_BATCH_V4' cloudflare/services/student-dashboard.js
+          grep -Fq 'requestAnimationFrame(() => { setTimeout(startPlazaPrefetch, 0); });' public/app.js
+          grep -Fq "preload.fetchPriority = index < 2 ? 'high' : 'auto';" public/app.js
           if grep -Fq "fetch('/api/plaza?sort=latest&page=1&limit=20'" public/bootstrap.js; then
-            echo '首页启动脚本仍在关键路径直接请求活动广场。'
+            echo '登录/首页启动脚本仍在关键路径直接请求活动广场。'
             exit 1
           fi
       - name: Validate isolated plaza Worker
@@ -161,12 +167,21 @@ jobs:
           NODE
       - name: Run strict 20-run Google Chrome p95 gate
         run: node scripts/browser-strict-p95.mjs --base-url "$STRICT_P95_BASE_URL" --runs 20 --threshold-ms 1000
+      - name: Run cold-cache Plaza first-image and quality gate
+        run: node scripts/browser-plaza-mobile-preview.mjs --base-url "$STRICT_P95_BASE_URL"
       - name: Upload strict p95 report
         if: always() && hashFiles('reports/browser-strict-p95.json') != ''
         uses: actions/upload-artifact@v4
         with:
           name: browser-strict-p95-${{ github.run_id }}
           path: reports/browser-strict-p95.json
+          retention-days: 14
+      - name: Upload cold-cache Plaza report
+        if: always() && hashFiles('reports/browser-plaza-mobile-preview.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-plaza-mobile-preview-v5-${{ github.run_id }}
+          path: reports/browser-plaza-mobile-preview.json
           retention-days: 14
       - name: Upload existing Chrome report
         if: always() && hashFiles('reports/browser-approved-preview.json') != ''
