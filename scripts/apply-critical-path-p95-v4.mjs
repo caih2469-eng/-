@@ -57,7 +57,7 @@ const replaceOnce = (source, search, replacement, label) => {
   if (!next.includes(bootstrapMarker)) {
     const pattern = /\s*\/\* PLAZA_PERFORMANCE_QUALITY_V3 \*\/\n\s*window\.__BOOTSTRAP_PLAZA_PROMISE__ = window\.__BOOTSTRAP_USER__\?\.role === 'student'[\s\S]*?\n\s*: Promise\.resolve\(null\);/;
     if (!pattern.test(next)) throw new Error('未找到启动阶段活动广场预取区块');
-    const replacement = `\n      /* PLAZA_PERFORMANCE_QUALITY_V3 */\n      ${bootstrapMarker}\n      // Do not compete with the authenticated home critical path. The app starts this prefetch when the main thread is idle.\n      window.__BOOTSTRAP_PLAZA_PROMISE__ = Promise.resolve(null);\n      window.__BOOTSTRAP_PLAZA_IMAGES__ = [];`;
+    const replacement = `\n      /* PLAZA_PERFORMANCE_QUALITY_V3 */\n      ${bootstrapMarker}\n      // Do not compete with the authenticated home critical path. The app starts this prefetch after home is usable.\n      window.__BOOTSTRAP_PLAZA_PROMISE__ = Promise.resolve(null);\n      window.__BOOTSTRAP_PLAZA_IMAGES__ = [];`;
     next = next.replace(pattern, replacement);
   }
 
@@ -125,6 +125,12 @@ const entrance = fs.readFileSync(path.join(root, 'public/entrance.js'), 'utf8');
 const bootstrap = fs.readFileSync(path.join(root, 'public/bootstrap.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
 const dashboard = fs.readFileSync(path.join(root, 'cloudflare/services/student-dashboard.js'), 'utf8');
+const v5Ready = app.includes('MOBILE_REAL_UNDER_1S_V5');
+const plazaWarmupReady = v5Ready
+  ? app.includes('requestAnimationFrame(() => { setTimeout(startPlazaPrefetch, 0); });')
+    && app.includes("preload.fetchPriority = index < 2 ? 'high' : 'auto';")
+  : app.includes("requestIdleCallback(startPlazaPrefetch, { timeout: 900 })")
+    && app.includes("priority: 'low'");
 if (!entranceHtml.includes(entranceHtmlMarker)
     || !entranceHtml.includes('<script defer src=')
     || !entranceHtml.includes('.ui-layer { opacity: 1 !important;')
@@ -136,10 +142,11 @@ if (!entranceHtml.includes(entranceHtmlMarker)
     || !dashboard.includes(dashboardMarker)
     || /setTimeout\(\(\) => \{[\s\S]*?uiLayer\.style\.opacity = '1'[\s\S]*?\}, 800\)/.test(entrance)
     || bootstrap.includes("fetch('/api/plaza?sort=latest&page=1&limit=20'")
-    || !app.includes("requestIdleCallback(startPlazaPrefetch, { timeout: 900 })")
-    || !app.includes("priority: 'low'")
+    || !plazaWarmupReady
     || !app.includes('window.__BOOTSTRAP_PLAZA_PROMISE__ = studentPlazaPrefetchPromise;')) {
-  throw new Error('严格p95关键路径V4生成不完整');
+  throw new Error('严格p95关键路径V4/V5生成不完整');
 }
 
-console.log('Applied strict p95 critical-path V4: immediate login UI, overlapped home assets, shared Dashboard reads and deferred Plaza prefetch.');
+console.log(v5Ready
+  ? 'Validated strict p95 V4 with stricter mobile real-under-1s V5 Plaza warmup.'
+  : 'Applied strict p95 critical-path V4: immediate login UI, overlapped home assets, shared Dashboard reads and deferred Plaza prefetch.');
