@@ -56,6 +56,18 @@ test('入口页不加载主应用，登录脚本具备移动端降级、防重�
   assert.match(worker, /dashboard/);
 });
 
+test('登录入口预取的版本化首页启动脚本可复用，严格p95拒绝等于阈值', () => {
+  const headers = fs.readFileSync('public/_headers', 'utf8');
+  const strictP95 = fs.readFileSync('scripts/browser-strict-p95.mjs', 'utf8');
+  const bootstrapPolicy = headers.match(/\/bootstrap\.js\s*\r?\n\s*Cache-Control:\s*([^\r\n]+)/i)?.[1] || '';
+  assert.match(bootstrapPolicy, /public/i);
+  assert.match(bootstrapPolicy, /max-age=31536000/i);
+  assert.match(bootstrapPolicy, /immutable/i);
+  assert.doesNotMatch(bootstrapPolicy, /no-store|no-cache/i);
+  assert.match(strictP95, /summary\[metric\]\?\.p95 < options\.thresholdMs/);
+  assert.doesNotMatch(strictP95, /summary\[metric\]\?\.p95 <= options\.thresholdMs/);
+});
+
 test('图片列表在SQL层分页，首屏不超过20张且管理员每页不超过30人', () => {
   const plaza = fs.readFileSync('cloudflare/routes/plaza.js', 'utf8');
   const admin = fs.readFileSync('cloudflare/routes/admin.js', 'utf8');

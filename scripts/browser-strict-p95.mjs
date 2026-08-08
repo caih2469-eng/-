@@ -311,7 +311,7 @@ for (const metric of metricNames) {
 }
 const accepted = failures.length === 0
   && runs.length === options.runs
-  && metricNames.every((metric) => summary[metric]?.p95 <= options.thresholdMs);
+  && metricNames.every((metric) => summary[metric]?.p95 < options.thresholdMs);
 const report = {
   schemaVersion: 1,
   generatedAt: new Date().toISOString(),

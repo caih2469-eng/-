@@ -37,7 +37,7 @@ test('阶段G：入口资源按当前Git提交自动更新且保留同版本缓�
   assert.match(indexSource, /BUILD_ASSET_VERSION_V1/);
   assert.match(entranceSource, /BUILD_ASSET_VERSION_V1/);
   assert.match(bootstrapSource, /BUILD_ASSET_VERSION_V1/);
-  assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: no-cache, no-store, must-revalidate/s);
+  assert.match(headerSource, /\/bootstrap\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/app\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/health-checkin\.js\s+Cache-Control: public, max-age=31536000, immutable/s);
   assert.match(headerSource, /\/style\.css\s+Cache-Control: public, max-age=31536000, immutable/s);
