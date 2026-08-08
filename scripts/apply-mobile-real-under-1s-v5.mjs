@@ -10,11 +10,6 @@ const read = (relativePath) => {
   return { file, source: fs.readFileSync(file, 'utf8') };
 };
 const write = (file, source) => fs.writeFileSync(file, source, 'utf8');
-const replaceOnce = (source, search, replacement, label) => {
-  const next = source.replace(search, replacement);
-  if (next === source) throw new Error(`未找到${label}，已停止以避免误改`);
-  return next;
-};
 const replaceIfPresent = (source, search, replacement) => (
   source.includes(search) ? source.replace(search, replacement) : source
 );
@@ -30,6 +25,9 @@ const patchPlazaPage = (source, label) => {
     `/* PLAZA_PERFORMANCE_QUALITY_V3 */\n${marker}`
   );
 
+  // Plaza cards are two-column mobile tiles. A 960px WebP thumbnail is already
+  // retina-sharp for this surface; offering the 2048px display variant here lets
+  // high-DPR phones spend the first-second budget on an unnecessarily large file.
   const eagerResponsive = [
     `              ${'${'}cardIndex < 4`,
     `                ? \`src="${'${'}escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)}" srcset="${'${'}escapeHtml(post.images[0].thumbUrl || post.images[0].imageUrl)} 960w, ${'${'}escapeHtml(post.images[0].displayUrl || post.images[0].imageUrl)} 2048w" sizes="(max-width: 720px) calc(50vw - 18px), 360px"\``,
@@ -59,7 +57,7 @@ const patchPlazaPage = (source, label) => {
     '  /* STRICT_P95_APP_PREFETCH_V4 */',
     `  ${marker}`,
     '  const startPlazaPrefetch = () => { void prefetchStudentPlaza(); };',
-    '  // Let the student home paint first, then start the smallest useful Plaza warmup immediately.',
+    '  // Paint the authenticated home first, then warm the smallest useful Plaza payload immediately.',
     '  requestAnimationFrame(() => { setTimeout(startPlazaPrefetch, 0); });'
   ].join('\n');
   next = replaceIfPresent(next, deferredPrefetch, immediateAfterPaint);
@@ -91,22 +89,9 @@ const patchPlazaPage = (source, label) => {
   next = replaceIfPresent(next, oneLowPriorityThumb, fourThumbWarmup);
   next = next.replace('        hasFirstImage: Boolean(firstUrl),', '        hasFirstImage: Boolean(preloadImages.length),');
 
-  const previewResponsive = `src="${'${'}escapeHtml(previewImage.thumbUrl || previewImage.imageUrl)}" srcset="${'${'}escapeHtml(previewImage.thumbUrl || previewImage.imageUrl)} 960w, ${'${'}escapeHtml(previewImage.displayUrl || previewImage.imageUrl)} 2048w" sizes="(max-width: 720px) 100vw, 720px" alt="活动图片"`;
-  const previewThumbOnly = `src="${'${'}escapeHtml(previewImage.thumbUrl || previewImage.imageUrl)}" alt="活动图片"`;
-  next = replaceIfPresent(next, previewResponsive, previewThumbOnly);
-
-  const detailResponsive = [
-    `            ${'${'}imageIndex === 0`,
-    `              ? \`src="${'${'}escapeHtml(image.thumbUrl || image.imageUrl)}" srcset="${'${'}escapeHtml(image.thumbUrl || image.imageUrl)} 960w, ${'${'}escapeHtml(image.displayUrl || image.imageUrl)} 2048w" sizes="(max-width: 720px) 100vw, 720px"\``,
-    `              : \`data-src="${'${'}escapeHtml(image.thumbUrl || image.imageUrl)}"\`} alt="活动图片"`
-  ].join('\n');
-  const detailThumbFirst = [
-    `            ${'${'}imageIndex === 0`,
-    `              ? \`src="${'${'}escapeHtml(image.thumbUrl || image.imageUrl)}"\``,
-    `              : \`data-src="${'${'}escapeHtml(image.thumbUrl || image.imageUrl)}"\`} alt="活动图片"`
-  ].join('\n');
-  next = replaceIfPresent(next, detailResponsive, detailThumbFirst);
-
+  // Preserve the 960/2048 responsive detail markup for quality and full-screen use,
+  // but stop eager 2048px background downloads from competing with the first-second
+  // card/detail-visible path. The high-resolution files warm only after idle/timeout.
   const eagerDisplayWarmup = [
     '  post.images.slice(0, 2).forEach((image, imageIndex) => {',
     '    const displayUrl = buildMediaUrl(image.displayUrl || image.imageUrl || image.thumbUrl);',
@@ -136,7 +121,8 @@ const patchPlazaPage = (source, label) => {
   if (!next.includes(marker)
       || !next.includes('requestAnimationFrame(() => { setTimeout(startPlazaPrefetch, 0); });')
       || !next.includes("preload.fetchPriority = index < 2 ? 'high' : 'auto';")
-      || !next.includes("preload.fetchPriority = 'low';")) {
+      || !next.includes("preload.fetchPriority = 'low';")
+      || !next.includes('2048w')) {
     throw new Error('主应用V5活动广场运行时生成不完整');
   }
   write(file, next);
@@ -149,4 +135,4 @@ const patchPlazaPage = (source, label) => {
   write(file, next);
 }
 
-console.log('Applied mobile real-under-1s V5: immediate post-paint Plaza warmup, thumb-first rendering and deferred 2048px display warmup.');
+console.log('Applied mobile real-under-1s V5: immediate post-paint Plaza warmup, 960px card-first rendering and deferred 2048px display warmup.');
