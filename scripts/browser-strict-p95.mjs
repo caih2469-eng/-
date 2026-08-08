@@ -214,6 +214,7 @@ const runOne = async (baseUrl, runIndex) => {
     await client.call('Page.addScriptToEvaluateOnNewDocument', {
       source: `(() => {
         const key = ${JSON.stringify(STRICT_TRACE_KEY)};
+        try { localStorage.setItem('debugPerf', '1'); } catch {}
         const epochNow = () => performance.timeOrigin + performance.now();
         const read = () => { try { return JSON.parse(sessionStorage.getItem(key) || '{}'); } catch { return {}; } };
         const write = (patch) => { try { sessionStorage.setItem(key, JSON.stringify({ ...read(), ...patch })); } catch {} };
@@ -286,6 +287,7 @@ const runOne = async (baseUrl, runIndex) => {
       const metrics = Array.isArray(window.__PERF_METRICS__) ? window.__PERF_METRICS__ : [];
       return {
         trace,
+        homeReadyAt: performance.now(),
         navigation: navigation ? {
           responseStart: navigation.responseStart,
           responseEnd: navigation.responseEnd,
@@ -316,6 +318,8 @@ const runOne = async (baseUrl, runIndex) => {
       homeDocumentResponseMs: round(Number(stageRaw?.navigation?.responseEnd)),
       homeDomInteractiveMs: round(Number(stageRaw?.navigation?.domInteractive)),
       homeAssetsMaxEndMs: round(Number(stageRaw?.assetsMaxEnd)),
+      homeReadyMs: round(Number(stageRaw?.homeReadyAt)),
+      homeReadyAfterAssetsMs: round(Number(stageRaw?.homeReadyAt) - Number(stageRaw?.assetsMaxEnd)),
       homeBootstrapMs: Number(stageRaw?.bootstrap?.duration),
       homeRenderMs: Number(stageRaw?.render?.duration),
       sessionFallback: Boolean(stageRaw?.sessionFallback),
@@ -396,7 +400,7 @@ const stageMetricNames = [
   'loginCleanupMs', 'loginDashboardMs', 'loginSessionMs', 'loginSerializeMs',
   'loginResponseToHandoffMs', 'handoffToPagehideMs', 'homeDocumentTtfbMs',
   'homeDocumentResponseMs', 'homeDomInteractiveMs', 'homeAssetsMaxEndMs',
-  'homeBootstrapMs', 'homeRenderMs', 'handoffBytes'
+  'homeReadyMs', 'homeReadyAfterAssetsMs', 'homeBootstrapMs', 'homeRenderMs', 'handoffBytes'
 ];
 const stageSummary = {};
 for (const metric of stageMetricNames) {
