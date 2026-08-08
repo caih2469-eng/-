@@ -80,6 +80,8 @@ const assertStrictRuntime = () => {
     ['public/bootstrap.js', 'STRICT_P95_ASSET_OVERLAP_V4'],
     ['public/bootstrap.js', 'LOGIN_BOOTSTRAP_HANDOFF_V2'],
     ['public/app.js', 'STRICT_P95_APP_PREFETCH_V4'],
+    ['public/app.js', 'MOBILE_REAL_UNDER_1S_V5'],
+    ['templates/plaza-mobile-page.txt', 'MOBILE_REAL_UNDER_1S_V5'],
     ['cloudflare/services/student-dashboard.js', 'STRICT_P95_DASHBOARD_BATCH_V4'],
     ['cloudflare/worker.js', 'LOGIN_BOOTSTRAP_HANDOFF_V2']
   ];
@@ -91,23 +93,32 @@ const assertStrictRuntime = () => {
   }
   const bootstrap = fs.readFileSync(path.join(root, 'public/bootstrap.js'), 'utf8');
   if (bootstrap.includes("fetch('/api/plaza?sort=latest&page=1&limit=20'")) {
-    throw new Error('最终构建仍在首页启动关键路径直接请求活动广场');
+    throw new Error('最终构建仍在登录/首页启动关键路径直接请求活动广场');
+  }
+  const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
+  if (!app.includes('requestAnimationFrame(() => { setTimeout(startPlazaPrefetch, 0); });')) {
+    throw new Error('最终构建没有在首页首帧后立即启动广场预热');
+  }
+  if (!app.includes("preload.fetchPriority = index < 2 ? 'high' : 'auto';")) {
+    throw new Error('最终构建没有预热活动广场前四张列表图');
   }
 };
 
 applyBuildAssetVersion();
 
 // The legacy generator chain calls this helper before V3 exists and again after V3
-// has converged. Only the final invocation is allowed to install the strict p95 path.
-// This makes the existing production workflow's final asset-version step produce the
-// exact same V4 + safe handoff V2 runtime that the strict Chrome gate validates.
+// has converged. Only the final invocation is allowed to install the strict critical
+// path. V5 is layered after V4 so the home still paints first, while the Plaza starts
+// warming immediately after that paint and only downloads 960px list images in the
+// first-second budget. 2048px display assets are deliberately deferred.
 if (v3RuntimeIsReady()) {
   await import('./apply-critical-path-p95-v4.mjs');
   await import('./apply-login-bootstrap-handoff-v2.mjs');
-  // V2 may add new prefetched asset references. Stamp those with the exact build SHA too.
+  await import('./apply-mobile-real-under-1s-v5.mjs');
+  // Later generators may add asset references. Stamp them with the exact build SHA too.
   applyBuildAssetVersion();
   assertStrictRuntime();
-  console.log('Converged strict p95 V4 + login handoff V2 in final build step.');
+  console.log('Converged strict p95 V4 + login handoff V2 + mobile real-under-1s V5 in final build step.');
 }
 
 const hookKey = Symbol.for('jinshan20.buildAssetVersionBeforeExit');
