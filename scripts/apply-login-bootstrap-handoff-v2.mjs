@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const marker = '/* LOGIN_BOOTSTRAP_HANDOFF_V2 */';
+const batchMarker = '/* LOGIN_D1_BATCH_V6 */';
 const key = 'jinshan20.loginBootstrap.v2';
 const read = (relativePath) => {
   const file = path.join(root, relativePath);
@@ -16,6 +17,45 @@ const replaceOnce = (source, search, replacement, label) => {
   return next;
 };
 
+// The login-only student snapshot uses one D1 batch after password verification.
+// This keeps the normal dashboard builder as the compatibility fallback and does
+// not change authentication, authorization, task visibility or response fields.
+{
+  const { file, source } = read('cloudflare/services/student-dashboard.js');
+  if (!source.includes(batchMarker)) {
+    let next = source;
+    const taskReadOld = `  const [taskPage, makeupAllowed] = await Promise.all([\n    env.DB.prepare(\n      \`SELECT id,name,description,track_id AS trackId,starts_at AS startsAt,ends_at AS endsAt,\n              allow_late AS allowLate,image_limit AS imageLimit,copy_requirement AS copyRequirement,\n              submission_type AS submissionType,status,schedule_json AS scheduleJson\n         FROM tasks WHERE status='published' AND (?1='admin' OR track_id=?2)\n        ORDER BY starts_at DESC LIMIT 100\`\n    ).bind(user.role, user.trackId || '').all(),\n    user.role === 'student' ? hasMakeupPermission(env, user.id, today) : Promise.resolve(false)\n  ]);`;
+    const taskReadNew = `  const taskPagePromise = options.taskPage\n    ? Promise.resolve(options.taskPage)\n    : env.DB.prepare(\n      \`SELECT id,name,description,track_id AS trackId,starts_at AS startsAt,ends_at AS endsAt,\n              allow_late AS allowLate,image_limit AS imageLimit,copy_requirement AS copyRequirement,\n              submission_type AS submissionType,status,schedule_json AS scheduleJson\n         FROM tasks WHERE status='published' AND (?1='admin' OR track_id=?2)\n        ORDER BY starts_at DESC LIMIT 100\`\n    ).bind(user.role, user.trackId || '').all();\n  const makeupPromise = options.makeupAllowed !== undefined\n    ? Promise.resolve(Boolean(options.makeupAllowed))\n    : (user.role === 'student' ? hasMakeupPermission(env, user.id, today) : Promise.resolve(false));\n  const [taskPage, makeupAllowed] = await Promise.all([taskPagePromise, makeupPromise]);`;
+    next = replaceOnce(next, taskReadOld, taskReadNew, 'login batch task preload');
+
+    const checkinsOld = `  const checkinsPromise = (team && taskIds.length)\n    ? (async () => {`;
+    const checkinsNew = `  const checkinsPromise = Array.isArray(options.checkins)\n    ? Promise.resolve(options.checkins)\n    : (team && taskIds.length)\n      ? (async () => {`;
+    next = replaceOnce(next, checkinsOld, checkinsNew, 'login batch checkin preload');
+    next = replaceOnce(
+      next,
+      `      return rows;\n    })()\n    : Promise.resolve([]);`,
+      `        return rows;\n      })()\n      : Promise.resolve([]);`,
+      'login batch checkin preload close'
+    );
+
+    next = replaceOnce(
+      next,
+      `  const submissions = [];\n  if (taskIds.length && ownerPairs.length) {`,
+      `  const submissions = Array.isArray(options.submissions) ? [...options.submissions] : [];\n  if (!Array.isArray(options.submissions) && taskIds.length && ownerPairs.length) {`,
+      'login batch submission preload'
+    );
+
+    const dashboardAnchor = 'export const buildStudentDashboard = async (env, user, options = {}) => {';
+    const fastBuilder = `${batchMarker}\nexport const buildStudentDashboardForLogin = async (env, user) => {\n  if (user.role !== 'student' || user.trackId !== 'interaction' || typeof env.DB.batch !== 'function') {\n    return buildStudentDashboard(env, user);\n  }\n  const date = shanghaiDate();\n  try {\n    const configPromise = readConfig(env);\n    const statements = [\n      env.DB.prepare(\n        \`SELECT t.id AS teamId,t.name AS teamName,t.invite_code AS inviteCode,\n                t.member_limit AS memberLimit,t.captain_user_id AS captainId,t.created_at AS teamCreatedAt,\n                u.id AS memberId,u.student_id AS memberStudentId,u.name AS memberName,u.campus AS memberCampus,\n                u.track_id AS memberTrackId,u.status AS memberStatus,u.created_at AS memberCreatedAt,\n                (SELECT COUNT(*) FROM teams) AS teamCount\n           FROM team_members mine\n           JOIN teams t ON t.id=mine.team_id\n           LEFT JOIN team_members tm ON tm.team_id=t.id\n           LEFT JOIN users u ON u.id=tm.user_id\n          WHERE mine.user_id=?1\n          ORDER BY tm.joined_at,u.student_id\`\n      ).bind(user.id),\n      env.DB.prepare(\n        \`SELECT id,name,description,track_id AS trackId,starts_at AS startsAt,ends_at AS endsAt,\n                allow_late AS allowLate,image_limit AS imageLimit,copy_requirement AS copyRequirement,\n                submission_type AS submissionType,status,schedule_json AS scheduleJson\n           FROM tasks WHERE status='published' AND track_id=?1\n          ORDER BY starts_at DESC LIMIT 100\`\n      ).bind(user.trackId),\n      env.DB.prepare(\n        'SELECT enabled FROM makeup_permissions WHERE user_id=?1 AND checkin_date=?2'\n      ).bind(user.id, date),\n      env.DB.prepare(\n        \`SELECT user_id AS userId,id,task_id AS taskId,occurrence_date AS occurrenceDate\n           FROM member_checkins\n          WHERE team_id=(SELECT team_id FROM team_members WHERE user_id=?1 LIMIT 1)\n            AND task_id IN (SELECT id FROM tasks WHERE status='published' AND track_id=?2)\n            AND occurrence_date IN (?3,'')\`\n      ).bind(user.id, user.trackId, date),\n      env.DB.prepare(\n        \`SELECT id,task_id AS taskId,owner_type AS ownerType,owner_id AS ownerId,\n                copy_text AS copy,plaza_copy AS plazaCopy,meal_type AS mealType,\n                is_public AS isPublic,status,version,occurrence_date AS occurrenceDate,\n                submitted_at AS submittedAt,review_note AS reviewNote\n           FROM task_submissions\n          WHERE task_id IN (SELECT id FROM tasks WHERE status='published' AND track_id=?1)\n            AND occurrence_date IN (?2,'')\n            AND ((owner_type='user' AND owner_id=?3) OR\n                 (owner_type='team' AND owner_id=(SELECT team_id FROM team_members WHERE user_id=?3 LIMIT 1)))\`\n      ).bind(user.trackId, date, user.id),\n      env.DB.prepare(\n        \`SELECT COUNT(DISTINCT occurrence_date) AS total\n           FROM member_checkins WHERE user_id=?1 AND status!='rejected'\`\n      ).bind(user.id),\n      env.DB.prepare(\n        \`SELECT COUNT(DISTINCT COALESCE(NULLIF(occurrence_date,''),substr(submitted_at,1,10))) AS total\n           FROM task_submissions\n          WHERE owner_type='team'\n            AND owner_id=(SELECT team_id FROM team_members WHERE user_id=?1 LIMIT 1)\n            AND status IN ('submitted','approved')\`\n      ).bind(user.id)\n    ];\n    const [config, pages] = await Promise.all([configPromise, env.DB.batch(statements)]);\n    const teamRows = pages[0]?.results || [];\n    const first = teamRows[0] || null;\n    const team = first?.teamId ? {\n      id: first.teamId, name: first.teamName, inviteCode: first.inviteCode,\n      memberLimit: first.memberLimit, captainId: first.captainId, createdAt: first.teamCreatedAt\n    } : null;\n    const members = teamRows.filter((row) => row.memberId).map((row) => ({\n      id: row.memberId, studentId: row.memberStudentId, name: row.memberName,\n      campus: row.memberCampus, trackId: row.memberTrackId, status: row.memberStatus,\n      createdAt: row.memberCreatedAt\n    }));\n    const teamContext = { team, members, teamCount: Number(first?.teamCount || 0) };\n    const teamSummary = {\n      teamCount: teamContext.teamCount,\n      maxTeams: Number(config.maxTeams || 50),\n      team: team ? { ...team, members, memberCount: members.length } : null\n    };\n    const taskResult = await buildStudentTasks(env, user, {\n      config, date, teamContext, includeImages: false,\n      taskPage: { results: pages[1]?.results || [] },\n      makeupAllowed: Boolean(pages[2]?.results?.[0]?.enabled),\n      checkins: pages[3]?.results || [],\n      submissions: pages[4]?.results || []\n    });\n    return {\n      version: 1, user, config, tracks: TRACKS, date, time: shanghaiTime(), teamSummary,\n      tasks: taskResult.tasks, materialTasks: [],\n      checkinStats: {\n        personalDays: Number(pages[5]?.results?.[0]?.total || 0),\n        teamDays: Number(pages[6]?.results?.[0]?.total || 0)\n      },\n      switches: taskResult.switches\n    };\n  } catch {\n    return buildStudentDashboard(env, user);\n  }\n};\n\n${dashboardAnchor}`;
+    const completeTeamBatchBuilder = fastBuilder.replace(
+      '           FROM team_members mine\n           JOIN teams t ON t.id=mine.team_id\n           LEFT JOIN team_members tm ON tm.team_id=t.id\n           LEFT JOIN users u ON u.id=tm.user_id\n          WHERE mine.user_id=?1',
+      '           FROM (SELECT 1) seed\n           LEFT JOIN team_members mine ON mine.user_id=?1\n           LEFT JOIN teams t ON t.id=mine.team_id\n           LEFT JOIN team_members tm ON tm.team_id=t.id\n           LEFT JOIN users u ON u.id=tm.user_id'
+    );
+    next = replaceOnce(next, dashboardAnchor, completeTeamBatchBuilder, 'login D1 batch dashboard builder');
+    write(file, next);
+  }
+}
+
 // Successful authentication may optionally return the exact student home snapshot
 // generated from the already-authenticated user. Failure to build the acceleration
 // payload never changes login success, token issuance, cookies or permissions.
@@ -25,6 +65,57 @@ const replaceOnce = (source, search, replacement, label) => {
     const old = `  delete user.passwordHash;\n  const token = await createToken(user, env.SESSION_SECRET);\n  return json({\n    token,\n    user: {\n      id: user.id,\n      studentId: user.studentId,\n      name: user.name,\n      role: user.role,\n      trackId: user.trackId,\n      status: user.status\n    }\n  }, 200, {`;
     const replacement = `  delete user.passwordHash;\n  ${marker}\n  const loginUser = {\n    id: user.id,\n    studentId: user.studentId,\n    name: user.name,\n    role: user.role,\n    trackId: user.trackId,\n    status: user.status\n  };\n  const dashboardPromise = user.role === 'student'\n    ? buildStudentDashboard(env, user).catch(() => null)\n    : Promise.resolve(null);\n  const [token, dashboard] = await Promise.all([\n    createToken(user, env.SESSION_SECRET),\n    dashboardPromise\n  ]);\n  const bootstrap = dashboard ? {\n    ok: true,\n    user: {\n      id: user.id,\n      studentId: user.studentId,\n      name: user.name,\n      role: user.role,\n      campus: user.campus,\n      trackId: user.trackId,\n      status: user.status,\n      createdAt: user.createdAt\n    },\n    config: dashboard.config,\n    tracks: TRACKS,\n    date: dashboard.date || shanghaiDate(),\n    time: dashboard.time || shanghaiTime(),\n    dashboard\n  } : null;\n  return json({\n    token,\n    user: loginUser,\n    bootstrap\n  }, 200, {`;
     write(file, replaceOnce(source, old, replacement, '登录成功响应V2加速位置'));
+  }
+}
+
+// Add phase telemetry and switch only the post-authentication snapshot to the
+// D1 batch builder. Server-Timing names contain durations only, never identity data.
+{
+  const { file, source } = read('cloudflare/worker.js');
+  if (!source.includes(batchMarker)) {
+    let next = replaceOnce(
+      source,
+      "import { buildStudentDashboard } from './services/student-dashboard.js';",
+      "import { buildStudentDashboard, buildStudentDashboardForLogin } from './services/student-dashboard.js';",
+      'login batch worker import'
+    );
+    next = replaceOnce(
+      next,
+      '  const [attempt, user] = await Promise.all([',
+      '  const lookupStartedAt = performance.now();\n  const [attempt, user] = await Promise.all([',
+      'login lookup timing start'
+    );
+    next = replaceOnce(
+      next,
+      `  ]);\n  const now = Date.now();`,
+      `  ]);\n  recordRequestTiming(request, 'login_lookup', performance.now() - lookupStartedAt);\n  const now = Date.now();`,
+      'login lookup timing end'
+    );
+    next = replaceOnce(
+      next,
+      `  if (!user || user.status !== 'active' || !(await passwordMatches(password, user.passwordHash))) {`,
+      `  const passwordStartedAt = performance.now();\n  const passwordAccepted = Boolean(user && user.status === 'active'\n    && await passwordMatches(password, user.passwordHash));\n  recordRequestTiming(request, 'login_password', performance.now() - passwordStartedAt);\n  if (!passwordAccepted) {`,
+      'login password timing'
+    );
+    next = replaceOnce(
+      next,
+      `  if (attempt) {\n    await env.DB.prepare('DELETE FROM login_attempts WHERE identity_hash=?1').bind(identity).run();\n  }`,
+      `  if (attempt) {\n    const cleanupStartedAt = performance.now();\n    await env.DB.prepare('DELETE FROM login_attempts WHERE identity_hash=?1').bind(identity).run();\n    recordRequestTiming(request, 'login_cleanup', performance.now() - cleanupStartedAt);\n  }`,
+      'login attempt cleanup timing'
+    );
+    next = replaceOnce(
+      next,
+      `  const dashboardPromise = user.role === 'student'\n    ? buildStudentDashboard(env, user).catch(() => null)\n    : Promise.resolve(null);\n  const [token, dashboard] = await Promise.all([\n    createToken(user, env.SESSION_SECRET),\n    dashboardPromise\n  ]);`,
+      `  ${batchMarker}\n  const tokenPromise = (async () => {\n    const startedAt = performance.now();\n    try {\n      return await createToken(user, env.SESSION_SECRET);\n    } finally {\n      recordRequestTiming(request, 'login_session', performance.now() - startedAt);\n    }\n  })();\n  const dashboardPromise = user.role === 'student'\n    ? (async () => {\n      const startedAt = performance.now();\n      try {\n        return await buildStudentDashboardForLogin(env, user);\n      } catch {\n        return null;\n      } finally {\n        recordRequestTiming(request, 'login_dashboard', performance.now() - startedAt);\n      }\n    })()\n    : Promise.resolve(null);\n  const [token, dashboard] = await Promise.all([tokenPromise, dashboardPromise]);`,
+      'login batch dashboard and token timing'
+    );
+    next = replaceOnce(
+      next,
+      `  return json({\n    token,\n    user: loginUser,\n    bootstrap\n  }, 200, {\n    'set-cookie': \`session_token=\${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax\`\n  });`,
+      `  const serializeStartedAt = performance.now();\n  const response = json({\n    token,\n    user: loginUser,\n    bootstrap\n  }, 200, {\n    'set-cookie': \`session_token=\${token}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax\`\n  });\n  recordRequestTiming(request, 'login_serialize', performance.now() - serializeStartedAt);\n  return response;`,
+      'login serialization timing'
+    );
+    write(file, next);
   }
 }
 
@@ -112,7 +203,9 @@ const entranceHtml = read('public/entrance.html').source;
 const bootstrap = read('public/bootstrap.js').source;
 const productionPerformanceTest = read('test/production-media-login-performance.test.js').source;
 if (!worker.includes(marker)
-    || !worker.includes('buildStudentDashboard(env, user).catch(() => null)')
+    || !worker.includes(batchMarker)
+    || !worker.includes('buildStudentDashboardForLogin(env, user)')
+    || !worker.includes("recordRequestTiming(request, 'login_dashboard'")
     || !worker.includes('bootstrap\n  }, 200, {')
     || !entrance.includes(marker)
     || !entrance.includes(key)

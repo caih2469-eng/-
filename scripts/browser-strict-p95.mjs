@@ -34,6 +34,12 @@ const parseArgs = (argv) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const round = (value) => Math.round(value * 10) / 10;
+const STRICT_TRACE_KEY = 'jinshan20.strictP95Trace.v1';
+const parseServerTiming = (value) => Object.fromEntries(String(value || '')
+  .split(',')
+  .map((entry) => entry.trim().match(/^([a-z][a-z0-9_-]*);dur=([0-9.]+)$/i))
+  .filter(Boolean)
+  .map((match) => [match[1], Number(match[2])]));
 const findChrome = () => {
   for (const command of ['google-chrome-stable', 'google-chrome']) {
     const result = spawnSync('which', [command], { encoding: 'utf8' });
@@ -205,6 +211,37 @@ const runOne = async (baseUrl, runIndex) => {
   const browser = await openChrome();
   const { client } = browser;
   try {
+    await client.call('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(() => {
+        const key = ${JSON.stringify(STRICT_TRACE_KEY)};
+        const epochNow = () => performance.timeOrigin + performance.now();
+        const read = () => { try { return JSON.parse(sessionStorage.getItem(key) || '{}'); } catch { return {}; } };
+        const write = (patch) => { try { sessionStorage.setItem(key, JSON.stringify({ ...read(), ...patch })); } catch {} };
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = async (...args) => {
+          const url = String(args[0]?.url || args[0] || '');
+          if (!url.includes('/api/login')) return nativeFetch(...args);
+          const startedAt = epochNow();
+          const response = await nativeFetch(...args);
+          write({
+            loginFetchStartedAt: startedAt,
+            loginFetchEndedAt: epochNow(),
+            loginStatus: response.status,
+            loginServerTiming: response.headers.get('server-timing') || ''
+          });
+          return response;
+        };
+        const nativeSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function(storageKey, value) {
+          const result = nativeSetItem.call(this, storageKey, value);
+          if (this === sessionStorage && storageKey === 'jinshan20.loginBootstrap.v2') {
+            write({ handoffStoredAt: epochNow(), handoffBytes: String(value || '').length });
+          }
+          return result;
+        };
+        addEventListener('pagehide', () => write({ loginPagehideAt: epochNow() }), { once: true });
+      })();`
+    });
     const loginPageStarted = performance.now();
     await navigate(client, `${baseUrl}/entrance?strictP95=${Date.now()}-${runIndex}`);
     await waitFor(client, `(() => {
@@ -240,6 +277,50 @@ const runOne = async (baseUrl, runIndex) => {
       return rect.width > 30 && rect.height > 30 && !plaza.disabled;
     })()`, 15_000, '登录后首页可操作');
     const loginToHomeMs = round(performance.now() - loginStarted);
+    const stageRaw = await client.evaluate(`(() => {
+      let trace = {};
+      try { trace = JSON.parse(sessionStorage.getItem(${JSON.stringify(STRICT_TRACE_KEY)}) || '{}'); } catch {}
+      const navigation = performance.getEntriesByType('navigation')[0];
+      const resources = performance.getEntriesByType('resource').filter((item) =>
+        /\\/(?:bootstrap|site-path|app)\\.js|\\/style\\.css|\\/api\\/session/.test(item.name));
+      const metrics = Array.isArray(window.__PERF_METRICS__) ? window.__PERF_METRICS__ : [];
+      return {
+        trace,
+        navigation: navigation ? {
+          responseStart: navigation.responseStart,
+          responseEnd: navigation.responseEnd,
+          domInteractive: navigation.domInteractive,
+          domContentLoadedEventEnd: navigation.domContentLoadedEventEnd,
+          loadEventEnd: navigation.loadEventEnd
+        } : null,
+        assetsMaxEnd: resources.reduce((max, item) => Math.max(max, item.responseEnd || 0), 0),
+        sessionFallback: resources.some((item) => item.name.includes('/api/session')),
+        bootstrap: metrics.find((item) => item.type === 'bootstrap-complete') || null,
+        render: metrics.find((item) => item.type === 'page-render' && item.page === 'student-home') || null
+      };
+    })()`);
+    const trace = stageRaw?.trace || {};
+    const server = parseServerTiming(trace.loginServerTiming);
+    const stages = {
+      loginFetchMs: round(Number(trace.loginFetchEndedAt) - Number(trace.loginFetchStartedAt)),
+      loginServerTotalMs: server.total,
+      loginLookupMs: server.login_lookup,
+      loginPasswordMs: server.login_password,
+      loginCleanupMs: server.login_cleanup,
+      loginDashboardMs: server.login_dashboard,
+      loginSessionMs: server.login_session,
+      loginSerializeMs: server.login_serialize,
+      loginResponseToHandoffMs: round(Number(trace.handoffStoredAt) - Number(trace.loginFetchEndedAt)),
+      handoffToPagehideMs: round(Number(trace.loginPagehideAt) - Number(trace.handoffStoredAt)),
+      homeDocumentTtfbMs: round(Number(stageRaw?.navigation?.responseStart)),
+      homeDocumentResponseMs: round(Number(stageRaw?.navigation?.responseEnd)),
+      homeDomInteractiveMs: round(Number(stageRaw?.navigation?.domInteractive)),
+      homeAssetsMaxEndMs: round(Number(stageRaw?.assetsMaxEnd)),
+      homeBootstrapMs: Number(stageRaw?.bootstrap?.duration),
+      homeRenderMs: Number(stageRaw?.render?.duration),
+      sessionFallback: Boolean(stageRaw?.sessionFallback),
+      handoffBytes: Number(trace.handoffBytes || 0)
+    };
 
     const plazaStarted = performance.now();
     await client.evaluate(`document.querySelector('#plaza').click()`);
@@ -269,6 +350,7 @@ const runOne = async (baseUrl, runIndex) => {
       loginToHomeMs,
       homeToPlazaMs,
       plazaToDetailMs,
+      stages,
       chromeVersion: browser.chromeVersion
     };
   } finally {
@@ -309,6 +391,18 @@ for (const metric of metricNames) {
   const values = runs.map((item) => item[metric]).filter(Number.isFinite);
   summary[metric] = values.length ? stats(values) : null;
 }
+const stageMetricNames = [
+  'loginFetchMs', 'loginServerTotalMs', 'loginLookupMs', 'loginPasswordMs',
+  'loginCleanupMs', 'loginDashboardMs', 'loginSessionMs', 'loginSerializeMs',
+  'loginResponseToHandoffMs', 'handoffToPagehideMs', 'homeDocumentTtfbMs',
+  'homeDocumentResponseMs', 'homeDomInteractiveMs', 'homeAssetsMaxEndMs',
+  'homeBootstrapMs', 'homeRenderMs', 'handoffBytes'
+];
+const stageSummary = {};
+for (const metric of stageMetricNames) {
+  const values = runs.map((item) => item.stages?.[metric]).filter(Number.isFinite);
+  stageSummary[metric] = values.length ? stats(values) : null;
+}
 const accepted = failures.length === 0
   && runs.length === options.runs
   && metricNames.every((metric) => summary[metric]?.p95 < options.thresholdMs);
@@ -324,6 +418,7 @@ const report = {
   networkProfile: { name: 'fast-4g-fixed', latencyMs: 40, downloadMbps: 10, uploadMbps: 5 },
   chrome: runs[0]?.chromeVersion || '',
   summary,
+  stageSummary,
   failures,
   accepted,
   runs
