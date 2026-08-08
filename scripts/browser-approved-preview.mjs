@@ -51,16 +51,33 @@ const originalDeploymentCheck = [
   '    throw new Error(`测试站资源版本不是20260731-approved1：${JSON.stringify(deployment.body)}`);',
   '  }'
 ].join('\n');
-const commitScopedDeploymentCheck = [
+const oldCommitScopedDeploymentCheck = [
   '  const deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}`);',
   "  const expectedAssetVersion = process.env.GITHUB_SHA || '20260731-approved1';",
   '  if (deployment.body?.assetVersion !== expectedAssetVersion) {',
   '    throw new Error(`测试站资源版本不是${expectedAssetVersion}：${JSON.stringify(deployment.body)}`);',
   '  }'
 ].join('\n');
-if (!originalSource.includes('const expectedAssetVersion = process.env.GITHUB_SHA')) {
-  if (!originalSource.includes(originalDeploymentCheck)) throw new Error('未找到原浏览器验收资源版本校验片段');
-  originalSource = originalSource.replace(originalDeploymentCheck, commitScopedDeploymentCheck);
+const resilientCommitScopedDeploymentCheck = [
+  "  const expectedAssetVersion = process.env.GITHUB_SHA || '20260731-approved1';",
+  '  let deployment = null;',
+  '  for (let attempt = 1; attempt <= 30; attempt += 1) {',
+  '    deployment = await fetchJson(`${options.baseUrl}/deployment-version.json?browser=${Date.now()}-${attempt}`);',
+  '    if (deployment.body?.assetVersion === expectedAssetVersion && deployment.body?.commit === expectedAssetVersion) break;',
+  '    if (attempt < 30) await new Promise((resolve) => setTimeout(resolve, 1000));',
+  '  }',
+  '  if (deployment?.body?.assetVersion !== expectedAssetVersion || deployment?.body?.commit !== expectedAssetVersion) {',
+  '    throw new Error(`测试站资源版本不是${expectedAssetVersion}：${JSON.stringify(deployment?.body)}`);',
+  '  }'
+].join('\n');
+if (!originalSource.includes('for (let attempt = 1; attempt <= 30; attempt += 1)')) {
+  if (originalSource.includes(oldCommitScopedDeploymentCheck)) {
+    originalSource = originalSource.replace(oldCommitScopedDeploymentCheck, resilientCommitScopedDeploymentCheck);
+  } else if (originalSource.includes(originalDeploymentCheck)) {
+    originalSource = originalSource.replace(originalDeploymentCheck, resilientCommitScopedDeploymentCheck);
+  } else {
+    throw new Error('未找到原浏览器验收资源版本校验片段');
+  }
   originalChanged = true;
 }
 

@@ -9,9 +9,11 @@ const runGenerator = (file) => execFileSync(process.execPath, [file], { stdio: '
 runGenerator('scripts/apply-plaza-detail-fast-path.mjs');
 runGenerator('scripts/apply-plaza-mobile-layout.mjs');
 runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
+runGenerator('scripts/apply-critical-path-p95-v4.mjs');
 
 const app = read('public/app.js');
 const bootstrap = read('public/bootstrap.js');
+const entrance = read('public/entrance.js');
 const plazaPageTemplate = read('templates/plaza-mobile-page.txt');
 const plazaRoute = read('cloudflare/routes/plaza.js');
 
@@ -73,19 +75,30 @@ test('fresh plaza cache renders first and delays refresh so images keep the crit
   assert.match(plazaPageTemplate, /setTimeout\(\(\) => \{ void refresh\(\); \}, 3200\)/);
 });
 
-test('student bootstrap preloads four responsive plaza covers and the plaza reuses that response', () => {
+test('authenticated home defers plaza network work until idle and reuses the in-flight promise', () => {
   assert.match(bootstrap, /PLAZA_PERFORMANCE_QUALITY_V3/);
-  assert.match(bootstrap, /__BOOTSTRAP_PLAZA_PROMISE__/);
-  assert.match(bootstrap, /__BOOTSTRAP_PLAZA_IMAGES__/);
-  assert.match(bootstrap, /slice\(0, 4\)/);
-  assert.match(bootstrap, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
-  assert.match(bootstrap, /preload\.srcset/);
-  assert.match(bootstrap, /2048w/);
-  assert.doesNotMatch(bootstrap, /__BOOTSTRAP_PLAZA_IMAGE__ = preload/);
+  assert.match(bootstrap, /STRICT_P95_BOOTSTRAP_V4/);
+  assert.match(bootstrap, /window\.__BOOTSTRAP_PLAZA_PROMISE__ = Promise\.resolve\(null\)/);
+  assert.match(bootstrap, /window\.__BOOTSTRAP_PLAZA_IMAGES__ = \[\]/);
+  assert.doesNotMatch(bootstrap, /fetch\('\/api\/plaza\?sort=latest&page=1&limit=20'/);
+  assert.match(app, /STRICT_P95_APP_PREFETCH_V4/);
+  assert.match(app, /requestIdleCallback\(startPlazaPrefetch, \{ timeout: 900 \}\)/);
+  assert.match(app, /setTimeout\(startPlazaPrefetch, 500\)/);
+  assert.match(app, /window\.__BOOTSTRAP_PLAZA_PROMISE__ = studentPlazaPrefetchPromise/);
+  assert.match(app, /priority: 'low'/);
+  assert.doesNotMatch(app, /preload\.fetchPriority = index < 2 \? 'high' : 'auto'/);
   assert.match(app, /const bootstrapResult = safeSort === 'latest' && page === 1 && !safeQuery/);
   assert.match(app, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
   assert.match(app, /const result = bootstrapResult \|\| await api\(path\)/);
   assert.match(plazaPageTemplate, /window\.__BOOTSTRAP_PLAZA_PROMISE__/);
+});
+
+test('login form is immediately usable instead of waiting for the cinematic intro', () => {
+  assert.match(entrance, /STRICT_P95_LOGIN_READY_V4/);
+  assert.match(entrance, /uiLayer\.style\.transition = 'none'/);
+  assert.match(entrance, /uiLayer\.style\.opacity = '1'/);
+  assert.match(entrance, /intro\.style\.pointerEvents = 'none'/);
+  assert.doesNotMatch(entrance, /setTimeout\(\(\) => \{[\s\S]*?uiLayer\.style\.opacity = '1'[\s\S]*?\}, 800\)/);
 });
 
 test('detail counts combine liked state into the existing aggregate query', () => {
@@ -100,6 +113,7 @@ test('plaza performance generators remain idempotent across runtime, templates a
   const targets = [
     'public/app.js',
     'public/bootstrap.js',
+    'public/entrance.js',
     'templates/plaza-mobile-page.txt',
     'cloudflare/routes/plaza.js',
     'test/stage-e-ui-cache-navigation.test.js',
@@ -110,6 +124,7 @@ test('plaza performance generators remain idempotent across runtime, templates a
   runGenerator('scripts/apply-plaza-detail-fast-path.mjs');
   runGenerator('scripts/apply-plaza-mobile-layout.mjs');
   runGenerator('scripts/finalize-plaza-performance-quality-v3.mjs');
+  runGenerator('scripts/apply-critical-path-p95-v4.mjs');
 
   for (const target of targets) {
     assert.equal(read(target), before.get(target), `${target} 在重复生成后发生变化`);

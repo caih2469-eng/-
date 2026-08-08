@@ -59,7 +59,56 @@ const applyBuildAssetVersion = () => {
   }
 };
 
+const v3RuntimeIsReady = () => {
+  const paths = [
+    'public/app.js',
+    'public/bootstrap.js',
+    'templates/plaza-mobile-page.txt'
+  ];
+  return paths.every((relativePath) => {
+    const file = path.join(root, relativePath);
+    return fs.existsSync(file)
+      && fs.readFileSync(file, 'utf8').includes('PLAZA_PERFORMANCE_QUALITY_V3');
+  });
+};
+
+const assertStrictRuntime = () => {
+  const required = [
+    ['public/entrance.html', 'STRICT_P95_LOGIN_HTML_V4'],
+    ['public/entrance.js', 'STRICT_P95_LOGIN_READY_V4'],
+    ['public/bootstrap.js', 'STRICT_P95_BOOTSTRAP_V4'],
+    ['public/bootstrap.js', 'STRICT_P95_ASSET_OVERLAP_V4'],
+    ['public/bootstrap.js', 'LOGIN_BOOTSTRAP_HANDOFF_V2'],
+    ['public/app.js', 'STRICT_P95_APP_PREFETCH_V4'],
+    ['cloudflare/services/student-dashboard.js', 'STRICT_P95_DASHBOARD_BATCH_V4'],
+    ['cloudflare/worker.js', 'LOGIN_BOOTSTRAP_HANDOFF_V2']
+  ];
+  for (const [relativePath, expected] of required) {
+    const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
+    if (!source.includes(expected)) {
+      throw new Error(`最终构建缺少${expected}：${relativePath}`);
+    }
+  }
+  const bootstrap = fs.readFileSync(path.join(root, 'public/bootstrap.js'), 'utf8');
+  if (bootstrap.includes("fetch('/api/plaza?sort=latest&page=1&limit=20'")) {
+    throw new Error('最终构建仍在首页启动关键路径直接请求活动广场');
+  }
+};
+
 applyBuildAssetVersion();
+
+// The legacy generator chain calls this helper before V3 exists and again after V3
+// has converged. Only the final invocation is allowed to install the strict p95 path.
+// This makes the existing production workflow's final asset-version step produce the
+// exact same V4 + safe handoff V2 runtime that the strict Chrome gate validates.
+if (v3RuntimeIsReady()) {
+  await import('./apply-critical-path-p95-v4.mjs');
+  await import('./apply-login-bootstrap-handoff-v2.mjs');
+  // V2 may add new prefetched asset references. Stamp those with the exact build SHA too.
+  applyBuildAssetVersion();
+  assertStrictRuntime();
+  console.log('Converged strict p95 V4 + login handoff V2 in final build step.');
+}
 
 const hookKey = Symbol.for('jinshan20.buildAssetVersionBeforeExit');
 if (!globalThis[hookKey]) {

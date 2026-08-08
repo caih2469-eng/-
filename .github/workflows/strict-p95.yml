@@ -1,0 +1,177 @@
+name: Strict p95 performance gate
+
+on:
+  push:
+    branches:
+      - perf/strict-p95-v4
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strict-p95-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STRICT_P95_BASE_URL: https://jinshan20-test.pages.dev
+
+jobs:
+  strict-p95:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Full static and functional validation
+        run: |
+          pnpm run check
+          pnpm run check:text
+          pnpm test
+      - name: Generate exact strict-p95 test build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/apply-build-asset-version.mjs
+          node scripts/apply-critical-path-p95-v4.mjs
+          grep -Fq "$GITHUB_SHA" public/bootstrap.js
+          grep -Fq "$GITHUB_SHA" public/index.html
+          grep -Fq "$GITHUB_SHA" public/entrance.html
+          grep -q 'STRICT_P95_LOGIN_READY_V4' public/entrance.js
+          grep -q 'STRICT_P95_LOGIN_HTML_V4' public/entrance.html
+          grep -q 'STRICT_P95_BOOTSTRAP_V4' public/bootstrap.js
+          grep -q 'STRICT_P95_ASSET_OVERLAP_V4' public/bootstrap.js
+          grep -q 'STRICT_P95_APP_PREFETCH_V4' public/app.js
+          grep -q 'STRICT_P95_DASHBOARD_BATCH_V4' cloudflare/services/student-dashboard.js
+          if grep -Fq "fetch('/api/plaza?sort=latest&page=1&limit=20'" public/bootstrap.js; then
+            echo '首页启动脚本仍在关键路径直接请求活动广场。'
+            exit 1
+          fi
+      - name: Validate isolated plaza Worker
+        working-directory: cloudflare/plaza-service
+        run: pnpm exec wrangler deploy --dry-run --config wrangler.test.jsonc
+      - name: Deploy isolated plaza Worker
+        working-directory: cloudflare/plaza-service
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.test.jsonc
+      - name: Stamp exact test commit
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('public/deployment-version.json', JSON.stringify({commit:process.env.GITHUB_SHA,runId:process.env.GITHUB_RUN_ID,assetVersion:process.env.GITHUB_SHA,environment:'test-strict-p95',generatedAt:new Date().toISOString()}, null, 2)+'\n')"
+      - name: Disable unavailable check-in binding only in isolated test config
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'cloudflare/pages-test/wrangler.jsonc';
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const before = Array.isArray(config.services) ? config.services : [];
+          config.services = before.filter((item) => item.binding !== 'CHECKIN_SERVICE');
+          if (!config.services.some((item) => item.binding === 'PLAZA_SERVICE')) {
+            throw new Error('PLAZA_SERVICE must remain enabled');
+          }
+          fs.writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
+          NODE
+      - name: Deploy exact commit to configured test Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare/pages-test
+          command: pages deploy ../../public --project-name jinshan20-test --branch develop
+      - name: Verify configured test site serves exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${STRICT_P95_BASE_URL}/deployment-version.json?strict=${GITHUB_RUN_ID}"
+          for attempt in $(seq 1 45); do
+            body="$(curl -fsS --connect-timeout 8 --max-time 15 -H 'Cache-Control: no-cache' "$url" || true)"
+            if printf '%s' "$body" | grep -Fq "\"commit\": \"$GITHUB_SHA\"" && printf '%s' "$body" | grep -Fq "\"assetVersion\": \"$GITHUB_SHA\""; then
+              echo "Strict p95 test environment verified at $GITHUB_SHA"
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo '正式测试站没有返回当前提交。'
+          exit 1
+      - name: Seed fixture and run legacy Chrome diagnostic
+        continue-on-error: true
+        run: node scripts/browser-approved-preview.mjs --base-url "$STRICT_P95_BASE_URL"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Diagnose login and session API latency
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const base = process.env.STRICT_P95_BASE_URL;
+          const studentId = 'WEB-PREVIEW-001';
+          const password = 'BrowserPreview2026';
+          const samples = [];
+          const round = (v) => Math.round(v * 10) / 10;
+          const stat = (values, q) => {
+            const sorted = [...values].sort((a,b) => a-b);
+            return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * q) - 1)];
+          };
+          for (let i = 1; i <= 20; i += 1) {
+            let started = performance.now();
+            const login = await fetch(`${base}/api/login`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ studentId, password })
+            });
+            const loginMs = round(performance.now() - started);
+            const loginBody = await login.json();
+            if (!login.ok || !loginBody.token) throw new Error(`login ${login.status}`);
+            started = performance.now();
+            const session = await fetch(`${base}/api/session`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${loginBody.token}` }
+            });
+            const sessionMs = round(performance.now() - started);
+            if (!session.ok) throw new Error(`session ${session.status}`);
+            await session.arrayBuffer();
+            samples.push({
+              run: i,
+              loginMs,
+              sessionMs,
+              loginServerTiming: login.headers.get('server-timing') || '',
+              sessionServerTiming: session.headers.get('server-timing') || ''
+            });
+          }
+          const loginValues = samples.map(x => x.loginMs);
+          const sessionValues = samples.map(x => x.sessionMs);
+          console.log(JSON.stringify({
+            samples,
+            summary: {
+              login: { min: Math.min(...loginValues), p50: stat(loginValues,.5), p95: stat(loginValues,.95), max: Math.max(...loginValues) },
+              session: { min: Math.min(...sessionValues), p50: stat(sessionValues,.5), p95: stat(sessionValues,.95), max: Math.max(...sessionValues) }
+            }
+          }, null, 2));
+          NODE
+      - name: Run strict 20-run Google Chrome p95 gate
+        run: node scripts/browser-strict-p95.mjs --base-url "$STRICT_P95_BASE_URL" --runs 20 --threshold-ms 1000
+      - name: Upload strict p95 report
+        if: always() && hashFiles('reports/browser-strict-p95.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-strict-p95-${{ github.run_id }}
+          path: reports/browser-strict-p95.json
+          retention-days: 14
+      - name: Upload existing Chrome report
+        if: always() && hashFiles('reports/browser-approved-preview.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-approved-preview-strict-${{ github.run_id }}
+          path: reports/browser-approved-preview.json
+          retention-days: 14
